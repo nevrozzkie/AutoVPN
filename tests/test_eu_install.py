@@ -24,6 +24,9 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert '"flow": "xtls-rprx-vision"' in script
     assert "apt-get install -y amneziawg" in script
     assert "systemctl restart awg-quick@awg0" in script
+    assert "chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt" in script
+    assert "chmod 640 /etc/autovpn/hysteria.key" in script
+    assert "systemctl is-active --quiet hysteria-server" in script
 
 
 def test_describe_ssh_command_marks_password_auth() -> None:

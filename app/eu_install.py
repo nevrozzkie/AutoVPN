@@ -234,6 +234,13 @@ if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ]; the
     -days 3650 \\
     -subj "/CN=autovpn-eu"
 fi
+chmod 644 /etc/autovpn/hysteria.crt
+if id hysteria >/dev/null 2>&1; then
+  chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
+  chmod 640 /etc/autovpn/hysteria.key
+else
+  chmod 644 /etc/autovpn/hysteria.key
+fi
 
 cat >/etc/hysteria/config.yaml <<'YAML'
 listen: :{settings.hysteria_port}
@@ -268,6 +275,14 @@ if command -v awg-quick >/dev/null 2>&1; then
   systemctl restart awg-quick@awg0
 else
   echo "[autovpn] WARNING: awg-quick is unavailable; AmneziaWG service was not started."
+fi
+sleep 1
+
+echo "[autovpn] checking services"
+systemctl is-active --quiet xray
+systemctl is-active --quiet hysteria-server
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl is-active --quiet awg-quick@awg0
 fi
 
 echo "[autovpn] status"
