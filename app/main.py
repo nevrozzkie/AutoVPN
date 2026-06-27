@@ -61,6 +61,9 @@ from app.runtime_config import (
     eu_ssh_password,
     eu_ssh_port,
     eu_ssh_user,
+    vless_port,
+    hysteria_port,
+    amnezia_port,
 )
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_sing_box_subscription, build_subscription
@@ -177,6 +180,7 @@ def get_amnezia_config(client: dict, current_ip: str) -> str:
         current_ip=current_ip,
         server_public_key=get_setting("amnezia.server_public_key"),
         obfuscation=get_amnezia_obfuscation(),
+        endpoint_port=amnezia_port(),
     )
 
 
@@ -186,6 +190,7 @@ def get_amnezia_vpn_key(client: dict, current_ip: str) -> str:
         current_ip=current_ip,
         server_public_key=get_setting("amnezia.server_public_key"),
         obfuscation=get_amnezia_obfuscation(),
+        endpoint_port=amnezia_port(),
     )
 
 
@@ -280,6 +285,9 @@ def setup_page(
             "eu_ssh_port": eu_ssh_port(),
             "eu_ssh_key_path": eu_ssh_key_path(),
             "eu_ssh_password_configured": bool(eu_ssh_password()),
+            "vless_port": vless_port(),
+            "hysteria_port": hysteria_port(),
+            "amnezia_port": amnezia_port(),
             "aeza_token_configured": bool(aeza_token()),
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
@@ -302,6 +310,9 @@ def setup_submit(
     eu_ssh_port_value: int = Form(22),
     eu_ssh_password_value: str = Form(""),
     eu_ssh_key_path_value: str = Form(""),
+    vless_port_value: int = Form(8443),
+    hysteria_port_value: int = Form(443),
+    amnezia_port_value: int = Form(51820),
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
@@ -326,6 +337,9 @@ def setup_submit(
     set_setting("config.eu_ssh_host", ssh_host_value)
     set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
     set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
+    set_setting("config.vless_port", str(vless_port_value or 8443))
+    set_setting("config.hysteria_port", str(hysteria_port_value or 443))
+    set_setting("config.amnezia_port", str(amnezia_port_value or 51820))
     if eu_ssh_password_value:
         set_setting("config.eu_ssh_password", eu_ssh_password_value)
         set_setting("config.eu_ssh_key_path", "")

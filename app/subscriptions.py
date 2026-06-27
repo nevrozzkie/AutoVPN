@@ -5,6 +5,7 @@ from urllib.parse import quote, urlencode
 from app.config import settings
 from app.db import get_setting
 from app.profile_names import profile_name
+from app.runtime_config import hysteria_port, vless_port
 
 
 def hysteria_auth(_: dict | None = None) -> str:
@@ -28,11 +29,11 @@ def build_subscription(client: dict, current_ip: str) -> str:
         }
     )
     vless = (
-        f"vless://{client['vless_uuid']}@{current_ip}:{settings.vless_port}"
+        f"vless://{client['vless_uuid']}@{current_ip}:{vless_port()}"
         f"?{vless_query}#{vless_name}"
     )
     hysteria = (
-        f"hy2://{hysteria_password}@{current_ip}:{settings.hysteria_port}/"
+        f"hy2://{hysteria_password}@{current_ip}:{hysteria_port()}/"
         f"?insecure=1&sni={quote(settings.vless_reality_server_name)}#{hysteria_name}"
     )
     return f"{vless}\n{hysteria}\n"
@@ -72,7 +73,7 @@ def build_sing_box_subscription(client: dict, current_ip: str) -> dict:
                 "type": "vless",
                 "tag": "vless-reality",
                 "server": current_ip,
-                "server_port": settings.vless_port,
+                "server_port": vless_port(),
                 "uuid": client["vless_uuid"],
                 "flow": "xtls-rprx-vision",
                 "tls": {
@@ -93,7 +94,7 @@ def build_sing_box_subscription(client: dict, current_ip: str) -> dict:
                 "type": "hysteria2",
                 "tag": "hysteria2",
                 "server": current_ip,
-                "server_port": settings.hysteria_port,
+                "server_port": hysteria_port(),
                 "password": hysteria_auth(client),
                 "tls": {
                     "enabled": True,

@@ -84,5 +84,17 @@ def ssh_connect_timeout_seconds() -> int:
     return config_int("ssh_connect_timeout_seconds", 15)
 
 
+def vless_port() -> int:
+    return config_int("vless_port", settings.vless_port)
+
+
+def hysteria_port() -> int:
+    return config_int("hysteria_port", settings.hysteria_port)
+
+
+def amnezia_port() -> int:
+    return config_int("amnezia_port", settings.amnezia_port)
+
+
 def setup_complete() -> bool:
     return bool(admin_password())

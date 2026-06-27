@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
-from app.config import settings
 from app.db import get_setting, now_iso, set_setting
 from app.deep_protocol_checks import run_deep_protocol_checks
 from app.health import ProbeResult, tcp_probe, udp_probe
+from app.runtime_config import amnezia_port, hysteria_port, vless_port
 
 
 PROTOCOLS = [
-    {"key": "vless", "name": "VLESS", "port": settings.vless_port, "enabled": True},
-    {"key": "hysteria", "name": "Hysteria", "port": settings.hysteria_port, "enabled": False, "placeholder": True},
-    {"key": "amnezia", "name": "AmneziaWG", "port": settings.amnezia_port, "enabled": True, "udp": True},
+    {"key": "vless", "name": "VLESS", "port": vless_port, "enabled": True},
+    {"key": "hysteria", "name": "Hysteria", "port": hysteria_port, "enabled": False, "placeholder": True},
+    {"key": "amnezia", "name": "AmneziaWG", "port": amnezia_port, "enabled": True, "udp": True},
 ]
 
 
@@ -19,9 +19,11 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
     statuses = []
     for protocol in PROTOCOLS:
         key = protocol["key"]
+        port = protocol["port"]()
         statuses.append(
             {
                 **protocol,
+                "port": port,
                 "status": get_setting(f"protocol.{key}.status", "UNKNOWN"),
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
@@ -37,7 +39,7 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     deep_results = await run_deep_protocol_checks(current_ip)
     check_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:
-        port = protocol["port"]
+        port = protocol["port"]()
         if current_ip and protocol["enabled"] and port is not None:
             if protocol.get("udp"):
                 check_tasks.append(asyncio.create_task(udp_probe(current_ip, int(port))))
@@ -86,6 +88,7 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
         statuses.append(
             {
                 **protocol,
+                "port": protocol["port"](),
                 "status": status,
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),

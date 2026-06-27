@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from app.config import settings
 from app.db import get_setting, list_clients
+from app.runtime_config import hysteria_port, vless_port
 from app.subscriptions import hysteria_auth
 
 
@@ -63,7 +64,7 @@ def build_deep_check_script(client: dict, current_ip: str) -> str:
                     "vnext": [
                         {
                             "address": current_ip,
-                            "port": settings.vless_port,
+                            "port": vless_port(),
                             "users": [
                                 {
                                     "id": client["vless_uuid"],
@@ -89,7 +90,7 @@ def build_deep_check_script(client: dict, current_ip: str) -> str:
         ],
     }
     hysteria_config = {
-        "server": f"{current_ip}:{settings.hysteria_port}",
+        "server": f"{current_ip}:{hysteria_port()}",
         "auth": hysteria_auth(client),
         "tls": {
             "sni": settings.vless_reality_server_name,

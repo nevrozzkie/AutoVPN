@@ -67,8 +67,10 @@ def build_amnezia_client_config(
     current_ip: str,
     server_public_key: str,
     obfuscation: dict[str, int],
+    endpoint_port: int | None = None,
 ) -> str:
     address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
+    port = endpoint_port or settings.amnezia_port
     return f"""[Interface]
 PrivateKey = {client["amnezia_private_key"]}
 Address = {address}/32
@@ -87,7 +89,7 @@ H4 = {obfuscation["h4"]}
 PublicKey = {server_public_key}
 PresharedKey = {client["amnezia_preshared_key"]}
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = {current_ip}:{settings.amnezia_port}
+Endpoint = {current_ip}:{port}
 PersistentKeepalive = 25
 """
 
@@ -98,12 +100,15 @@ def build_amnezia_vpn_key(
     current_ip: str,
     server_public_key: str,
     obfuscation: dict[str, int],
+    endpoint_port: int | None = None,
 ) -> str:
+    port = endpoint_port or settings.amnezia_port
     config = build_amnezia_client_config(
         client,
         current_ip=current_ip,
         server_public_key=server_public_key,
         obfuscation=obfuscation,
+        endpoint_port=port,
     )
     address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
     dns_values = [item.strip() for item in settings.amnezia_dns.split(",") if item.strip()]
@@ -135,7 +140,7 @@ def build_amnezia_vpn_key(
         "hostName": current_ip,
         "mtu": "1280",
         "persistent_keep_alive": "25",
-        "port": settings.amnezia_port,
+        "port": port,
         "psk_key": client["amnezia_preshared_key"],
         "server_pub_key": server_public_key,
     }
@@ -145,7 +150,7 @@ def build_amnezia_vpn_key(
             {
                 "awg": {
                     **awg,
-                    "port": str(settings.amnezia_port),
+                    "port": str(port),
                     "protocol_version": "2",
                     "subnet_address": f"{settings.amnezia_network_prefix}.0",
                     "transport_proto": "udp",
@@ -169,7 +174,9 @@ def build_amnezia_server_config(
     *,
     server_private_key: str,
     obfuscation: dict[str, int],
+    listen_port: int | None = None,
 ) -> str:
+    port = listen_port or settings.amnezia_port
     peer_blocks = []
     for client in clients:
         address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
@@ -185,7 +192,7 @@ AllowedIPs = {address}/32
     return f"""[Interface]
 PrivateKey = {server_private_key}
 Address = {AMNEZIA_SERVER_ADDRESS}
-ListenPort = {settings.amnezia_port}
+ListenPort = {port}
 Jc = {obfuscation["jc"]}
 Jmin = {obfuscation["jmin"]}
 Jmax = {obfuscation["jmax"]}

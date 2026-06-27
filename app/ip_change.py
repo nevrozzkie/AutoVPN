@@ -17,6 +17,8 @@ from app.runtime_config import (
     aeza_ipv4_payment_method,
     aeza_service_id,
     aeza_token,
+    hysteria_port,
+    vless_port,
 )
 
 
@@ -161,8 +163,8 @@ async def _wait_for_health(host: str) -> dict[str, bool]:
         last_result = await check_vpn_health(
             host,
             ssh_port=settings.ssh_port,
-            vless_port=settings.vless_port,
-            hysteria_port=settings.hysteria_port,
+            vless_port=vless_port(),
+            hysteria_port=hysteria_port(),
         )
         if last_result["ok"]:
             return last_result

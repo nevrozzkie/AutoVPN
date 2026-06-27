@@ -215,6 +215,7 @@ Installer:
 - логин и пароль админки;
 - подтверждение пароля админки;
 - текущий IP VPN VPS;
+- порты протоколов: VLESS TCP, Hysteria UDP и AmneziaWG UDP;
 - SSH host/user/port;
 - SSH password или путь к SSH key;
 - Aeza token/service id/domain, если VPS в Aeza и нужна смена IP.
@@ -226,6 +227,7 @@ Installer:
 
 - `SSH host` можно оставить пустым, тогда AutoVPN будет подключаться по SSH к текущему IP VPN.
 - `SSH key path` можно оставить пустым, если используется SSH password.
+- Порты протоколов по умолчанию: VLESS `8443/tcp`, Hysteria `443/udp`, AmneziaWG `51820/udp`. После изменения портов нажмите `Установить / синхронизировать VPN`.
 - `AEZA_SERVICE_ID` проще получить через Network-панель браузера в my.aeza.net: откройте страницу VPS и найдите requests вида `/api/v2/services/{serviceId}/...`. Также service id равен номеру услуги в истории/карточке VPS.
 - `AEZA_IPV4_DOMAIN` — опциональное поле, которое Aeza UI иногда отправляет при покупке IPv4. В HAR оно выглядело как `{"domain":"aqua"}`. Если не знаете, оставьте пустым.
 

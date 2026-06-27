@@ -19,12 +19,15 @@ from app.db import (
     update_install_operation,
 )
 from app.runtime_config import (
+    amnezia_port,
     eu_ssh_host,
     eu_ssh_key_path,
     eu_ssh_password,
     eu_ssh_port,
     eu_ssh_user,
+    hysteria_port,
     ssh_connect_timeout_seconds,
+    vless_port,
 )
 from app.protocol_status import refresh_protocol_statuses
 
@@ -55,6 +58,9 @@ def build_eu_install_script() -> str:
     reality_private_key = get_setting("vless.reality_private_key")
     reality_short_id = get_setting("vless.reality_short_id")
     server_private_key = get_setting("amnezia.server_private_key")
+    current_vless_port = vless_port()
+    current_hysteria_port = hysteria_port()
+    current_amnezia_port = amnezia_port()
     amnezia_obfuscation = {
         "jc": int(get_setting("amnezia.jc", "5")),
         "jmin": int(get_setting("amnezia.jmin", "40")),
@@ -70,6 +76,7 @@ def build_eu_install_script() -> str:
         clients,
         server_private_key=server_private_key,
         obfuscation=amnezia_obfuscation,
+        listen_port=current_amnezia_port,
     )
     xray_clients = [
         {
@@ -113,7 +120,7 @@ def build_eu_install_script() -> str:
             {
                 "tag": "vless-in",
                 "listen": "0.0.0.0",
-                "port": settings.vless_port,
+                "port": current_vless_port,
                 "protocol": "vless",
                 "settings": {
                     "clients": xray_clients,
@@ -235,7 +242,7 @@ else
 fi
 
 cat >/etc/hysteria/config.yaml <<'YAML'
-listen: :{settings.hysteria_port}
+listen: :{current_hysteria_port}
 
 tls:
   cert: /etc/autovpn/hysteria.crt
@@ -254,17 +261,17 @@ YAML
 
 echo "[autovpn] opening firewall ports"
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow {settings.hysteria_port}/udp || true
+  ufw allow {current_hysteria_port}/udp || true
 fi
 if command -v iptables >/dev/null 2>&1; then
-  iptables -C INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT || true
+  iptables -C INPUT -p udp --dport {current_hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {current_hysteria_port} -j ACCEPT || true
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port={settings.hysteria_port}/udp || true
+  firewall-cmd --permanent --add-port={current_hysteria_port}/udp || true
   firewall-cmd --reload || true
 fi
 if command -v nft >/dev/null 2>&1; then
-  nft list ruleset | grep -q "udp dport {settings.hysteria_port} accept" || nft add rule inet filter input udp dport {settings.hysteria_port} accept || true
+  nft list ruleset | grep -q "udp dport {current_hysteria_port} accept" || nft add rule inet filter input udp dport {current_hysteria_port} accept || true
 fi
 
 cat >/etc/amnezia/amneziawg/awg0.conf <<'AWG'
