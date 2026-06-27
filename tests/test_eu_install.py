@@ -38,6 +38,9 @@ def test_describe_ssh_command_marks_password_auth() -> None:
         command = describe_ssh_command("203.0.113.10")
 
         assert "PreferredAuthentications=password" in command
+        assert "PubkeyAuthentication=no" in command
+        assert "NumberOfPasswordPrompts=1" in command
+        assert "BatchMode=no" in command
         assert "secret" not in command
         assert "password auth via EU_SSH_PASSWORD" in command
         assert "autovpn-ssh-ok" in command

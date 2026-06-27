@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import select
 import shlex
 import socket
+import subprocess
 import time
 from typing import Any
 
@@ -246,7 +249,18 @@ def build_ssh_command(host: str, remote_command: str = "printf 'autovpn-ssh-ok\\
         "StrictHostKeyChecking=accept-new",
     ]
     if eu_ssh_password():
-        command.extend(["-o", "PreferredAuthentications=password"])
+        command.extend(
+            [
+                "-o",
+                "PreferredAuthentications=password",
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+                "-o",
+                "BatchMode=no",
+            ]
+        )
     elif eu_ssh_key_path():
         command.extend(["-i", eu_ssh_key_path()])
     command.extend([destination, remote_command])
@@ -293,6 +307,99 @@ def _format_ssh_error(host: str, exc: Exception) -> str:
     return f"SSH connection failed for {target}: {message}"
 
 
+def _drain_fd(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        readable, _, _ = select.select([fd], [], [], 0)
+        if not readable:
+            break
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _redact_password(text: str, password: str) -> str:
+    if not password:
+        return text
+    return text.replace(password, "***")
+
+
+def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
+    import pty
+
+    password = eu_ssh_password()
+    if not password:
+        raise EuInstallError("Configure EU_SSH_PASSWORD")
+
+    master_fd, slave_fd = pty.openpty()
+    process: subprocess.Popen[bytes] | None = None
+    chunks: list[bytes] = []
+    password_sent = False
+    host_confirmed = False
+    stdin_sent = not bool(stdin_data)
+    try:
+        process = subprocess.Popen(
+            build_ssh_command(host, command),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+
+        while True:
+            if process.poll() is not None:
+                chunks.append(_drain_fd(master_fd))
+                break
+
+            readable, _, _ = select.select([master_fd], [], [], 0.25)
+            if not readable:
+                continue
+
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                if process.poll() is not None:
+                    break
+                raise
+            if not chunk:
+                continue
+            chunks.append(chunk)
+
+            recent = b"".join(chunks[-8:]).lower()
+            if not host_confirmed and (b"yes/no" in recent or b"fingerprint" in recent):
+                os.write(master_fd, b"yes\n")
+                host_confirmed = True
+
+            if not password_sent and (b"password:" in recent or b"password for" in recent):
+                os.write(master_fd, f"{password}\n".encode("utf-8"))
+                password_sent = True
+                if stdin_data and not stdin_sent:
+                    payload = stdin_data
+                    if not payload.endswith("\n"):
+                        payload += "\n"
+                    os.write(master_fd, payload.encode("utf-8"))
+                    os.write(master_fd, b"\x04")
+                    stdin_sent = True
+
+        output = b"".join(chunks).decode("utf-8", errors="replace")
+        return process.returncode or 0, _redact_password(output, password)
+    except OSError as exc:
+        raise EuInstallError(f"OpenSSH password session failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}") from exc
+    finally:
+        if slave_fd >= 0:
+            os.close(slave_fd)
+        os.close(master_fd)
+        if process and process.poll() is None:
+            process.terminate()
+
+
 def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     import paramiko
 
@@ -302,6 +409,9 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     key_path = eu_ssh_key_path()
     if not password and not key_path:
         raise EuInstallError("Configure EU_SSH_PASSWORD or EU_SSH_KEY_PATH")
+
+    if password and os.name != "nt":
+        return _ssh_exec_system_password(host, command, stdin_data)
 
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
