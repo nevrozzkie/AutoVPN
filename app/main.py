@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import secrets
+from datetime import UTC, datetime
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -10,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.aeza import AezaClient
-from app.amnezia import build_amnezia_client_config
+from app.amnezia import build_amnezia_client_config, build_amnezia_vpn_key
 from app.db import (
     create_client,
     create_install_operation,
@@ -68,6 +70,25 @@ security = HTTPBasic()
 setup_security = HTTPBasic(auto_error=False)
 
 
+def format_msk(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        if isinstance(value, (int, float)):
+            parsed = datetime.fromtimestamp(value, UTC)
+        else:
+            text = str(value)
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M:%S МСК")
+    except (TypeError, ValueError, OSError):
+        return str(value)
+
+
+templates.env.filters["msk"] = format_msk
+
+
 def aeza_ip_rotation_available() -> bool:
     return bool(aeza_token() and aeza_service_id())
 
@@ -102,6 +123,15 @@ def get_amnezia_obfuscation() -> dict[str, int]:
 
 def get_amnezia_config(client: dict, current_ip: str) -> str:
     return build_amnezia_client_config(
+        client,
+        current_ip=current_ip,
+        server_public_key=get_setting("amnezia.server_public_key"),
+        obfuscation=get_amnezia_obfuscation(),
+    )
+
+
+def get_amnezia_vpn_key(client: dict, current_ip: str) -> str:
+    return build_amnezia_vpn_key(
         client,
         current_ip=current_ip,
         server_public_key=get_setting("amnezia.server_public_key"),
@@ -307,6 +337,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "ssh_known_host_reset_last_output": get_setting("ssh.known_host_reset_last_output"),
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
+            "auto_refresh": has_running_operation() or has_running_install_operation(),
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
@@ -482,12 +513,15 @@ def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> Redi
 
 @app.get("/admin/operations", response_class=HTMLResponse)
 def admin_operations(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    operation_running = has_running_operation()
+    install_running = has_running_install_operation()
     return templates.TemplateResponse(
         request,
         "operations.html",
         {
             "operations": list_operations(),
             "install_operations": list_install_operations(),
+            "auto_refresh": operation_running or install_running,
         },
     )
 
@@ -555,7 +589,7 @@ def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(
 @app.post("/admin/stats/refresh")
 def admin_refresh_stats(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     background_tasks.add_task(_refresh_stats_background)
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 async def _refresh_stats_background() -> None:
@@ -607,6 +641,8 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
+            "amnezia_key_url": f"{base_url}/amnezia-key/{client['token']}",
+            "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip),
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
         },
     )
@@ -636,7 +672,7 @@ def client_amnezia_qr(token: str) -> Response:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     import qrcode
 
-    image = qrcode.make(get_amnezia_config(client, current_ip))
+    image = qrcode.make(get_amnezia_vpn_key(client, current_ip))
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return Response(buffer.getvalue(), media_type="image/png")
@@ -667,3 +703,14 @@ def amnezia_config(token: str) -> PlainTextResponse:
             "Content-Disposition": f"attachment; filename=amnezia-{client['id']}.conf"
         },
     )
+
+
+@app.get("/amnezia-key/{token}", response_class=PlainTextResponse)
+def amnezia_vpn_key(token: str) -> PlainTextResponse:
+    client = get_client_by_token(token)
+    if not client or not client["enabled"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    current_ip = get_setting("current_ip")
+    if not current_ip:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return PlainTextResponse(get_amnezia_vpn_key(client, current_ip) + "\n")

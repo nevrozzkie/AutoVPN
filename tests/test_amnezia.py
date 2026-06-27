@@ -1,6 +1,11 @@
+import base64
+import json
+import zlib
+
 from app.amnezia import (
     build_amnezia_client_config,
     build_amnezia_server_config,
+    build_amnezia_vpn_key,
     generate_private_key,
     generate_public_key,
 )
@@ -75,3 +80,41 @@ def test_build_amnezia_server_config_contains_peer() -> None:
     assert "ListenPort = 51820" in config
     assert "PublicKey = client-public" in config
     assert "AllowedIPs = 10.66.66.2/32" in config
+
+
+def test_build_amnezia_vpn_key_is_vpn_url_with_compressed_json() -> None:
+    key = build_amnezia_vpn_key(
+        {
+            "id": 1,
+            "name": "Alice",
+            "amnezia_private_key": "client-private",
+            "amnezia_public_key": "client-public",
+            "amnezia_preshared_key": "psk",
+            "amnezia_ipv4": "10.66.66.2",
+        },
+        current_ip="203.0.113.10",
+        server_public_key="server-public",
+        obfuscation={
+            "jc": 5,
+            "jmin": 40,
+            "jmax": 1000,
+            "s1": 64,
+            "s2": 128,
+            "h1": 1,
+            "h2": 2,
+            "h3": 3,
+            "h4": 4,
+        },
+    )
+
+    assert key.startswith("vpn://")
+    encoded = key.removeprefix("vpn://")
+    packed = base64.urlsafe_b64decode(encoded + "=" * ((4 - len(encoded) % 4) % 4))
+    raw_length = int.from_bytes(packed[:4], "big")
+    raw = zlib.decompress(packed[4:])
+    payload = json.loads(raw)
+
+    assert raw_length == len(raw)
+    assert payload["defaultContainer"] == "amnezia-awg2"
+    assert payload["hostName"] == "203.0.113.10"
+    assert payload["containers"][0]["awg"]["client_priv_key"] == "client-private"

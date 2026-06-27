@@ -26,14 +26,14 @@
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
         <td>
-          {{ operation.server_reachable_at or "" }}
+          {{ operation.server_reachable_at|msk }}
           {% if operation.healthcheck_result %}
             <br><span class="muted">{{ operation.healthcheck_result }}</span>
           {% endif %}
         </td>
         <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
-        <td>{{ operation.created_at }}</td>
-        <td>{{ operation.updated_at }}</td>
+        <td>{{ operation.created_at|msk }}</td>
+        <td>{{ operation.updated_at|msk }}</td>
       </tr>
     {% else %}
       <tr><td colspan="9" class="muted">No operations yet</td></tr>
@@ -62,8 +62,8 @@
         <td>{{ operation.target_host or "" }}</td>
         <td>{{ operation.current_step }}</td>
         <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
-        <td>{{ operation.created_at }}</td>
-        <td>{{ operation.updated_at }}</td>
+        <td>{{ operation.created_at|msk }}</td>
+        <td>{{ operation.updated_at|msk }}</td>
       </tr>
     {% else %}
       <tr><td colspan="7" class="muted">No install operations yet</td></tr>

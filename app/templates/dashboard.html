@@ -11,9 +11,9 @@
     <div class="label">Last IP operation</div>
     {% if latest_operation %}
       <div class="value">{{ latest_operation.status }}</div>
-      <div class="muted">{{ latest_operation.current_step }} · {{ latest_operation.updated_at }}</div>
+      <div class="muted">{{ latest_operation.current_step }} · {{ latest_operation.updated_at|msk }}</div>
       {% if latest_operation.server_reachable_at %}
-        <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at }}</div>
+        <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at|msk }}</div>
       {% elif latest_operation.current_step == "wait_vps_health" %}
         <div class="muted">Ждём, когда сервер поднимется после reboot.</div>
       {% endif %}
@@ -25,7 +25,7 @@
     <div class="label">Last VPN install/sync</div>
     {% if latest_install_operation %}
       <div class="value">{{ latest_install_operation.status }}</div>
-      <div class="muted">{{ latest_install_operation.current_step }} · {{ latest_install_operation.updated_at }}</div>
+      <div class="muted">{{ latest_install_operation.current_step }} · {{ latest_install_operation.updated_at|msk }}</div>
     {% else %}
       <div class="value">none</div>
     {% endif %}
@@ -62,12 +62,12 @@
           <td class="{% if protocol.status == "OK" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
             {{ protocol.status }}
           </td>
-          <td>{{ protocol.last_checked_at or "" }}</td>
+          <td>{{ protocol.last_checked_at|msk }}</td>
           <td>
             {% if protocol.failed_since %}
-              <span class="danger">Не работает с {{ protocol.failed_since }}</span>
+              <span class="danger">Не работает с {{ protocol.failed_since|msk }}</span>
             {% elif protocol.last_ok_at %}
-              <span class="muted">Последний OK: {{ protocol.last_ok_at }}</span>
+              <span class="muted">Последний OK: {{ protocol.last_ok_at|msk }}</span>
             {% else %}
               <span class="muted">Нет данных</span>
             {% endif %}

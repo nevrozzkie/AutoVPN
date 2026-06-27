@@ -10,7 +10,7 @@
 <form method="post" action="/admin/stats/refresh" class="actions">
   <button type="submit">Обновить статистику</button>
   {% if stats_last_refresh_at %}
-    <span class="muted">Последнее обновление: {{ stats_last_refresh_at }}</span>
+    <span class="muted">Последнее обновление: {{ stats_last_refresh_at|msk }}</span>
   {% endif %}
 </form>
 
@@ -31,7 +31,7 @@
           Amnezia: ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
         </span>
         {% if client.stats_last_seen_at %}
-          <span class="ok">last seen {{ client.stats_last_seen_at }}</span>
+          <span class="ok">last seen {{ client.stats_last_seen_at|msk }}</span>
         {% else %}
           <span class="muted">not seen yet</span>
         {% endif %}
@@ -63,13 +63,13 @@
         <div>
           <div class="label">VLESS traffic</div>
           ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
-          <br><span class="muted">Updated: {{ client.stats_updated_at or "never" }}</span>
+          <br><span class="muted">Updated: {{ client.stats_updated_at|msk or "never" }}</span>
         </div>
         <div>
           <div class="label">AmneziaWG traffic</div>
           ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
           {% if client.amnezia_latest_handshake %}
-            <br><span class="muted">Latest handshake: {{ client.amnezia_latest_handshake }}</span>
+            <br><span class="muted">Latest handshake: {{ client.amnezia_latest_handshake|msk }}</span>
           {% else %}
             <br><span class="muted">No handshake yet</span>
           {% endif %}
@@ -77,7 +77,7 @@
         <div>
           <div class="label">Online status</div>
           {% if client.stats_last_seen_at %}
-            <span class="ok">Active recently: {{ client.stats_last_seen_at }}</span>
+            <span class="ok">Active recently: {{ client.stats_last_seen_at|msk }}</span>
           {% else %}
             <span class="muted">No traffic seen yet</span>
           {% endif %}

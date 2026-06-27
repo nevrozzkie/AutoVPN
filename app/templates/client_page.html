@@ -81,12 +81,23 @@
         padding: 14px;
         background: #fbfcfd;
       }
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 120px;
+        border: 1px solid #d7dce2;
+        border-radius: 8px;
+        padding: 10px;
+        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        resize: vertical;
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>{{ client.name }}</h1>
       <p class="muted">EU VPN IP: {{ current_ip }}</p>
+      <button type="button" onclick="location.reload()">Обновить</button>
 
       {% if protocol_status_available %}
         <section>
@@ -103,10 +114,10 @@
                   <span class="warn">{{ protocol.status }}</span>
                 {% endif %}
                 {% if protocol.last_checked_at %}
-                  <br><span class="muted">Проверено: {{ protocol.last_checked_at }}</span>
+                  <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
                 {% endif %}
                 {% if protocol.failed_since %}
-                  <br><span class="bad">Проблема с: {{ protocol.failed_since }}</span>
+                  <br><span class="bad">Проблема с: {{ protocol.failed_since|msk }}</span>
                 {% endif %}
               </div>
             {% endfor %}
@@ -126,9 +137,13 @@
 
       <section>
         <h2>AmneziaVPN</h2>
-        <p><code>{{ amnezia_url }}</code></p>
-        <a class="button" href="{{ amnezia_url }}">Скачать Amnezia config</a>
+        <p><code>{{ amnezia_key_url }}</code></p>
+        <a class="button" href="{{ amnezia_key_url }}">Открыть Amnezia key</a>
+        <a class="button" href="{{ amnezia_url }}">Скачать .conf</a>
+        <button type="button" onclick="navigator.clipboard.writeText(document.querySelector('#amnezia-key').value)">Скопировать ключ</button>
         <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
+        <p class="muted">Если QR не считывается, скопируйте ключ ниже и вставьте его в AmneziaVPN вручную.</p>
+        <textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea>
         <div id="amnezia-qr" class="qr">
           <img src="{{ amnezia_qr_url }}" alt="Amnezia QR">
         </div>
