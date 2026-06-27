@@ -14,6 +14,14 @@ from app.db import (
     list_clients,
     update_install_operation,
 )
+from app.runtime_config import (
+    eu_ssh_host,
+    eu_ssh_key_path,
+    eu_ssh_password,
+    eu_ssh_port,
+    eu_ssh_user,
+    ssh_connect_timeout_seconds,
+)
 
 
 class EuInstallError(RuntimeError):
@@ -21,7 +29,7 @@ class EuInstallError(RuntimeError):
 
 
 def resolve_eu_host() -> str:
-    return settings.eu_ssh_host or get_setting("current_ip")
+    return eu_ssh_host() or get_setting("current_ip")
 
 
 def _safe_label(value: str) -> str:
@@ -226,27 +234,27 @@ def build_ssh_command(host: str) -> list[str]:
     if not host:
         raise EuInstallError("EU SSH host is not configured and current_ip is empty")
 
-    destination = f"{settings.eu_ssh_user}@{host}"
+    destination = f"{eu_ssh_user()}@{host}"
     command = [
         "ssh",
         "-p",
-        str(settings.eu_ssh_port),
+        str(eu_ssh_port()),
         "-o",
-        f"ConnectTimeout={settings.ssh_connect_timeout_seconds}",
+        f"ConnectTimeout={ssh_connect_timeout_seconds()}",
         "-o",
         "StrictHostKeyChecking=accept-new",
     ]
-    if settings.eu_ssh_password:
+    if eu_ssh_password():
         command.extend(["-o", "PreferredAuthentications=password"])
-    elif settings.eu_ssh_key_path:
-        command.extend(["-i", settings.eu_ssh_key_path])
+    elif eu_ssh_key_path():
+        command.extend(["-i", eu_ssh_key_path()])
     command.extend([destination, "bash -s"])
     return command
 
 
 def describe_ssh_command(host: str) -> str:
     command = " ".join(shlex.quote(part) for part in build_ssh_command(host))
-    if settings.eu_ssh_password:
+    if eu_ssh_password():
         return f"{command}  # password auth via EU_SSH_PASSWORD"
     return command
 
@@ -256,25 +264,27 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
 
     if not host:
         raise EuInstallError("EU SSH host is not configured and current_ip is empty")
-    if not settings.eu_ssh_password and not settings.eu_ssh_key_path:
+    password = eu_ssh_password()
+    key_path = eu_ssh_key_path()
+    if not password and not key_path:
         raise EuInstallError("Configure EU_SSH_PASSWORD or EU_SSH_KEY_PATH")
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
-        "port": settings.eu_ssh_port,
-        "username": settings.eu_ssh_user,
-        "timeout": settings.ssh_connect_timeout_seconds,
-        "banner_timeout": settings.ssh_connect_timeout_seconds,
-        "auth_timeout": settings.ssh_connect_timeout_seconds,
+        "port": eu_ssh_port(),
+        "username": eu_ssh_user(),
+        "timeout": ssh_connect_timeout_seconds(),
+        "banner_timeout": ssh_connect_timeout_seconds(),
+        "auth_timeout": ssh_connect_timeout_seconds(),
         "look_for_keys": False,
         "allow_agent": False,
     }
-    if settings.eu_ssh_password:
-        connect_kwargs["password"] = settings.eu_ssh_password
+    if password:
+        connect_kwargs["password"] = password
     else:
-        connect_kwargs["key_filename"] = settings.eu_ssh_key_path
+        connect_kwargs["key_filename"] = key_path
 
     try:
         ssh.connect(**connect_kwargs)

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Первичная настройка · AutoVPN</title>
+    <style>
+      body {
+        margin: 0;
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f7f9;
+        color: #20242a;
+      }
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+      section {
+        background: #fff;
+        border: 1px solid #d7dce2;
+        border-radius: 8px;
+        padding: 18px;
+        margin: 16px 0;
+      }
+      label {
+        display: block;
+        font-weight: 650;
+        margin: 12px 0 5px;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #c6ccd4;
+        border-radius: 6px;
+        padding: 9px 10px;
+        font: inherit;
+      }
+      button {
+        border: 0;
+        border-radius: 6px;
+        background: #0f766e;
+        color: #fff;
+        padding: 10px 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .muted { color: #66707c; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Первичная настройка AutoVPN</h1>
+      <p class="muted">Эта страница доступна только пока не задан пароль администратора.</p>
+
+      <form method="post" action="/setup">
+        <section>
+          <h2>Админка</h2>
+          <div class="grid">
+            <div>
+              <label for="admin_username_value">Логин</label>
+              <input id="admin_username_value" name="admin_username_value" value="{{ admin_username }}" autocomplete="username">
+            </div>
+            <div>
+              <label for="admin_password_value">Пароль</label>
+              <input id="admin_password_value" name="admin_password_value" type="password" required autocomplete="new-password">
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>VPN VPS</h2>
+          <div class="grid">
+            <div>
+              <label for="current_ip">Текущий IP VPN</label>
+              <input id="current_ip" name="current_ip" placeholder="203.0.113.10">
+            </div>
+            <div>
+              <label for="eu_ssh_host_value">SSH host</label>
+              <input id="eu_ssh_host_value" name="eu_ssh_host_value" placeholder="оставьте пустым, чтобы использовать текущий IP">
+            </div>
+            <div>
+              <label for="eu_ssh_user_value">SSH user</label>
+              <input id="eu_ssh_user_value" name="eu_ssh_user_value" value="root">
+            </div>
+            <div>
+              <label for="eu_ssh_port_value">SSH port</label>
+              <input id="eu_ssh_port_value" name="eu_ssh_port_value" type="number" value="22" min="1" max="65535">
+            </div>
+            <div>
+              <label for="eu_ssh_password_value">SSH password</label>
+              <input id="eu_ssh_password_value" name="eu_ssh_password_value" type="password">
+            </div>
+            <div>
+              <label for="eu_ssh_key_path_value">SSH key path</label>
+              <input id="eu_ssh_key_path_value" name="eu_ssh_key_path_value" placeholder="/home/user/.ssh/id_ed25519">
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Aeza, опционально</h2>
+          <div class="grid">
+            <div>
+              <label for="aeza_token_value">AEZA_TOKEN</label>
+              <input id="aeza_token_value" name="aeza_token_value" type="password">
+            </div>
+            <div>
+              <label for="aeza_service_id_value">AEZA_SERVICE_ID</label>
+              <input id="aeza_service_id_value" name="aeza_service_id_value">
+            </div>
+            <div>
+              <label for="aeza_ipv4_domain_value">AEZA_IPV4_DOMAIN</label>
+              <input id="aeza_ipv4_domain_value" name="aeza_ipv4_domain_value" placeholder="например aqua">
+            </div>
+          </div>
+        </section>
+
+        <button type="submit">Сохранить и открыть админку</button>
+      </form>
+    </main>
+  </body>
+</html>

@@ -9,6 +9,14 @@ from app.config import settings
 from app.db import get_setting, now_iso, set_setting, update_operation
 from app.eu_install import build_eu_install_script, run_remote_command
 from app.health import check_vpn_health
+from app.runtime_config import (
+    aeza_api_base,
+    aeza_ipv4_after_purchase_delay_seconds,
+    aeza_ipv4_domain,
+    aeza_ipv4_payment_method,
+    aeza_service_id,
+    aeza_token,
+)
 
 
 class IpChangeError(RuntimeError):
@@ -41,8 +49,8 @@ def _find_new_ip(
 
 
 async def run_ip_change(operation_id: int) -> None:
-    client = AezaClient(settings.aeza_api_base, settings.aeza_token)
-    service_id = settings.aeza_service_id
+    client = AezaClient(aeza_api_base(), aeza_token())
+    service_id = aeza_service_id()
     old_ip_id = ""
     old_ip = ""
     old_ip_deleted = False
@@ -64,13 +72,13 @@ async def run_ip_change(operation_id: int) -> None:
         await _step(operation_id, "create_new_ipv4")
         created_ip = await client.add_ipv4(
             service_id,
-            payment_method=settings.aeza_ipv4_payment_method,
-            domain=settings.aeza_ipv4_domain,
+            payment_method=aeza_ipv4_payment_method(),
+            domain=aeza_ipv4_domain(),
         )
         created_ip_id = created_ip.get("id", "")
 
         await _step(operation_id, "wait_after_ipv4_purchase")
-        await asyncio.sleep(settings.aeza_ipv4_after_purchase_delay_seconds)
+        await asyncio.sleep(aeza_ipv4_after_purchase_delay_seconds())
 
         await _step(operation_id, "wait_new_ipv4")
         new_ip = await _wait_for_new_ip(client, service_id, old_ip_id, old_ip, created_ip_id)

@@ -2,116 +2,117 @@
 
 Полностью нейрокод: проект целиком написан и собран AI/Codex.
 
-FastAPI MVP for a RU source-of-truth server that manages VPN subscriptions and manual Aeza IPv4 rotation for an EU VPS.
+AutoVPN — FastAPI-панель управления VPN-инфраструктурой: клиенты, подписки, установка VPN на VPS, ручная смена Aeza IPv4 и статистика.
 
-## Architecture
+## QuickStart
 
-- RU server runs this FastAPI service, SQLite, admin panel, and nginx.
-- RU server is the source of truth for clients, tokens, protocol credentials, current EU IP, and operation history.
-- EU/Aeza server hosts the actual VPN protocols: VLESS, Hysteria, and AmneziaWG for AmneziaVPN.
-- Clients connect their VPN apps to the EU/Aeza IP, but receive that IP dynamically from the RU server through `/sub/{token}` or `/ip/{token}`.
-- The RU server talks to Aeza API only to rotate the EU server IPv4 address.
-- IP rotation is an optional Aeza-only capability; generic VPS install/sync does not require Aeza.
-
-## What is included
-
-- Basic Auth protected admin panel:
-  - `/admin`
-  - `/admin/clients`
-  - `/admin/install`
-  - `/admin/operations`
-- Public client connection page:
-  - `/client/{token}`
-- Public dynamic subscription endpoint:
-  - `/sub/{token}`
-- Public current EU IP endpoint:
-  - `/ip/{token}`
-- AmneziaWG config endpoint:
-  - `/amnezia/{token}`
-- SQLite storage for settings, clients, and IP change operations.
-- Aeza API client for IPv4 list, add, make-main, delete, and service reboot.
-- Step-by-step IP change state machine with operation logging.
-- EU install/sync over SSH from the RU control plane.
-- TCP healthcheck for SSH, VLESS, and Hysteria ports.
-- VLESS client traffic stats through Xray StatsService.
-- AmneziaWG client traffic stats through `awg show awg0 dump`.
-
-## Local run
+### Вариант 1: локально на macOS/Linux
 
 ```bash
-python3.12 -m venv .venv
-. .venv/bin/activate
-pip install -e .
-cp .env.example .env
+curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install-local.sh -o install-local.sh
+chmod +x install-local.sh
+./install-local.sh
+~/AutoVPN/run-local.sh
 ```
 
-Edit `.env`, especially:
+Открой:
 
-```bash
-ADMIN_PASSWORD=...
-AEZA_TOKEN=...
-AEZA_SERVICE_ID=...
-AEZA_IPV4_PAYMENT_METHOD=balance
-AEZA_IPV4_DOMAIN=
-DATABASE_PATH=./data/autovpn.sqlite3
-EU_SSH_HOST=...
-EU_SSH_USER=root
-EU_SSH_KEY_PATH=/home/autovpn/.ssh/aeza_ed25519
+```text
+http://127.0.0.1:8000/setup
 ```
 
-Then run:
+Введи в браузере:
 
-```bash
-set -a
-. .env
-set +a
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+- логин и пароль админки;
+- IP VPS, где будет жить VPN;
+- SSH-доступ к VPS: root/password или root/key;
+- Aeza token/service id, если нужна смена IP через Aeza.
+
+### Вариант 2: локально на Windows
+
+```powershell
+iwr https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\AutoVPN\run-local.ps1"
 ```
 
-Open `http://127.0.0.1:8000/admin`.
+Открой:
 
-## Server install
+```text
+http://127.0.0.1:8000/setup
+```
 
-On the RU control-plane server, the intended install flow is:
+### Вариант 3: серверный режим
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh)
 ```
 
-If the repository lives under another GitHub URL, override it:
+Потом открой:
 
-```bash
-AUTOVPN_REPO_URL=https://github.com/USER/AutoVPN.git \
-  bash <(curl -Ls https://raw.githubusercontent.com/USER/AutoVPN/main/install.sh)
+```text
+http://SERVER_IP/setup
 ```
 
-The installer asks for:
+### Дальше
 
-- admin username/password;
-- current VPN server IP;
-- optional Aeza token/service id for IP rotation;
-- target VPN VPS SSH host/user/port/key;
-- or target VPN VPS root/user password;
-- nginx domain or public IP.
+1. Зайди в `/admin`.
+2. Добавь клиента.
+3. Нажми `Установить VPN`.
+4. Открой страницу клиента `/client/{token}`.
+5. Импортируй подписку, QR или AmneziaWG-конфиг в VPN-клиент.
+6. После добавления или удаления клиентов нажимай `Обновить клиентов на VPN`.
+7. Если используешь Aeza, IP можно менять из админки.
 
-It installs system packages, clones/copies the app to `/opt/autovpn`, creates `/etc/autovpn.env`, installs Python dependencies into `/opt/autovpn/.venv`, writes a systemd unit, starts `autovpn`, and can configure nginx.
+## Архитектура
 
-## Local install
+AutoVPN состоит из двух частей.
 
-AutoVPN can also run locally on a personal computer. In this mode your computer is the control plane: it stores SQLite, serves `/admin` and `/sub/{token}` on localhost, and connects to the EU/VPN VPS over SSH. The EU/VPN VPS still hosts VLESS, Hysteria2, and AmneziaWG.
+RU/control-plane сервер:
 
-This mode is meant for personal/self-hosted usage: open the local admin page, install/sync VPN on your VPS, open your own `/client/{token}` or `/sub/{token}` locally, import/update the config in your VPN client, done.
+- хранит SQLite-базу;
+- хранит клиентов, токены, UUID/password и WireGuard/Amnezia ключи;
+- отдаёт `/admin`, `/client/{token}`, `/sub/{token}` и `/amnezia/{token}`;
+- знает текущий active IP VPN VPS;
+- ставит и синхронизирует VPN на VPS по SSH;
+- при наличии Aeza API умеет покупать, переключать и удалять IPv4.
 
-Local installers do not install systemd or nginx. They create a virtualenv, write `.env`, initialize SQLite, and generate a run script.
+EU/VPN VPS:
 
-Requirements:
+- хостит сами VPN-протоколы;
+- получает конфиги от AutoVPN;
+- запускает Xray VLESS, Hysteria2 и AmneziaWG.
 
-- Python 3.12+;
-- Git;
-- network access from the computer to the EU/VPN VPS SSH port;
-- Windows PowerShell for Windows, or bash for macOS/Linux.
+Клиенты подключаются к EU/VPN VPS, но актуальный IP и конфиги получают через AutoVPN.
 
-macOS/Linux from a cloned repository:
+## Режим без install-скрипта
+
+Можно не передавать данные в install script. Достаточно запустить приложение с минимальным окружением, открыть `/setup` и ввести всё в браузере.
+
+Минимальный ручной запуск:
+
+```bash
+git clone https://github.com/nevrozzkie/AutoVPN.git
+cd AutoVPN
+python3.12 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+DATABASE_PATH=./data/autovpn.sqlite3 uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Потом:
+
+```text
+http://127.0.0.1:8000/setup
+```
+
+После сохранения настроек откроется `/admin`. Данные из `/setup` сохраняются в SQLite, поэтому можно не держать `ADMIN_PASSWORD`, `EU_SSH_HOST`, `AEZA_TOKEN` и другие параметры в `.env`.
+
+## Локальная установка
+
+Локальный режим подходит, если человек разворачивает AutoVPN для себя: запускает панель на своём компьютере, ставит VPN на свой VPS, открывает локальную страницу клиента и импортирует подписку в свой VPN-клиент.
+
+macOS/Linux с параметрами сразу:
 
 ```bash
 ./install-local.sh \
@@ -120,24 +121,22 @@ macOS/Linux from a cloned repository:
   --eu-password 'your-root-password'
 ```
 
-macOS/Linux without cloning first:
+SSH-ключ вместо пароля:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install-local.sh -o install-local.sh
-chmod +x install-local.sh
 ./install-local.sh \
   --eu-host 203.0.113.10 \
   --eu-user root \
-  --eu-password 'your-root-password'
+  --eu-key-path ~/.ssh/id_ed25519
 ```
 
-Start the local admin app on macOS/Linux:
+Запуск:
 
 ```bash
 ~/AutoVPN/run-local.sh
 ```
 
-Windows from a cloned repository:
+Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 `
@@ -146,51 +145,21 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
   -EuPassword "your-root-password"
 ```
 
-Windows without cloning first:
-
-```powershell
-iwr https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1 `
-  -EuHost 203.0.113.10 `
-  -EuUser root `
-  -EuPassword "your-root-password"
-```
-
-Windows with SSH key auth:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 `
-  -EuHost 203.0.113.10 `
-  -EuUser root `
-  -EuKeyPath "$env:USERPROFILE\.ssh\id_ed25519"
-```
-
-If `install.ps1` is run outside a checkout, it clones `AUTOVPN_REPO_URL` or `https://github.com/nevrozzkie/AutoVPN.git` into `%USERPROFILE%\AutoVPN`.
-
-Start the local admin app on Windows:
+Запуск:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\AutoVPN\run-local.ps1"
 ```
 
-Then open:
+## Серверная установка
 
-```text
-http://127.0.0.1:8000/admin
-```
-
-Most installer answers can be passed through environment variables. For example, password auth to the EU/VPN VPS:
+Серверный режим ставит AutoVPN как systemd-сервис и может настроить nginx перед приложением.
 
 ```bash
-EU_SSH_HOST=203.0.113.10 \
-EU_SSH_USER=root \
-EU_SSH_PASSWORD='your-root-password' \
-  bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh)
 ```
 
-`CURRENT_IP` is optional in this case: if it is not set, the installer uses `EU_SSH_HOST` as the initial VPN IP.
-
-The same can be passed as install arguments:
+С параметрами:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh) \
@@ -199,16 +168,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/instal
   --eu-password 'your-root-password'
 ```
 
-With SSH key auth:
-
-```bash
-EU_SSH_HOST=203.0.113.10 \
-EU_SSH_USER=root \
-EU_SSH_KEY_PATH=/root/.ssh/id_ed25519 \
-  bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh)
-```
-
-or:
+Через SSH-ключ:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/install.sh) \
@@ -217,230 +177,189 @@ bash <(curl -Ls https://raw.githubusercontent.com/nevrozzkie/AutoVPN/main/instal
   --eu-key-path /root/.ssh/id_ed25519
 ```
 
-Useful non-interactive variables:
+Installer:
+
+- ставит системные пакеты;
+- клонирует проект в `/opt/autovpn`;
+- создаёт `/etc/autovpn.env`;
+- создаёт venv;
+- ставит systemd unit;
+- запускает `autovpn`;
+- опционально настраивает nginx.
+
+## Первичная настройка через сайт
+
+Если пароль админки ещё не задан, AutoVPN открывает `/setup` без Basic Auth.
+
+На `/setup` задаются:
+
+- логин и пароль админки;
+- текущий IP VPN VPS;
+- SSH host/user/port;
+- SSH password или путь к SSH key;
+- Aeza token/service id/domain, если VPS в Aeza и нужна смена IP.
+
+После сохранения `/setup` закрывается, а `/admin` требует Basic Auth.
+
+## Админка
+
+Главная страница `/admin` показывает:
+
+- текущий VPN IP;
+- статусы VLESS, Hysteria2 и AmneziaWG;
+- последнюю операцию смены IP;
+- клиентов;
+- ссылки на клиентские страницы;
+- статистику VLESS и AmneziaWG;
+- кнопки установки VPN, синхронизации клиентов, обновления статистики и смены IP.
+
+## Клиенты
+
+Для каждого клиента создаётся:
+
+- token;
+- VLESS UUID;
+- Hysteria2 password;
+- AmneziaWG private/public/preshared key;
+- персональная страница `/client/{token}`;
+- подписка `/sub/{token}`;
+- AmneziaWG config `/amnezia/{token}`.
+
+`/client/{token}` показывает:
+
+- health-статусы протоколов;
+- ссылку на подписку VLESS + Hysteria2;
+- QR подписки;
+- AmneziaWG config;
+- QR для AmneziaWG;
+- места под будущие гайды.
+
+Подписки генерируются динамически. После смены `current_ip` все `/sub/{token}` сразу начинают отдавать новый IP.
+
+## Установка VPN на VPS
+
+В админке нажми `Установить VPN`.
+
+AutoVPN подключится к VPS по SSH и настроит:
+
+- Xray VLESS REALITY + Vision на `443/tcp`;
+- Hysteria2 на `8443/tcp/udp`;
+- AmneziaWG на `51820/udp`;
+- пользователей для всех enabled-клиентов;
+- Xray StatsService для VLESS-статистики.
+
+После изменения клиентов нажимай `Обновить клиентов на VPN`.
+
+## Протоколы
+
+VLESS:
+
+- Xray;
+- REALITY + Vision;
+- default SNI `ok.ru`;
+- serverNames по умолчанию `ok.ru,www.ok.ru`;
+- client link содержит `serverName`/`sni`.
+
+Hysteria2:
+
+- отдельный сервис `hysteria-server`;
+- username `client{id}`;
+- password из `clients.hysteria_password`;
+- в подписке используется `insecure=1`, потому MVP генерирует self-signed TLS.
+
+AmneziaWG:
+
+- конфиг сервера пишется в `/etc/amnezia/amneziawg/awg0.conf`;
+- клиентский конфиг отдаётся на `/amnezia/{token}`;
+- QR доступен на странице клиента.
+
+## Статистика
+
+Кнопка `Обновить статистику` собирает данные с VPS по SSH.
+
+Сейчас собирается:
+
+- VLESS через Xray StatsService;
+- AmneziaWG через `awg show awg0 dump`.
+
+Hysteria2-статистика пока не собирается, потому Hysteria2 работает отдельным сервисом и не проходит через Xray.
+
+## Смена IP Aeza
+
+Смена IP доступна только если заданы:
+
+- `AEZA_TOKEN`;
+- `AEZA_SERVICE_ID`.
+
+Их можно ввести на `/setup` или передать через env/install script.
+
+Важно: покупка нового IPv4 в Aeza может списывать деньги. Цена показывается в евро на странице подтверждения.
+
+Автоматический цикл смены IP:
+
+1. Проверить, что другая операция не идёт.
+2. Получить список IPv4.
+3. Найти текущий main IP.
+4. Купить новый IPv4.
+5. Подождать 5 минут, потому Aeza может показать IP не сразу.
+6. Дождаться появления нового IP в списке.
+7. Сделать новый IP главным.
+8. Перезагрузить VPS.
+9. Дождаться healthcheck SSH, VLESS и Hysteria.
+10. Обновить `current_ip`.
+11. Синхронизировать VPN-конфиги на новом IP.
+12. Удалить старый IPv4.
+
+Старый IP не удаляется до успешного переключения и обновления `current_ip`.
+
+Есть и ручной режим `/admin/ip`:
+
+- обновить список IP;
+- купить новый IP;
+- выбрать IP главным;
+- удалить не главный IP.
+
+## Переменные окружения
+
+Основные:
 
 ```bash
+DATABASE_PATH=./data/autovpn.sqlite3
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=...
-CURRENT_IP=203.0.113.10
-AEZA_TOKEN=...
-AEZA_SERVICE_ID=...
-AEZA_IPV4_DOMAIN=...
-```
 
-For VPN VPS auto-setup over SSH, either password auth or key auth can be used:
-
-```bash
 EU_SSH_HOST=203.0.113.10
 EU_SSH_USER=root
 EU_SSH_PORT=22
 EU_SSH_PASSWORD=...
-```
-
-or:
-
-```bash
-EU_SSH_HOST=203.0.113.10
-EU_SSH_USER=root
-EU_SSH_PORT=22
 EU_SSH_KEY_PATH=/home/autovpn/.ssh/id_ed25519
+
+AEZA_TOKEN=...
+AEZA_SERVICE_ID=...
+AEZA_IPV4_DOMAIN=
 ```
 
-If `EU_SSH_PASSWORD` is set, it is used instead of `EU_SSH_KEY_PATH`.
+Если значения заданы через `/setup`, они хранятся в SQLite как `config.*` и имеют приоритет в runtime.
 
-## First setup
+## Сервисные команды
 
-1. Set `current_ip` to the current EU/Aeza VPN IP in SQLite before the first rotation if Aeza does not mark the main IP clearly.
-2. Create family clients on `/admin`.
-3. Share `/client/{token}` with a client. It contains the subscription link, QR, AmneziaWG config/QR, and guide placeholders.
-4. Use `/sub/{token}` directly in VPN apps that support subscription URLs.
-5. Press `Установить VPN` or `Обновить клиентов на VPN` on `/admin` to install/sync enabled clients to the target VPS.
-6. Press `Обновить IP` on `/admin` only for Aeza servers with `AEZA_TOKEN` and `AEZA_SERVICE_ID` configured.
-
-## Admin layout
-
-`/admin` is the main control page:
-
-- protocol status for VLESS, Hysteria, and AmneziaWG;
-- last check time and failed-since time for protocols;
-- expandable clients;
-- VLESS upload/download and last-seen per client;
-- add, rename, enable/disable, and delete clients;
-- client page and subscription URLs;
-- buttons for syncing clients, installing VPN, and Aeza-only IP rotation.
-
-`/client/{token}` is the public client page:
-
-- combined VLESS + Hysteria subscription URL;
-- QR button for subscription URL;
-- AmneziaWG config download and QR;
-- guide placeholders for iOS, Android, Windows, and macOS.
-
-## Installing VPN on EU/Aeza
-
-Open `/admin/install`.
-
-The RU server can:
-
-- generate an EU install/sync script at `/admin/install/script`;
-- run that script on the EU VPS over SSH with `Install / Sync EU VPN`;
-- install Xray, Hysteria2, and AmneziaWG systemd services;
-- write Xray VLESS config from enabled RU clients;
-- write Hysteria2 user/password config from enabled RU clients;
-- write AmneziaWG `awg0` config from enabled RU clients;
-- restart `xray`, `hysteria-server`, and `awg-quick@awg0`;
-- store install output and errors in `vpn_install_operations`.
-- enable Xray StatsService on `127.0.0.1:10085` for VLESS per-client traffic.
-
-For SSH, configure:
+На сервере:
 
 ```bash
-EU_SSH_HOST=203.0.113.10
-EU_SSH_USER=root
-EU_SSH_PORT=22
-EU_SSH_KEY_PATH=/home/autovpn/.ssh/aeza_ed25519
+systemctl status autovpn
+systemctl restart autovpn
+journalctl -u autovpn -f
 ```
 
-If `EU_SSH_HOST` is empty, the service uses `settings.current_ip` as the target host.
-
-The generated MVP protocol format is:
-
-- VLESS REALITY + Vision on `VLESS_PORT`, default `443/tcp`;
-- VLESS REALITY server accepts `VLESS_REALITY_SERVER_NAMES`, default `ok.ru,www.ok.ru`;
-- VLESS client links use `VLESS_REALITY_SERVER_NAME` as SNI, default `ok.ru`;
-- Hysteria2 on `HYSTERIA_PORT` with self-signed TLS, so subscription links include `insecure=1`;
-- Hysteria2 username is `client{id}`, password is `clients.hysteria_password`.
-- AmneziaWG on `AMNEZIA_PORT`, default `51820/udp`;
-- AmneziaWG client config is available at `/amnezia/{token}`;
-- AmneziaWG QR is available on `/client/{token}`;
-- AmneziaWG server config is written to `/etc/amnezia/amneziawg/awg0.conf`.
-
-The current AmneziaWG installer uses the official Amnezia PPA flow, so this MVP assumes an Ubuntu-compatible VPS for Amnezia auto-setup.
-
-VLESS REALITY settings:
+Локально:
 
 ```bash
-VLESS_PORT=443
-VLESS_REALITY_TARGET=ok.ru:443
-VLESS_REALITY_SERVER_NAMES=ok.ru,www.ok.ru
-VLESS_REALITY_SERVER_NAME=ok.ru
-VLESS_REALITY_FINGERPRINT=chrome
-VLESS_REALITY_SPIDER_X=/
+~/AutoVPN/run-local.sh
 ```
 
-REALITY private/public keys and shortId are generated once and stored in SQLite settings.
+## Ограничения MVP
 
-## Client statistics
-
-`/admin` has an `Обновить статистику` button.
-
-The current MVP collects client traffic from two sources:
-
-- auto-setup enables Xray `StatsService`;
-- each VLESS client gets an Xray `email` based on name and id;
-- the RU server connects to the VPN VPS over SSH;
-- it runs `/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 -pattern 'user>>>'`;
-- it also runs `awg show awg0 dump` for AmneziaWG peer counters;
-- parsed upload/download counters are stored in SQLite `client_stats`;
-- `last_seen_at` updates when counters grow.
-
-Hysteria2 per-client traffic is not collected yet. It is a separate service in this MVP, not part of Xray, so Xray StatsService does not see Hysteria2 traffic.
-
-Manual SQLite example:
-
-```bash
-sqlite3 ./data/autovpn.sqlite3 \
-  "INSERT INTO settings(key, value) VALUES ('current_ip', '1.2.3.4')
-   ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
-```
-
-## IP rotation safety
-
-IP rotation is disabled unless both `AEZA_TOKEN` and `AEZA_SERVICE_ID` are configured.
-This action adds a new Aeza IPv4 before deleting the old one, so Aeza may charge extra money for the additional IPv4 while the operation is running or if it fails before cleanup.
-The dashboard may show the current Aeza price, but the actual rotate button opens `/admin/ip/confirm`.
-That confirmation page asks Aeza for the IPv4 price again and shows it before the operation can be started.
-There is also a manual IP manager at `/admin/ip`.
-It can:
-
-- refresh the Aeza IPv4 list;
-- show the current new IPv4 price;
-- buy a new IPv4 after price confirmation;
-- make a selected IPv4 the main one;
-- delete only non-main IPv4 addresses.
-
-When an IP is made main manually, AutoVPN updates `settings.current_ip` and synchronizes generated VPN configs to that selected IP.
-Aeza account currency is EUR, and the API returns prices in minor units: `2` means `€0.02`.
-The dashboard divides the API value by 100 and displays it with `€`.
-In the captured HAR, Aeza returned:
-
-```json
-{
-  "termLimits": {
-    "default": 16,
-    "max": 16,
-    "hour": 3,
-    "half_day": 36,
-    "day": 72,
-    "week": 504,
-    "month": 16,
-    "quarter_year": 6480,
-    "half_year": 12960,
-    "year": 26280,
-    "eternal": 3000000000
-  },
-  "price": 2,
-  "protectedPrice": 9
-}
-```
-
-This means `price` is displayed as `€0.02`, and `protectedPrice` would be `€0.09`.
-
-The HAR also showed IPv4 creation as:
-
-```json
-{"method":"balance","domain":"aqua"}
-```
-
-`AEZA_IPV4_PAYMENT_METHOD` controls `method`; `AEZA_IPV4_DOMAIN` is optional and should be set if Aeza requires the service name/domain for your account.
-
-The state machine:
-
-1. Refuses a new run while a `PENDING` or `RUNNING` operation exists.
-2. Reads Aeza IPv4 list.
-3. Finds and stores old main IP.
-4. Adds a new IPv4.
-5. Waits `AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS`, default 300 seconds, because Aeza may not show the new IP immediately after purchase.
-6. Waits until the new IPv4 appears in Aeza list.
-7. Makes the new IPv4 main.
-8. Reboots the VPS.
-9. Marks the step as `wait_vps_health` while the RU server waits for the EU VPS to come back.
-10. From the RU server, waits for TCP healthchecks on the EU IP: SSH, VLESS, and Hysteria.
-11. When all checks pass, stores `server_reachable_at` and `healthcheck_result`.
-12. Updates `settings.current_ip`.
-13. Runs `sync_vpn_after_ip_change`: reconnects to the VPN VPS by the new IP and reapplies generated VPN configs.
-14. Deletes the old IPv4.
-15. Marks operation as `DONE`.
-
-If VPN config sync fails after the new IP is active, the old IPv4 is not deleted automatically.
-
-The dashboard shows `Ждём, когда сервер поднимется после reboot` during `wait_vps_health`.
-After successful checks it shows `Сервер поднялся: ...` with the timestamp.
-
-If any step fails before old IP deletion, the old IP is preserved and the operation is marked `FAILED`.
-
-## Deployment notes
-
-Example files:
-
-- `deploy/autovpn.service`
-- `deploy/nginx.conf`
-
-On a server, copy the project to `/opt/autovpn`, create `/etc/autovpn.env` from `.env.example`, install the virtualenv, then enable the unit:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now autovpn
-```
-
-Configure nginx with your real domain and add TLS separately.
+- Hysteria2 per-client traffic пока не собирается.
+- AmneziaVPN не объединяется в общую подписку, отдаётся отдельным config/QR.
+- Для AmneziaWG auto-setup ожидается Ubuntu-compatible VPS с Amnezia PPA.
+- UI простой, без React.

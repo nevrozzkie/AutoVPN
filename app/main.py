@@ -35,6 +35,17 @@ from app.db import (
 from app.eu_install import build_eu_install_script, describe_ssh_command, resolve_eu_host, run_eu_install
 from app.ip_change import apply_manual_main_ip, run_ip_change
 from app.protocol_status import refresh_protocol_statuses
+from app.runtime_config import (
+    admin_password,
+    admin_username,
+    aeza_api_base,
+    aeza_ipv4_after_purchase_delay_seconds,
+    aeza_ipv4_domain,
+    aeza_ipv4_payment_method,
+    aeza_service_id,
+    aeza_token,
+    setup_complete,
+)
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_subscription
 
@@ -44,21 +55,21 @@ security = HTTPBasic()
 
 
 def aeza_ip_rotation_available() -> bool:
-    return bool(settings.aeza_token and settings.aeza_service_id)
+    return bool(aeza_token() and aeza_service_id())
 
 
 async def fetch_aeza_ipv4_price() -> dict[str, object] | None:
     if not aeza_ip_rotation_available():
         return None
     try:
-        client = AezaClient(settings.aeza_api_base, settings.aeza_token)
-        return await client.get_ipv4_price(settings.aeza_service_id)
+        client = AezaClient(aeza_api_base(), aeza_token())
+        return await client.get_ipv4_price(aeza_service_id())
     except Exception:
         return None
 
 
 def get_aeza_client() -> AezaClient:
-    return AezaClient(settings.aeza_api_base, settings.aeza_token)
+    return AezaClient(aeza_api_base(), aeza_token())
 
 
 def get_amnezia_obfuscation() -> dict[str, int]:
@@ -97,8 +108,13 @@ def on_startup() -> None:
 
 
 def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    expected_password = settings.admin_password
-    username_ok = secrets.compare_digest(credentials.username, settings.admin_username)
+    if not setup_complete():
+        raise HTTPException(
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            headers={"Location": "/setup"},
+        )
+    expected_password = admin_password()
+    username_ok = secrets.compare_digest(credentials.username, admin_username())
     password_ok = bool(expected_password) and secrets.compare_digest(
         credentials.password,
         expected_password,
@@ -114,7 +130,61 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
+    if not setup_complete():
+        return RedirectResponse("/setup")
     return RedirectResponse("/admin")
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request) -> HTMLResponse:
+    if setup_complete():
+        return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "admin_username": admin_username(),
+        },
+    )
+
+
+@app.post("/setup")
+def setup_submit(
+    admin_username_value: str = Form("admin"),
+    admin_password_value: str = Form(...),
+    current_ip: str = Form(""),
+    eu_ssh_host_value: str = Form(""),
+    eu_ssh_user_value: str = Form("root"),
+    eu_ssh_port_value: int = Form(22),
+    eu_ssh_password_value: str = Form(""),
+    eu_ssh_key_path_value: str = Form(""),
+    aeza_token_value: str = Form(""),
+    aeza_service_id_value: str = Form(""),
+    aeza_ipv4_domain_value: str = Form(""),
+) -> RedirectResponse:
+    if setup_complete():
+        return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    if not admin_password_value.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin password is required")
+
+    set_setting("config.admin_username", admin_username_value.strip() or "admin")
+    set_setting("config.admin_password", admin_password_value)
+    if current_ip.strip():
+        set_setting("current_ip", current_ip.strip())
+
+    set_setting("config.eu_ssh_host", eu_ssh_host_value.strip() or current_ip.strip())
+    set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
+    set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
+    set_setting("config.eu_ssh_password", eu_ssh_password_value)
+    set_setting("config.eu_ssh_key_path", "" if eu_ssh_password_value else eu_ssh_key_path_value.strip())
+
+    set_setting("config.aeza_api_base", "https://my.aeza.net")
+    set_setting("config.aeza_token", aeza_token_value.strip())
+    set_setting("config.aeza_service_id", aeza_service_id_value.strip())
+    set_setting("config.aeza_ipv4_payment_method", "balance")
+    set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
+    set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "300")
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/healthz")
@@ -161,7 +231,7 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
             "current_ip": get_setting("current_ip"),
             "operation_running": has_running_operation(),
             "aeza_ipv4_price": price,
-            "after_purchase_delay_seconds": settings.aeza_ipv4_after_purchase_delay_seconds,
+            "after_purchase_delay_seconds": aeza_ipv4_after_purchase_delay_seconds(),
             "format_eur_minor_units": format_eur_minor_units,
         },
     )
@@ -185,7 +255,7 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
     error = ""
     ipv4_list: list[dict] = []
     try:
-        ipv4_list = await get_aeza_client().get_ipv4_list(settings.aeza_service_id)
+        ipv4_list = await get_aeza_client().get_ipv4_list(aeza_service_id())
     except Exception as exc:
         error = str(exc)
     return templates.TemplateResponse(
@@ -220,9 +290,9 @@ async def admin_ip_buy(_: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
     await get_aeza_client().add_ipv4(
-        settings.aeza_service_id,
-        payment_method=settings.aeza_ipv4_payment_method,
-        domain=settings.aeza_ipv4_domain,
+        aeza_service_id(),
+        payment_method=aeza_ipv4_payment_method(),
+        domain=aeza_ipv4_domain(),
     )
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -235,7 +305,7 @@ async def admin_ip_make_main(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    await get_aeza_client().make_main_ipv4(settings.aeza_service_id, ipv4_id)
+    await get_aeza_client().make_main_ipv4(aeza_service_id(), ipv4_id)
     await apply_manual_main_ip(ip)
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -251,7 +321,7 @@ async def admin_ip_delete(
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
     if is_main == "1" or ip == get_setting("current_ip"):
         return RedirectResponse("/admin/ip?cannot_delete_main=1", status_code=status.HTTP_303_SEE_OTHER)
-    await get_aeza_client().delete_ipv4(settings.aeza_service_id, ipv4_id)
+    await get_aeza_client().delete_ipv4(aeza_service_id(), ipv4_id)
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
 
