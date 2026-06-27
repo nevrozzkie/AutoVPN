@@ -40,6 +40,12 @@ async def run_deep_protocol_checks(current_ip: str) -> dict[str, DeepCheckResult
 
 
 def build_deep_check_script(client: dict, current_ip: str) -> str:
+    enabled_clients = [item for item in list_clients() if item["enabled"]]
+    amnezia_public_keys = [
+        item["amnezia_public_key"]
+        for item in enabled_clients
+        if item.get("amnezia_public_key")
+    ]
     xray_config = {
         "log": {"loglevel": "warning"},
         "inbounds": [
@@ -161,6 +167,33 @@ if command -v curl >/dev/null 2>&1 && command -v hysteria >/dev/null 2>&1; then
 else
   echo "HYSTERIA_DEEP=UNAVAILABLE"
 fi
+
+if command -v awg >/dev/null 2>&1; then
+  NOW="$(date +%s)"
+  AMNEZIA_KEYS={shlex.quote(" ".join(amnezia_public_keys))}
+  AMNEZIA_VERIFIED=0
+  awg show awg0 dump >"$WORKDIR/awg.dump" 2>/dev/null
+  while IFS= read -r line; do
+    set -- $line
+    peer_key="$1"
+    latest_handshake="$5"
+    case "$latest_handshake" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    for expected_key in $AMNEZIA_KEYS; do
+      if [ "$peer_key" = "$expected_key" ] && [ "$latest_handshake" -gt 0 ] && [ $((NOW - latest_handshake)) -le 180 ]; then
+        AMNEZIA_VERIFIED=1
+      fi
+    done
+  done <"$WORKDIR/awg.dump"
+  if [ "$AMNEZIA_VERIFIED" = "1" ]; then
+    echo "AMNEZIA_DEEP=VERIFIED"
+  else
+    echo "AMNEZIA_DEEP=FAILED"
+  fi
+else
+  echo "AMNEZIA_DEEP=UNAVAILABLE"
+fi
 """
 
 
@@ -173,9 +206,13 @@ def parse_deep_check_output(output: str) -> dict[str, DeepCheckResult]:
         elif line == "VLESS_DEEP=FAILED":
             results["vless"] = DeepCheckResult(False, "request through VLESS failed")
         elif line == "HYSTERIA_DEEP=VERIFIED":
-            results["hysteria"] = DeepCheckResult(True)
+            continue
         elif line == "HYSTERIA_DEEP=FAILED":
             results["hysteria"] = DeepCheckResult(False, "request through Hysteria failed")
+        elif line == "AMNEZIA_DEEP=VERIFIED":
+            results["amnezia"] = DeepCheckResult(True)
+        elif line == "AMNEZIA_DEEP=FAILED":
+            results["amnezia"] = DeepCheckResult(False, "recent AmneziaWG handshake not found")
     return results
 
 

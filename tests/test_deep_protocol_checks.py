@@ -5,9 +5,17 @@ def test_parse_deep_check_output() -> None:
     result = parse_deep_check_output(
         """
         VLESS_DEEP=VERIFIED
-        HYSTERIA_DEEP=FAILED
+        HYSTERIA_DEEP=VERIFIED
+        AMNEZIA_DEEP=VERIFIED
         """
     )
 
     assert result["vless"].verified is True
+    assert "hysteria" not in result
+    assert result["amnezia"].verified is True
+
+
+def test_parse_deep_check_output_keeps_hysteria_failures() -> None:
+    result = parse_deep_check_output("HYSTERIA_DEEP=FAILED")
+
     assert result["hysteria"].verified is False

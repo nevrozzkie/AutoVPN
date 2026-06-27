@@ -18,3 +18,9 @@ def test_client_changes_mark_vpn_config_updated() -> None:
     update_client_name(client["id"], "Bob")
 
     assert datetime.fromisoformat(get_setting("vpn.config_updated_at"))
+
+
+def test_hysteria_server_password_is_initialized() -> None:
+    init_db()
+
+    assert get_setting("hysteria.password")

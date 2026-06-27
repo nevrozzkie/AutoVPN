@@ -7,15 +7,14 @@ from app.db import get_setting
 from app.profile_names import profile_name
 
 
-def hysteria_auth(client: dict) -> str:
-    return f"client{client['id']}:{client['hysteria_password']}"
+def hysteria_auth(_: dict | None = None) -> str:
+    return get_setting("hysteria.password")
 
 
 def build_subscription(client: dict, current_ip: str) -> str:
     vless_name = quote(profile_name(client, "vless"))
     hysteria_name = quote(profile_name(client, "hysteria"))
-    hysteria_username = quote(f"client{client['id']}")
-    hysteria_password = quote(client["hysteria_password"])
+    hysteria_password = quote(hysteria_auth(client))
     vless_query = urlencode(
         {
             "type": "tcp",
@@ -33,7 +32,7 @@ def build_subscription(client: dict, current_ip: str) -> str:
         f"?{vless_query}#{vless_name}"
     )
     hysteria = (
-        f"hy2://{hysteria_username}:{hysteria_password}@{current_ip}:{settings.hysteria_port}/"
+        f"hy2://{hysteria_password}@{current_ip}:{settings.hysteria_port}/"
         f"?insecure=1&sni={quote(settings.vless_reality_server_name)}#{hysteria_name}"
     )
     return f"{vless}\n{hysteria}\n"

@@ -3,7 +3,7 @@ import tempfile
 
 os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
-from app.db import create_client, init_db
+from app.db import create_client, get_setting, init_db
 from app.config import settings
 from app.subscriptions import build_sing_box_subscription, build_subscription
 
@@ -20,7 +20,7 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "hy2://" in subscription
-    assert f"hy2://client{client['id']}:" in subscription
+    assert f"hy2://{get_setting('hysteria.password')}@" in subscription
     assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in subscription
@@ -44,6 +44,6 @@ def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
     assert outbounds["vless-reality"]["tls"]["reality"]["enabled"] is True
     assert outbounds["hysteria2"]["type"] == "hysteria2"
     assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
-    assert outbounds["hysteria2"]["password"] == f"client{client['id']}:{client['hysteria_password']}"
+    assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
     assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
     assert outbounds["hysteria2"]["tls"]["insecure"] is True

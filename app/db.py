@@ -117,6 +117,7 @@ def init_db() -> None:
         )
         _ensure_amnezia_settings(db)
         _ensure_reality_settings(db)
+        _ensure_hysteria_settings(db)
         _ensure_client_amnezia_material(db)
 
 
@@ -201,6 +202,14 @@ def _ensure_reality_settings(db: sqlite3.Connection) -> None:
         _set_setting(db, "vless.reality_public_key", generate_reality_public_key(private_key))
     if not _setting(db, "vless.reality_short_id"):
         _set_setting(db, "vless.reality_short_id", generate_reality_short_id())
+
+
+def _ensure_hysteria_settings(db: sqlite3.Connection) -> None:
+    if _setting(db, "hysteria.password"):
+        return
+    client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
+    password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
+    _set_setting(db, "hysteria.password", password)
 
 
 def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:

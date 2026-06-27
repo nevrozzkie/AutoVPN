@@ -3,7 +3,7 @@ import tempfile
 
 os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
-from app.db import create_client, init_db
+from app.db import create_client, get_setting, init_db
 from app.eu_install import build_eu_install_script, describe_ssh_command, forget_ssh_known_host
 
 
@@ -14,8 +14,10 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     script = build_eu_install_script()
 
     assert client["vless_uuid"] in script
-    assert f"client{client['id']}" in script
-    assert client["hysteria_password"] in script
+    assert f"client{client['id']}" not in script
+    assert f"password: {get_setting('hysteria.password')!r}".replace("'", '"') in script
+    assert "type: password" in script
+    assert "userpass:" not in script
     assert "systemctl restart xray" in script
     assert "systemctl restart hysteria-server" in script
     assert '"security": "reality"' in script
@@ -29,6 +31,7 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert "HYSTERIA_SNI=ok.ru" in script
     assert "ufw allow 8443/udp" in script
     assert "iptables -C INPUT -p udp --dport 8443 -j ACCEPT" in script
+    assert "firewall-cmd --permanent --add-port=8443/udp" in script
     assert "systemctl is-active --quiet hysteria-server" in script
 
 

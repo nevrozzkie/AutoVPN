@@ -79,10 +79,7 @@ def build_eu_install_script() -> str:
         }
         for client in clients
     ]
-    hysteria_users = {
-        f"client{client['id']}": client["hysteria_password"]
-        for client in clients
-    }
+    hysteria_password = get_setting("hysteria.password")
 
     xray_config = {
         "log": {"loglevel": "warning"},
@@ -153,13 +150,6 @@ def build_eu_install_script() -> str:
             ]
         },
     }
-
-    hysteria_user_lines = "\n".join(
-        f"    client{client['id']}: {json.dumps(client['hysteria_password'])}"
-        for client in clients
-    )
-    if not hysteria_user_lines:
-        hysteria_user_lines = "    disabled: \"no-enabled-clients\""
 
     return f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -252,9 +242,8 @@ tls:
   key: /etc/autovpn/hysteria.key
 
 auth:
-  type: userpass
-  userpass:
-{hysteria_user_lines}
+  type: password
+  password: {json.dumps(hysteria_password)}
 
 masquerade:
   type: proxy
@@ -269,6 +258,13 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 if command -v iptables >/dev/null 2>&1; then
   iptables -C INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT || true
+fi
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port={settings.hysteria_port}/udp || true
+  firewall-cmd --reload || true
+fi
+if command -v nft >/dev/null 2>&1; then
+  nft list ruleset | grep -q "udp dport {settings.hysteria_port} accept" || nft add rule inet filter input udp dport {settings.hysteria_port} accept || true
 fi
 
 cat >/etc/amnezia/amneziawg/awg0.conf <<'AWG'

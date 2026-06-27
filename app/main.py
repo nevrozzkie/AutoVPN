@@ -89,7 +89,7 @@ def format_msk(value: object) -> str:
 
 STATUS_LABELS = {
     "OK": "Сетевой probe прошёл",
-    "VERIFIED": "Проверено запросом",
+    "VERIFIED": "OK",
     "TCP_REACHABLE": "TCP-порт доступен",
     "UDP_PACKET_SENT": "UDP-пакет отправлен",
     "FAILED": "Ошибка",
@@ -517,6 +517,7 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
             "clients": list_clients_with_stats(),
             "base_url": str(request.base_url).rstrip("/"),
             "format_bytes": format_bytes,
+            "hysteria_password": get_setting("hysteria.password"),
             "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
             "stats_last_error": get_setting("stats.last_error"),
         },

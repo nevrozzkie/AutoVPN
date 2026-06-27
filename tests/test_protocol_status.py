@@ -70,6 +70,7 @@ def test_refresh_protocol_statuses_prefers_deep_check_result(monkeypatch) -> Non
         return {
             "vless": DeepCheckResult(True),
             "hysteria": DeepCheckResult(False, "request failed"),
+            "amnezia": DeepCheckResult(True),
         }
 
     monkeypatch.setattr("app.protocol_status.tcp_probe", fake_tcp_probe)
@@ -81,3 +82,4 @@ def test_refresh_protocol_statuses_prefers_deep_check_result(monkeypatch) -> Non
 
     assert by_key["vless"]["status"] == "VERIFIED"
     assert by_key["hysteria"]["status"] == "FAILED"
+    assert by_key["amnezia"]["status"] == "VERIFIED"
