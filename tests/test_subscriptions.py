@@ -20,6 +20,8 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "hysteria2://" in subscription
+    assert f"hysteria2://client{client['id']}%3A" in subscription
+    assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=autovpn-eu" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in subscription
 
@@ -42,5 +44,5 @@ def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
     assert outbounds["vless-reality"]["tls"]["reality"]["enabled"] is True
     assert outbounds["hysteria2"]["type"] == "hysteria2"
     assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
-    assert outbounds["hysteria2"]["password"] == client["hysteria_password"]
+    assert outbounds["hysteria2"]["password"] == f"client{client['id']}:{client['hysteria_password']}"
     assert outbounds["hysteria2"]["tls"]["insecure"] is True
