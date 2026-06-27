@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Operation log</h1>
+<h1>Журнал операций</h1>
 
-<h2>IP changes</h2>
+<h2>Смена IP</h2>
 <table>
   <thead>
     <tr>
       <th>ID</th>
-      <th>Status</th>
-      <th>Step</th>
-      <th>Old IP</th>
-      <th>New IP</th>
-      <th>Server up</th>
-      <th>Error</th>
-      <th>Created</th>
-      <th>Updated</th>
+      <th>Статус</th>
+      <th>Шаг</th>
+      <th>Старый IP</th>
+      <th>Новый IP</th>
+      <th>Сервер поднялся</th>
+      <th>Ошибка</th>
+      <th>Создано</th>
+      <th>Обновлено</th>
     </tr>
   </thead>
   <tbody>
     {% for operation in operations %}
       <tr>
         <td>{{ operation.id }}</td>
-        <td>{{ operation.status }}</td>
-        <td>{{ operation.current_step }}</td>
+        <td>{{ operation.status|status_label }}</td>
+        <td>{{ operation.current_step|step_label }}</td>
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
         <td>
@@ -36,37 +36,37 @@
         <td>{{ operation.updated_at|msk }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">No operations yet</td></tr>
+      <tr><td colspan="9" class="muted">Операций пока нет</td></tr>
     {% endfor %}
   </tbody>
 </table>
 
-<h2>EU installs</h2>
+<h2>Установка / синхронизация VPN</h2>
 <table>
   <thead>
     <tr>
       <th>ID</th>
-      <th>Status</th>
-      <th>Target</th>
-      <th>Step</th>
-      <th>Error</th>
-      <th>Created</th>
-      <th>Updated</th>
+      <th>Статус</th>
+      <th>Сервер</th>
+      <th>Шаг</th>
+      <th>Ошибка</th>
+      <th>Создано</th>
+      <th>Обновлено</th>
     </tr>
   </thead>
   <tbody>
     {% for operation in install_operations %}
       <tr>
         <td>{{ operation.id }}</td>
-        <td>{{ operation.status }}</td>
+        <td>{{ operation.status|status_label }}</td>
         <td>{{ operation.target_host or "" }}</td>
-        <td>{{ operation.current_step }}</td>
+        <td>{{ operation.current_step|step_label }}</td>
         <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
         <td>{{ operation.created_at|msk }}</td>
         <td>{{ operation.updated_at|msk }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted">No install operations yet</td></tr>
+      <tr><td colspan="7" class="muted">Операций установки пока нет</td></tr>
     {% endfor %}
   </tbody>
 </table>

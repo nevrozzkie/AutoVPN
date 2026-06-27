@@ -116,5 +116,6 @@ def test_build_amnezia_vpn_key_is_vpn_url_with_compressed_json() -> None:
 
     assert raw_length == len(raw)
     assert payload["defaultContainer"] == "amnezia-awg2"
+    assert payload["description"] == "[AutoVPN] Alice - amnezia"
     assert payload["hostName"] == "203.0.113.10"
     assert payload["containers"][0]["awg"]["client_priv_key"] == "client-private"

@@ -3,7 +3,7 @@
 <h1>Клиенты</h1>
 
 <form method="post" action="/admin/clients" class="actions">
-  <input type="text" name="name" placeholder="Имя, например Мама" required>
+  <input type="text" name="name" placeholder="Имя клиента" required>
   <input type="submit" value="Добавить клиента">
 </form>
 
@@ -23,7 +23,7 @@
     <details class="panel client-details">
       <summary>
         <strong>{{ client.name }}</strong>
-        <span class="muted">{{ "enabled" if client.enabled else "disabled" }}</span>
+        <span class="muted">{{ "включён" if client.enabled else "отключён" }}</span>
         <span class="muted">
           VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
         </span>
@@ -31,9 +31,9 @@
           Amnezia: ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
         </span>
         {% if client.stats_last_seen_at %}
-          <span class="ok">last seen {{ client.stats_last_seen_at|msk }}</span>
+          <span class="ok">активность {{ client.stats_last_seen_at|msk }}</span>
         {% else %}
-          <span class="muted">not seen yet</span>
+          <span class="muted">трафика ещё не было</span>
         {% endif %}
       </summary>
 
@@ -57,29 +57,29 @@
           <code>{{ client.vless_uuid }}</code>
         </div>
         <div>
-          <div class="label">Hysteria password</div>
+          <div class="label">Пароль Hysteria</div>
           <code>{{ client.hysteria_password }}</code>
         </div>
         <div>
-          <div class="label">VLESS traffic</div>
+          <div class="label">Трафик VLESS</div>
           ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
-          <br><span class="muted">Updated: {{ client.stats_updated_at|msk or "never" }}</span>
+          <br><span class="muted">Обновлено: {{ client.stats_updated_at|msk or "никогда" }}</span>
         </div>
         <div>
-          <div class="label">AmneziaWG traffic</div>
+          <div class="label">Трафик AmneziaWG</div>
           ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
           {% if client.amnezia_latest_handshake %}
-            <br><span class="muted">Latest handshake: {{ client.amnezia_latest_handshake|msk }}</span>
+            <br><span class="muted">Последнее рукопожатие: {{ client.amnezia_latest_handshake|msk }}</span>
           {% else %}
-            <br><span class="muted">No handshake yet</span>
+            <br><span class="muted">Рукопожатия ещё не было</span>
           {% endif %}
         </div>
         <div>
-          <div class="label">Online status</div>
+          <div class="label">Онлайн-статус</div>
           {% if client.stats_last_seen_at %}
-            <span class="ok">Active recently: {{ client.stats_last_seen_at|msk }}</span>
+            <span class="ok">Недавняя активность: {{ client.stats_last_seen_at|msk }}</span>
           {% else %}
-            <span class="muted">No traffic seen yet</span>
+            <span class="muted">Трафика ещё не было</span>
           {% endif %}
         </div>
       </div>

@@ -167,7 +167,7 @@
       <div class="page-top">
         <div>
           <h1>{{ client.name }}</h1>
-          <p class="muted">EU VPN IP: {{ current_ip }}</p>
+          <p class="muted">IP VPN: {{ current_ip }}</p>
         </div>
         <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
       </div>
@@ -185,17 +185,14 @@
               <div class="status">
                 <strong>{{ protocol.name }}</strong>
                 {% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}
-                  <span class="ok">{{ protocol.status }}</span>
+                  <span class="ok">{{ protocol.status|status_label }}</span>
                 {% elif protocol.status == "FAILED" %}
-                  <span class="bad">{{ protocol.status }}</span>
+                  <span class="bad">{{ protocol.status|status_label }}</span>
                 {% else %}
-                  <span class="warn">{{ protocol.status }}</span>
+                  <span class="warn">{{ protocol.status|status_label }}</span>
                 {% endif %}
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
-                {% endif %}
-                {% if protocol.ping_ms %}
-                  <br><span class="muted">Пинг: {{ protocol.ping_ms }} мс</span>
                 {% endif %}
                 {% if protocol.failed_since %}
                   <br><span class="bad">Проблема с: {{ protocol.failed_since|msk }}</span>
@@ -217,17 +214,15 @@
       {% endif %}
 
       <section>
-        <h2>Подписка VLESS + Hysteria</h2>
+        <h2>Подписки VLESS + Hysteria</h2>
+        <p class="muted">Hysteria: не тестировалось</p>
         <p><code>{{ subscription_url }}</code></p>
         <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
         <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
         <div id="subscription-qr" class="qr">
-          <img src="/client/{{ client.token }}/subscription.qr" alt="Subscription QR">
+          <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
         </div>
-      </section>
-
-      <section>
-        <h2>sing-box</h2>
+        <h3>sing-box <span class="muted">не тестировалось</span></h3>
         <p><code>{{ sing_box_subscription_url }}</code></p>
         <a class="button" href="{{ sing_box_subscription_url }}">Открыть конфиг</a>
         <button type="button" onclick="navigator.clipboard.writeText('{{ sing_box_subscription_url }}')">Скопировать ссылку</button>
@@ -241,7 +236,7 @@
         <p class="muted">Если QR не считывается, скопируйте ключ ниже и вставьте его в AmneziaVPN вручную.</p>
         <textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea>
         <div id="amnezia-qr" class="qr">
-          <img src="{{ amnezia_qr_url }}" alt="Amnezia QR">
+          <img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN">
         </div>
       </section>
 

@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from app.config import settings
+from app.profile_names import profile_name
 
 
 AMNEZIA_SERVER_ADDRESS = "10.66.66.1/24"
@@ -153,7 +154,7 @@ def build_amnezia_vpn_key(
             }
         ],
         "defaultContainer": "amnezia-awg2",
-        "description": client["name"],
+        "description": profile_name(client, "amnezia"),
         "dns1": dns1,
         "dns2": dns2,
         "hostName": current_ip,

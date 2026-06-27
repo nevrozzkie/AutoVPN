@@ -4,10 +4,12 @@ from urllib.parse import quote, urlencode
 
 from app.config import settings
 from app.db import get_setting
+from app.profile_names import profile_name
 
 
 def build_subscription(client: dict, current_ip: str) -> str:
-    safe_name = quote(client["name"])
+    vless_name = quote(profile_name(client, "vless"))
+    hysteria_name = quote(profile_name(client, "hysteria"))
     hysteria_username = quote(f"client{client['id']}")
     hysteria_password = quote(client["hysteria_password"])
     vless_query = urlencode(
@@ -24,11 +26,11 @@ def build_subscription(client: dict, current_ip: str) -> str:
     )
     vless = (
         f"vless://{client['vless_uuid']}@{current_ip}:{settings.vless_port}"
-        f"?{vless_query}#{safe_name}-vless"
+        f"?{vless_query}#{vless_name}"
     )
     hysteria = (
         f"hysteria2://{hysteria_username}:{hysteria_password}@{current_ip}:{settings.hysteria_port}"
-        f"?insecure=1&sni=autovpn-eu#{safe_name}-hysteria"
+        f"?insecure=1&sni=autovpn-eu#{hysteria_name}"
     )
     return f"{vless}\n{hysteria}\n"
 

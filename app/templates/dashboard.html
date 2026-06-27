@@ -4,35 +4,35 @@
 
 <div class="grid">
   <section class="panel">
-    <div class="label">Current EU VPN IP</div>
-    <div class="value">{{ current_ip or "not set" }}</div>
+    <div class="label">Текущий IP VPN</div>
+    <div class="value">{{ current_ip or "не задан" }}</div>
   </section>
   <section class="panel">
-    <div class="label">Last IP operation</div>
+    <div class="label">Последняя смена IP</div>
     {% if latest_operation %}
-      <div class="value">{{ latest_operation.status }}</div>
-      <div class="muted">{{ latest_operation.current_step }} · {{ latest_operation.updated_at|msk }}</div>
+      <div class="value">{{ latest_operation.status|status_label }}</div>
+      <div class="muted">{{ latest_operation.current_step|step_label }} · {{ latest_operation.updated_at|msk }}</div>
       {% if latest_operation.server_reachable_at %}
         <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at|msk }}</div>
       {% elif latest_operation.current_step == "wait_vps_health" %}
-        <div class="muted">Ждём, когда сервер поднимется после reboot.</div>
+        <div class="muted">Ждём, когда сервер поднимется после перезагрузки.</div>
       {% endif %}
     {% else %}
-      <div class="value">none</div>
+      <div class="value">нет операций</div>
     {% endif %}
   </section>
   <section class="panel">
-    <div class="label">Last VPN install/sync</div>
+    <div class="label">Последняя установка / синхронизация VPN</div>
     {% if latest_install_operation %}
-      <div class="value">{{ latest_install_operation.status }}</div>
-      <div class="muted">{{ latest_install_operation.current_step }} · {{ latest_install_operation.updated_at|msk }}</div>
+      <div class="value">{{ latest_install_operation.status|status_label }}</div>
+      <div class="muted">{{ latest_install_operation.current_step|step_label }} · {{ latest_install_operation.updated_at|msk }}</div>
     {% else %}
-      <div class="value">none</div>
+      <div class="value">нет операций</div>
     {% endif %}
   </section>
   <section class="panel">
     <div class="label">VPN VPS</div>
-    <div class="value">{{ target_host or "not configured" }}</div>
+    <div class="value">{{ target_host or "не настроен" }}</div>
     <div class="muted">Активных клиентов: {{ enabled_clients_count }}</div>
   </section>
 </div>
@@ -50,7 +50,6 @@
         <th>Протокол</th>
         <th>Порт</th>
         <th>Статус</th>
-        <th>Пинг</th>
         <th>Последняя проверка</th>
         <th>Если отвалился</th>
       </tr>
@@ -59,16 +58,9 @@
       {% for protocol in protocols %}
         <tr>
           <td>{{ protocol.name }}</td>
-          <td>{{ protocol.port or "later" }}</td>
+          <td>{{ protocol.port or "позже" }}</td>
           <td class="{% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
-            {{ protocol.status }}
-          </td>
-          <td>
-            {% if protocol.ping_ms %}
-              {{ protocol.ping_ms }} мс
-            {% else %}
-              <span class="muted">Нет данных</span>
-            {% endif %}
+            {{ protocol.status|status_label }}
           </td>
           <td>{{ protocol.last_checked_at|msk }}</td>
           <td>
@@ -96,7 +88,7 @@
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  <a href="/admin/install/script">Скачать install script</a>
+  <a href="/admin/install/script">Скачать скрипт установки</a>
   {% if operation_running or not aeza_ip_rotation_available %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
@@ -108,7 +100,7 @@
 {% if install_running %}
   <p class="muted">Установка или синхронизация уже выполняется.</p>
 {% elif not target_host %}
-  <p class="muted">Для установки VPN укажите текущий IP VPN или SSH host на странице /setup.</p>
+  <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице /setup.</p>
 {% endif %}
 
 {% if operation_running %}
@@ -127,36 +119,36 @@
 </p>
 
 {% if latest_operation and latest_operation.error_message %}
-  <h2>Last IP error</h2>
+  <h2>Последняя ошибка смены IP</h2>
   <section class="panel danger">{{ latest_operation.error_message }}</section>
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.error_message %}
-  <h2>Last install error</h2>
+  <h2>Последняя ошибка установки</h2>
   <section class="panel danger">{{ latest_install_operation.error_message }}</section>
 {% endif %}
 
 {% if ssh_host_key_changed %}
   <section class="panel danger">
-    SSH host key для {{ target_host }} изменился. Это нормально после переустановки VPS, но также может быть признаком MITM-атаки.
+    SSH-ключ хоста для {{ target_host }} изменился. Это нормально после переустановки VPS, но также может быть признаком атаки посредника.
     Нажимайте кнопку ниже только если вы уверены, что это тот же ваш VPS после переустановки или замены сервера.
-    <form method="post" action="/admin/ssh/known-host/forget" class="actions" onsubmit="return confirm('Удалить старый SSH host key для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.')">
-      <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH host key</button>
+    <form method="post" action="/admin/ssh/known-host/forget" class="actions" onsubmit="return confirm('Удалить старый SSH-ключ хоста для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.')">
+      <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH-ключ хоста</button>
     </form>
   </section>
 {% endif %}
 
 {% if ssh_command %}
   <details class="panel technical-details">
-    <summary>SSH diagnostic</summary>
+    <summary>Диагностика SSH</summary>
     <code>{{ ssh_command }}</code>
-    <p class="muted">Это только проверка SSH. AutoVPN устанавливает VPN отдельно, отправляя install script через stdin.</p>
+    <p class="muted">Это только проверка SSH. AutoVPN устанавливает VPN отдельно, отправляя скрипт установки через stdin.</p>
   </details>
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.output %}
   <details class="panel technical-details">
-    <summary>Last install output</summary>
+    <summary>Последний вывод установки</summary>
     <pre>{{ latest_install_operation.output }}</pre>
   </details>
 {% endif %}

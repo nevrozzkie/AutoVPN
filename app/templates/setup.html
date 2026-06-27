@@ -66,7 +66,7 @@
     <main>
       <h1>Настройка AutoVPN</h1>
       {% if setup_complete %}
-        <p class="muted">Страница защищена текущим admin-паролем. Здесь можно поменять VPS, SSH и Aeza-настройки.</p>
+        <p class="muted">Страница защищена текущим паролем администратора. Здесь можно поменять VPS, SSH и настройки Aeza.</p>
       {% else %}
         <p class="muted">Задайте пароль администратора и заполните нужные поля. Остальное можно добавить позже.</p>
       {% endif %}
@@ -99,28 +99,28 @@
               <input id="current_ip" name="current_ip" value="{{ current_ip }}" placeholder="203.0.113.10">
             </div>
             <div>
-              <label for="eu_ssh_host_value">SSH host</label>
+              <label for="eu_ssh_host_value">SSH-хост</label>
               <input id="eu_ssh_host_value" name="eu_ssh_host_value" value="{{ eu_ssh_host }}" placeholder="{{ current_ip or 'оставьте пустым, чтобы использовать текущий IP VPN' }}">
               <span class="muted">Можно оставить пустым: тогда SSH будет подключаться к текущему IP VPN.</span>
-              <span id="ssh-host-warning" class="warning" style="display: none;">SSH host отличается от текущего IP VPN. Это нормально только если SSH доступен по другому адресу.</span>
+              <span id="ssh-host-warning" class="warning" style="display: none;">SSH-хост отличается от текущего IP VPN. Это нормально только если SSH доступен по другому адресу.</span>
             </div>
             <div>
-              <label for="eu_ssh_user_value">SSH user</label>
+              <label for="eu_ssh_user_value">Пользователь SSH</label>
               <input id="eu_ssh_user_value" name="eu_ssh_user_value" value="{{ eu_ssh_user or 'root' }}">
             </div>
             <div>
-              <label for="eu_ssh_port_value">SSH port</label>
+              <label for="eu_ssh_port_value">Порт SSH</label>
               <input id="eu_ssh_port_value" name="eu_ssh_port_value" type="number" value="{{ eu_ssh_port or 22 }}" min="1" max="65535">
             </div>
             <div>
-              <label for="eu_ssh_password_value">SSH password</label>
+              <label for="eu_ssh_password_value">Пароль SSH</label>
               <input id="eu_ssh_password_value" name="eu_ssh_password_value" type="password">
               {% if eu_ssh_password_configured %}<span class="muted">Пароль уже задан. Оставьте пустым, чтобы не менять.</span>{% endif %}
             </div>
             <div>
-              <label for="eu_ssh_key_path_value">SSH key path</label>
+              <label for="eu_ssh_key_path_value">Путь к SSH-ключу</label>
               <input id="eu_ssh_key_path_value" name="eu_ssh_key_path_value" value="{{ eu_ssh_key_path }}" placeholder="/home/user/.ssh/id_ed25519">
-              <span class="muted">Можно оставить пустым, если используете SSH password.</span>
+              <span class="muted">Можно оставить пустым, если используете пароль SSH.</span>
             </div>
           </div>
         </section>
@@ -152,7 +152,7 @@
       {% if setup_complete %}
         <section>
           <h2>Сброс сервера и Aeza</h2>
-          <p class="muted">Очистит current IP, SSH/Aeza-настройки, статусы, статистику и историю операций. Клиенты, токены и ключи останутся.</p>
+          <p class="muted">Очистит текущий IP, настройки SSH/Aeza, статусы, статистику и историю операций. Клиенты, токены и ключи останутся.</p>
           <form method="post" action="/admin/reset-server" class="actions" onsubmit="return confirm('Сбросить всё о VPN-сервере и Aeza? Клиенты останутся, но current_ip, SSH/Aeza-настройки, статусы, статистика и история операций будут очищены.')">
             <button type="submit" class="danger-button" {% if install_running or operation_running %}disabled{% endif %}>Сбросить сервер и Aeza</button>
             {% if install_running or operation_running %}

@@ -4,7 +4,7 @@
 
 <section class="panel">
   <div class="label">Текущий EU VPN IP</div>
-  <div class="value">{{ current_ip or "not set" }}</div>
+  <div class="value">{{ current_ip or "не задан" }}</div>
 </section>
 
 <section class="panel">
@@ -12,7 +12,7 @@
   {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}
     <div class="value">{{ format_eur_minor_units(aeza_ipv4_price.price) }}</div>
     {% if aeza_ipv4_price.protected_price is not none %}
-      <p class="muted">Protected price: {{ format_eur_minor_units(aeza_ipv4_price.protected_price) }}</p>
+      <p class="muted">Цена с защитой: {{ format_eur_minor_units(aeza_ipv4_price.protected_price) }}</p>
     {% endif %}
   {% else %}
     <div class="value danger">Не удалось получить цену</div>

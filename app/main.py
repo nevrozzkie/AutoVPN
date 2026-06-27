@@ -86,7 +86,52 @@ def format_msk(value: object) -> str:
         return str(value)
 
 
+STATUS_LABELS = {
+    "OK": "Работает",
+    "FAILED": "Ошибка",
+    "UNKNOWN": "Нет данных",
+    "NOT_CONFIGURED": "Не настроено",
+    "CONFIGURED_UDP": "UDP настроен",
+    "RUNNING": "Выполняется",
+    "DONE": "Готово",
+    "PENDING": "Ожидает",
+}
+
+
+STEP_LABELS = {
+    "get_ipv4_list": "получение списка IPv4",
+    "find_current_main_ip": "поиск текущего главного IP",
+    "create_new_ipv4": "покупка нового IPv4",
+    "wait_after_ipv4_purchase": "ожидание после покупки IPv4",
+    "wait_new_ipv4": "ожидание появления нового IPv4",
+    "make_new_ipv4_main": "назначение нового IP главным",
+    "reboot_service": "перезагрузка VPS",
+    "wait_vps_health": "ожидание доступности VPS",
+    "server_reachable": "сервер доступен",
+    "update_current_ip": "обновление текущего IP",
+    "sync_vpn_after_ip_change": "синхронизация VPN после смены IP",
+    "refresh_protocol_statuses": "обновление статусов протоколов",
+    "delete_old_ipv4": "удаление старого IPv4",
+    "ssh_connect": "подключение по SSH",
+    "remote_install_running": "удалённая установка выполняется",
+    "done": "готово",
+    "failed": "ошибка",
+}
+
+
+def status_label(value: object) -> str:
+    text = str(value or "")
+    return STATUS_LABELS.get(text, text)
+
+
+def step_label(value: object) -> str:
+    text = str(value or "")
+    return STEP_LABELS.get(text, text)
+
+
 templates.env.filters["msk"] = format_msk
+templates.env.filters["status_label"] = status_label
+templates.env.filters["step_label"] = step_label
 
 
 def aeza_ip_rotation_available() -> bool:

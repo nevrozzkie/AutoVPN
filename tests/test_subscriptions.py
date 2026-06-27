@@ -20,6 +20,8 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "hysteria2://" in subscription
+    assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
+    assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in subscription
 
 
 def test_sing_box_subscription_contains_vless_and_hysteria() -> None:

@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Aeza IP manager</h1>
+<h1>Управление IP в Aeza</h1>
 
 <div class="grid">
   <section class="panel">
-    <div class="label">Current IP in AutoVPN</div>
-    <div class="value">{{ current_ip or "not set" }}</div>
+    <div class="label">Текущий IP в AutoVPN</div>
+    <div class="value">{{ current_ip or "не задан" }}</div>
   </section>
   <section class="panel">
-    <div class="label">New IPv4 price</div>
+    <div class="label">Цена нового IPv4</div>
     {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}
       <div class="value">{{ format_eur_minor_units(aeza_ipv4_price.price) }}</div>
     {% else %}
-      <div class="value muted">unknown</div>
+      <div class="value muted">неизвестно</div>
     {% endif %}
   </section>
 </div>
@@ -32,8 +32,8 @@
     <tr>
       <th>ID</th>
       <th>IP</th>
-      <th>Main</th>
-      <th>Actions</th>
+      <th>Главный</th>
+      <th>Действия</th>
     </tr>
   </thead>
   <tbody>
@@ -42,7 +42,7 @@
       <tr>
         <td><code>{{ item.id }}</code></td>
         <td><code>{{ item.ip }}</code></td>
-        <td>{% if effective_main %}<span class="ok">yes</span>{% else %}<span class="muted">no</span>{% endif %}</td>
+        <td>{% if effective_main %}<span class="ok">да</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
         <td>
           {% if not effective_main %}
             <form class="inline" method="post" action="/admin/ip/{{ item.id }}/make-main" onsubmit="return confirm('Сделать {{ item.ip }} главным IP и синхронизировать VPN конфиги?')">
@@ -65,7 +65,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="4" class="muted">No IPv4 records loaded</td></tr>
+      <tr><td colspan="4" class="muted">IPv4 ещё не загружены</td></tr>
     {% endfor %}
   </tbody>
 </table>
