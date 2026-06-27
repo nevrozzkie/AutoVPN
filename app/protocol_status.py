@@ -10,7 +10,7 @@ from app.health import ProbeResult, tcp_probe, udp_probe
 
 PROTOCOLS = [
     {"key": "vless", "name": "VLESS", "port": settings.vless_port, "enabled": True},
-    {"key": "hysteria", "name": "Hysteria", "port": settings.hysteria_port, "enabled": True, "udp": True},
+    {"key": "hysteria", "name": "Hysteria", "port": settings.hysteria_port, "enabled": False, "placeholder": True},
     {"key": "amnezia", "name": "AmneziaWG", "port": settings.amnezia_port, "enabled": True, "udp": True},
 ]
 
@@ -55,7 +55,8 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     for index, protocol in enumerate(PROTOCOLS):
         key = protocol["key"]
         if check_tasks[index] is None:
-            status = "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
+            status = "PLACEHOLDER" if protocol.get("placeholder") else "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
+            set_setting(f"protocol.{key}.failed_since", "")
             set_setting(f"protocol.{key}.ping_ms", "")
         else:
             result = results[result_index]

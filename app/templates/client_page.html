@@ -212,9 +212,7 @@
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
                 {% endif %}
-                {% if protocol.status == "VERIFIED" %}
-                  <br><span class="muted">Запрос через VPN прошёл.</span>
-                {% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
+                {% if protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
                   {% if protocol.udp %}
                     <br><span class="muted">Это не проверяет handshake, SNI и авторизацию.</span>
                   {% else %}
@@ -241,11 +239,11 @@
       {% endif %}
 
       <section>
-        <h2>Подписки VLESS + Hysteria</h2>
+        <h2>Подписка VLESS</h2>
         <p><code>{{ subscription_url }}</code></p>
         <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
         <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
-        <p class="muted">Hysteria: не тестировалось</p>
+        <p class="muted">Hysteria: не получилось пока завести, увы.</p>
         <div id="subscription-qr" class="qr">
           <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
         </div>

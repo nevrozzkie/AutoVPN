@@ -96,6 +96,7 @@ STATUS_LABELS = {
     "UNKNOWN": "Нет данных",
     "NOT_CONFIGURED": "Не настроено",
     "CONFIGURED_UDP": "UDP настроен",
+    "PLACEHOLDER": "Пока не заведено",
     "RUNNING": "Выполняется",
     "DONE": "Готово",
     "PENDING": "Ожидает",

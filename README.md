@@ -30,7 +30,7 @@ http://127.0.0.1:8000/setup
 - SSH-доступ к VPS: root/password или root/key;
 - Aeza token/service id, если нужна смена IP через Aeza.
 
-Для EU/VPN VPS сейчас лучше выбирать Ubuntu 24.04 LTS. Ubuntu 26.04 может работать для VLESS/Hysteria, но AmneziaWG PPA для неё может быть недоступен.
+Для EU/VPN VPS сейчас лучше выбирать Ubuntu 24.04 LTS. Ubuntu 26.04 может работать для VLESS, но AmneziaWG PPA для неё может быть недоступен.
 
 В install-скриптах необязательные поля можно оставлять пустыми. Их можно заполнить позже на `/setup`.
 
@@ -89,7 +89,7 @@ EU/VPN VPS:
 
 - хостит сами VPN-протоколы;
 - получает конфиги от AutoVPN;
-- запускает Xray VLESS, Hysteria2 и AmneziaWG.
+- запускает Xray VLESS и AmneziaWG. Hysteria2 пока оставлена как экспериментальная заготовка.
 
 Клиенты подключаются к EU/VPN VPS, но актуальный IP и конфиги получают через AutoVPN.
 
@@ -234,7 +234,7 @@ Installer:
 Главная страница `/admin` показывает:
 
 - текущий VPN IP;
-- статусы VLESS, Hysteria2 и AmneziaWG;
+- статусы VLESS и AmneziaWG; Hysteria2 показывается как временная заглушка;
 - последнюю операцию смены IP;
 - клиентов;
 - ссылки на клиентские страницы;
@@ -247,7 +247,7 @@ Installer:
 
 - token;
 - VLESS UUID;
-- Hysteria2 password;
+- общий Hysteria2 password, зарезервированный для будущей доработки;
 - AmneziaWG private/public/preshared key;
 - персональная страница `/client/{token}`;
 - подписка `/sub/{token}`;
@@ -256,7 +256,7 @@ Installer:
 `/client/{token}` показывает:
 
 - health-статусы протоколов;
-- ссылку на подписку VLESS + Hysteria2;
+- ссылку на подписку VLESS; Hysteria2 в подписке пока помечена как не заведённая;
 - QR подписки;
 - AmneziaWG config;
 - QR для AmneziaWG;
@@ -270,8 +270,8 @@ Installer:
 
 AutoVPN подключится к VPS по SSH и настроит:
 
-- Xray VLESS REALITY + Vision на `443/tcp`;
-- Hysteria2 на `8443/tcp/udp`;
+- Xray VLESS REALITY + Vision на `8443/tcp`;
+- экспериментальный Hysteria2-конфиг на `443/udp`, но в UI он считается не заведённым;
 - AmneziaWG на `51820/udp`, если пакет доступен для версии Ubuntu;
 - пользователей для всех enabled-клиентов;
 - Xray StatsService для VLESS-статистики.
@@ -291,9 +291,11 @@ VLESS:
 Hysteria2:
 
 - отдельный сервис `hysteria-server`;
-- username `client{id}`;
-- password из `clients.hysteria_password`;
-- в подписке используется `insecure=1`, потому MVP генерирует self-signed TLS.
+- пока не считается рабочим протоколом в AutoVPN;
+- на странице клиента показывается заглушка: `не получилось пока завести, увы`;
+- текущая попытка использует общий `hysteria.password` и `auth.type: password`;
+- в подписке используется `insecure=1`, потому MVP генерирует self-signed TLS;
+- статус Hysteria2 не проверяет реальное подключение клиента и не должен восприниматься как готовность протокола.
 
 AmneziaWG:
 
@@ -310,7 +312,7 @@ AmneziaWG:
 - VLESS через Xray StatsService;
 - AmneziaWG через `awg show awg0 dump`.
 
-Hysteria2-статистика пока не собирается, потому Hysteria2 работает отдельным сервисом и не проходит через Xray.
+Hysteria2-статистика не собирается: протокол пока оставлен как заготовка и не считается заведённым.
 
 ## Смена IP Aeza
 
@@ -333,7 +335,7 @@ Hysteria2-статистика пока не собирается, потому 
 6. Дождаться появления нового IP в списке.
 7. Сделать новый IP главным.
 8. Перезагрузить VPS.
-9. Дождаться healthcheck SSH, VLESS и Hysteria.
+9. Дождаться healthcheck SSH и VLESS.
 10. Обновить `current_ip`.
 11. Синхронизировать VPN-конфиги на новом IP.
 12. Удалить старый IPv4.
@@ -387,7 +389,7 @@ journalctl -u autovpn -f
 
 ## Ограничения MVP
 
-- Hysteria2 per-client traffic пока не собирается.
+- Hysteria2 пока не заведена и оставлена как экспериментальная заготовка.
 - AmneziaVPN не объединяется в общую подписку, отдаётся отдельным config/QR.
-- Для AmneziaWG auto-setup лучше использовать Ubuntu 24.04 LTS. Если AmneziaWG-пакет недоступен, установка VLESS/Hysteria продолжится, а AmneziaWG будет пропущен с warning в логе.
+- Для AmneziaWG auto-setup лучше использовать Ubuntu 24.04 LTS. Если AmneziaWG-пакет недоступен, установка VLESS продолжится, а AmneziaWG будет пропущен с warning в логе.
 - UI простой, без React.

@@ -208,7 +208,7 @@ def parse_deep_check_output(output: str) -> dict[str, DeepCheckResult]:
         elif line == "HYSTERIA_DEEP=VERIFIED":
             continue
         elif line == "HYSTERIA_DEEP=FAILED":
-            results["hysteria"] = DeepCheckResult(False, "request through Hysteria failed")
+            continue
         elif line == "AMNEZIA_DEEP=VERIFIED":
             results["amnezia"] = DeepCheckResult(True)
         elif line == "AMNEZIA_DEEP=FAILED":

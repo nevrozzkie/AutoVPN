@@ -65,7 +65,7 @@
           <td>{{ protocol.last_checked_at|msk }}</td>
           <td>
             {% if protocol.status == "VERIFIED" and protocol.last_ok_at %}
-              <span class="ok">Запрос через VPN прошёл: {{ protocol.last_ok_at|msk }}</span>
+              <span class="muted">Последний OK: {{ protocol.last_ok_at|msk }}</span>
             {% elif protocol.failed_since %}
               <span class="danger">Не работает с {{ protocol.failed_since|msk }}</span>
             {% elif protocol.last_ok_at %}
