@@ -155,6 +155,16 @@ print(secrets.token_urlsafe(32))
 PY
 }
 
+sanitize_env_value() {
+  printf "%s" "$1" | LC_ALL=C tr -d '[:cntrl:]'
+}
+
+env_line() {
+  local key="$1"
+  local value="${2:-}"
+  printf "%s=%s\n" "$key" "$(sanitize_env_value "$value")"
+}
+
 require_command() {
   local name="$1"
   local hint="$2"
@@ -263,45 +273,45 @@ write_env_file() {
   fi
 
   mkdir -p "$APP_DIR/data"
-  cat >"$APP_DIR/.env" <<EOF
-APP_HOST=$APP_HOST
-APP_PORT=$APP_PORT
-DATABASE_PATH=$APP_DIR/data/autovpn.sqlite3
-ADMIN_USERNAME=$admin_username
-ADMIN_PASSWORD=$admin_password
-
-AEZA_API_BASE=https://my.aeza.net
-AEZA_TOKEN=$aeza_token
-AEZA_SERVICE_ID=$aeza_service_id
-AEZA_IPV4_PAYMENT_METHOD=balance
-AEZA_IPV4_DOMAIN=$aeza_domain
-AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS=300
-
-EU_SSH_HOST=$eu_ssh_host
-EU_SSH_USER=$eu_ssh_user
-EU_SSH_PORT=$eu_ssh_port
-EU_SSH_KEY_PATH=$eu_ssh_key_path
-EU_SSH_PASSWORD=$eu_ssh_password
-SSH_CONNECT_TIMEOUT_SECONDS=15
-
-VLESS_PORT=443
-VLESS_REALITY_TARGET=ok.ru:443
-VLESS_REALITY_SERVER_NAMES=ok.ru,www.ok.ru
-VLESS_REALITY_SERVER_NAME=ok.ru
-VLESS_REALITY_FINGERPRINT=chrome
-VLESS_REALITY_SPIDER_X=/
-HYSTERIA_PORT=8443
-AMNEZIA_PORT=51820
-AMNEZIA_NETWORK_PREFIX=10.66.66
-AMNEZIA_DNS=1.1.1.1, 8.8.8.8
-SSH_PORT=22
-
-IP_APPEAR_TIMEOUT_SECONDS=300
-IP_APPEAR_INTERVAL_SECONDS=5
-REBOOT_WAIT_SECONDS=30
-HEALTHCHECK_TIMEOUT_SECONDS=300
-HEALTHCHECK_INTERVAL_SECONDS=10
-EOF
+  {
+    env_line APP_HOST "$APP_HOST"
+    env_line APP_PORT "$APP_PORT"
+    env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
+    env_line ADMIN_USERNAME "$admin_username"
+    env_line ADMIN_PASSWORD "$admin_password"
+    echo
+    env_line AEZA_API_BASE "https://my.aeza.net"
+    env_line AEZA_TOKEN "$aeza_token"
+    env_line AEZA_SERVICE_ID "$aeza_service_id"
+    env_line AEZA_IPV4_PAYMENT_METHOD "balance"
+    env_line AEZA_IPV4_DOMAIN "$aeza_domain"
+    env_line AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS "300"
+    echo
+    env_line EU_SSH_HOST "$eu_ssh_host"
+    env_line EU_SSH_USER "$eu_ssh_user"
+    env_line EU_SSH_PORT "$eu_ssh_port"
+    env_line EU_SSH_KEY_PATH "$eu_ssh_key_path"
+    env_line EU_SSH_PASSWORD "$eu_ssh_password"
+    env_line SSH_CONNECT_TIMEOUT_SECONDS "15"
+    echo
+    env_line VLESS_PORT "443"
+    env_line VLESS_REALITY_TARGET "ok.ru:443"
+    env_line VLESS_REALITY_SERVER_NAMES "ok.ru,www.ok.ru"
+    env_line VLESS_REALITY_SERVER_NAME "ok.ru"
+    env_line VLESS_REALITY_FINGERPRINT "chrome"
+    env_line VLESS_REALITY_SPIDER_X "/"
+    env_line HYSTERIA_PORT "8443"
+    env_line AMNEZIA_PORT "51820"
+    env_line AMNEZIA_NETWORK_PREFIX "10.66.66"
+    env_line AMNEZIA_DNS "1.1.1.1, 8.8.8.8"
+    env_line SSH_PORT "22"
+    echo
+    env_line IP_APPEAR_TIMEOUT_SECONDS "300"
+    env_line IP_APPEAR_INTERVAL_SECONDS "5"
+    env_line REBOOT_WAIT_SECONDS "30"
+    env_line HEALTHCHECK_TIMEOUT_SECONDS "300"
+    env_line HEALTHCHECK_INTERVAL_SECONDS "10"
+  } >"$APP_DIR/.env"
   chmod 600 "$APP_DIR/.env"
 
   export AUTOVPN_INITIAL_CURRENT_IP="$current_ip"
@@ -314,6 +324,9 @@ set -euo pipefail
 cd "$APP_DIR"
 while IFS='=' read -r key value; do
   if [ -z "\$key" ] || [[ "\$key" == \#* ]]; then
+    continue
+  fi
+  if [[ ! "\$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
     continue
   fi
   export "\$key=\$value"
@@ -350,6 +363,9 @@ EOF
 init_local_db() {
   while IFS='=' read -r key value; do
     if [ -z "$key" ] || [[ "$key" == \#* ]]; then
+      continue
+    fi
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
       continue
     fi
     export "$key=$value"
