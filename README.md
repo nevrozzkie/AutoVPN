@@ -224,7 +224,7 @@ Installer:
 
 - `SSH host` можно оставить пустым, тогда AutoVPN будет подключаться по SSH к текущему IP VPN.
 - `SSH key path` можно оставить пустым, если используется SSH password.
-- `AEZA_SERVICE_ID` проще получить через Network-панель браузера в my.aeza.net: откройте страницу VPS и найдите requests вида `/api/v2/services/{serviceId}/...`.
+- `AEZA_SERVICE_ID` проще получить через Network-панель браузера в my.aeza.net: откройте страницу VPS и найдите requests вида `/api/v2/services/{serviceId}/...`. Также service id равен номеру услуги в истории/карточке VPS.
 - `AEZA_IPV4_DOMAIN` — опциональное поле, которое Aeza UI иногда отправляет при покупке IPv4. В HAR оно выглядело как `{"domain":"aqua"}`. Если не знаете, оставьте пустым.
 
 ## Админка
