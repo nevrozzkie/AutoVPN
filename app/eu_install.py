@@ -6,8 +6,8 @@ import os
 import re
 import select
 import shlex
+import signal
 import socket
-import subprocess
 import time
 from typing import Any
 
@@ -336,25 +336,23 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
     if not password:
         raise EuInstallError("Configure EU_SSH_PASSWORD")
 
-    master_fd, slave_fd = pty.openpty()
-    process: subprocess.Popen[bytes] | None = None
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp("ssh", build_ssh_command(host, command))
+        except OSError:
+            os._exit(127)
+
     chunks: list[bytes] = []
     password_sent = False
     host_confirmed = False
     stdin_sent = not bool(stdin_data)
+    exit_status: int | None = None
     try:
-        process = subprocess.Popen(
-            build_ssh_command(host, command),
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        slave_fd = -1
-
         while True:
-            if process.poll() is not None:
+            waited_pid, status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                exit_status = status
                 chunks.append(_drain_fd(master_fd))
                 break
 
@@ -365,7 +363,9 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
             try:
                 chunk = os.read(master_fd, 4096)
             except OSError:
-                if process.poll() is not None:
+                waited_pid, status = os.waitpid(pid, os.WNOHANG)
+                if waited_pid == pid:
+                    exit_status = status
                     break
                 raise
             if not chunk:
@@ -389,15 +389,20 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
                     stdin_sent = True
 
         output = b"".join(chunks).decode("utf-8", errors="replace")
-        return process.returncode or 0, _redact_password(output, password)
+        exit_code = os.waitstatus_to_exitcode(exit_status) if exit_status is not None else 255
+        return exit_code, _redact_password(output, password)
     except OSError as exc:
         raise EuInstallError(f"OpenSSH password session failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}") from exc
     finally:
-        if slave_fd >= 0:
-            os.close(slave_fd)
-        os.close(master_fd)
-        if process and process.poll() is None:
-            process.terminate()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        if exit_status is None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
 
 
 def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
