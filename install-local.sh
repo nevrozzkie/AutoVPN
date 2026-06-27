@@ -193,11 +193,7 @@ write_env_file() {
 
   admin_password="${ADMIN_PASSWORD:-}"
   if [ -z "$admin_password" ]; then
-    admin_password="$(ask_secret "Admin password (leave empty to generate)")"
-  fi
-  if [ -z "$admin_password" ]; then
-    admin_password="$(random_secret)"
-    echo "Generated admin password: $admin_password"
+    admin_password="$(ask_secret "Admin password (empty = configure later in /setup)")"
   fi
 
   current_ip="${CURRENT_IP:-}"
@@ -236,18 +232,24 @@ write_env_file() {
   fi
 
   eu_ssh_user="${EU_SSH_USER:-}"
-  if [ -z "$eu_ssh_user" ]; then
+  if [ -z "$eu_ssh_user" ] && [ -n "$eu_ssh_host" ]; then
     eu_ssh_user="$(ask "EU/VPN VPS SSH user" "root")"
   fi
+  eu_ssh_user="${eu_ssh_user:-root}"
 
   eu_ssh_port="${EU_SSH_PORT:-}"
-  if [ -z "$eu_ssh_port" ]; then
+  if [ -z "$eu_ssh_port" ] && [ -n "$eu_ssh_host" ]; then
     eu_ssh_port="$(ask "EU/VPN VPS SSH port" "22")"
   fi
+  eu_ssh_port="${eu_ssh_port:-22}"
 
   eu_ssh_password="${EU_SSH_PASSWORD:-}"
   eu_ssh_key_path="${EU_SSH_KEY_PATH:-}"
-  if [ -n "$eu_ssh_password" ]; then
+  if [ -z "$eu_ssh_host" ]; then
+    eu_ssh_password=""
+    eu_ssh_key_path=""
+    echo "Skipping SSH settings. You can configure them later in /setup."
+  elif [ -n "$eu_ssh_password" ]; then
     eu_ssh_key_path=""
     echo "Using SSH password auth from EU_SSH_PASSWORD."
   elif [ -n "$eu_ssh_key_path" ]; then
@@ -316,7 +318,31 @@ while IFS='=' read -r key value; do
   fi
   export "\$key=\$value"
 done < "$APP_DIR/.env"
-exec "$APP_DIR/.venv/bin/python" -m uvicorn app.main:app --host "$APP_HOST" --port "$APP_PORT"
+PYTHON_BIN="$APP_DIR/.venv/bin/python"
+RUN_HOST="\${APP_HOST:-127.0.0.1}"
+RUN_PORT="\$("\$PYTHON_BIN" - <<'PY'
+import os
+import socket
+
+host = os.getenv("APP_HOST", "127.0.0.1")
+port = int(os.getenv("APP_PORT", "8000"))
+bind_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+while True:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((bind_host, port))
+        except OSError:
+            port += 1
+            continue
+    print(port)
+    break
+PY
+)"
+if [ "\$RUN_PORT" != "\${APP_PORT:-8000}" ]; then
+  echo "Port \${APP_PORT:-8000} is busy, using \$RUN_PORT."
+fi
+echo "Open: http://\$RUN_HOST:\$RUN_PORT/setup"
+exec "\$PYTHON_BIN" -m uvicorn app.main:app --host "\$RUN_HOST" --port "\$RUN_PORT"
 EOF
   chmod +x "$APP_DIR/run-local.sh"
 }

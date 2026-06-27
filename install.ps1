@@ -120,7 +120,25 @@ Get-Content `$EnvFile | ForEach-Object {
         [Environment]::SetEnvironmentVariable(`$Parts[0], `$Parts[1], "Process")
     }
 }
-& "$Path\.venv\Scripts\python.exe" -m uvicorn app.main:app --host $HostValue --port $PortValue
+`$RunHost = if (`$env:APP_HOST) { `$env:APP_HOST } else { "$HostValue" }
+`$RunPort = if (`$env:APP_PORT) { [int]`$env:APP_PORT } else { [int]"$PortValue" }
+while (`$true) {
+    try {
+        `$BindAddress = if (`$RunHost -eq "0.0.0.0") { [Net.IPAddress]::Any } else { [Net.IPAddress]::Parse("127.0.0.1") }
+        `$Listener = [Net.Sockets.TcpListener]::new(`$BindAddress, `$RunPort)
+        `$Listener.Start()
+        `$Listener.Stop()
+        break
+    }
+    catch {
+        `$RunPort += 1
+    }
+}
+if (`$RunPort -ne [int]"$PortValue") {
+    Write-Host "Port $PortValue is busy, using `$RunPort."
+}
+Write-Host "Open: http://`$RunHost`:`$RunPort/setup"
+& "$Path\.venv\Scripts\python.exe" -m uvicorn app.main:app --host `$RunHost --port `$RunPort
 "@
     Set-Content -Path (Join-Path $Path "run-local.ps1") -Value $Content -Encoding UTF8
 }
@@ -156,11 +174,7 @@ else {
 Set-Location $AppDir
 
 if (-not $AdminPassword) {
-    $AdminPassword = Ask-SecretText "Admin password (leave empty to generate)"
-}
-if (-not $AdminPassword) {
-    $AdminPassword = New-RandomSecret
-    Write-Host "Generated admin password: $AdminPassword"
+    $AdminPassword = Ask-SecretText "Admin password (empty = configure later in /setup)"
 }
 
 if (-not $CurrentIp) {
@@ -190,12 +204,27 @@ if (-not $EuHost) {
     $EuHost = Ask "EU/VPN VPS SSH host (empty = use current_ip)" $CurrentIp
 }
 if (-not $EuUser) {
-    $EuUser = Ask "EU/VPN VPS SSH user" "root"
+    if ($EuHost) {
+        $EuUser = Ask "EU/VPN VPS SSH user" "root"
+    }
+    else {
+        $EuUser = "root"
+    }
 }
 if (-not $EuPort) {
-    $EuPort = [int](Ask "EU/VPN VPS SSH port" "22")
+    if ($EuHost) {
+        $EuPort = [int](Ask "EU/VPN VPS SSH port" "22")
+    }
+    else {
+        $EuPort = 22
+    }
 }
-if (-not $EuPassword -and -not $EuKeyPath) {
+if (-not $EuHost) {
+    $EuPassword = ""
+    $EuKeyPath = ""
+    Write-Host "Skipping SSH settings. You can configure them later in /setup."
+}
+elseif (-not $EuPassword -and -not $EuKeyPath) {
     $UsePassword = Ask "Use SSH password auth? y/n" "y"
     if ($UsePassword -match "^(y|yes)$") {
         $EuPassword = Ask-SecretText "EU/VPN VPS SSH password"

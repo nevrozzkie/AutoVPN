@@ -208,11 +208,7 @@ write_env_file() {
 
   admin_password="${ADMIN_PASSWORD:-}"
   if [ -z "$admin_password" ]; then
-    admin_password="$(ask_secret "Admin password (leave empty to generate)")"
-  fi
-  if [ -z "$admin_password" ]; then
-    admin_password="$(random_secret)"
-    echo "Generated admin password: $admin_password"
+    admin_password="$(ask_secret "Admin password (empty = configure later in /setup)")"
   fi
 
   current_ip="${CURRENT_IP:-}"
@@ -251,18 +247,24 @@ write_env_file() {
   fi
 
   eu_ssh_user="${EU_SSH_USER:-}"
-  if [ -z "$eu_ssh_user" ]; then
+  if [ -z "$eu_ssh_user" ] && [ -n "$eu_ssh_host" ]; then
     eu_ssh_user="$(ask "EU/VPN VPS SSH user" "root")"
   fi
+  eu_ssh_user="${eu_ssh_user:-root}"
 
   eu_ssh_port="${EU_SSH_PORT:-}"
-  if [ -z "$eu_ssh_port" ]; then
+  if [ -z "$eu_ssh_port" ] && [ -n "$eu_ssh_host" ]; then
     eu_ssh_port="$(ask "EU/VPN VPS SSH port" "22")"
   fi
+  eu_ssh_port="${eu_ssh_port:-22}"
 
   eu_ssh_password="${EU_SSH_PASSWORD:-}"
   eu_ssh_key_path="${EU_SSH_KEY_PATH:-}"
-  if [ -n "$eu_ssh_password" ]; then
+  if [ -z "$eu_ssh_host" ]; then
+    eu_ssh_password=""
+    eu_ssh_key_path=""
+    echo "Skipping SSH settings. You can configure them later in /setup."
+  elif [ -n "$eu_ssh_password" ]; then
     eu_ssh_key_path=""
     echo "Using SSH password auth from EU_SSH_PASSWORD."
   elif [ -n "$eu_ssh_key_path" ]; then
