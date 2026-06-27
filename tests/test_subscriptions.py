@@ -16,6 +16,6 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "vless://" in subscription
     assert "security=reality" in subscription
     assert "sni=ok.ru" in subscription
-    assert "fp=chrome" in subscription
+    assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "hysteria2://" in subscription

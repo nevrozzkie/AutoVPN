@@ -44,7 +44,7 @@ class Settings:
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")
     vless_reality_server_names: list[str] = None  # type: ignore[assignment]
     vless_reality_server_name: str = os.getenv("VLESS_REALITY_SERVER_NAME", "ok.ru")
-    vless_reality_fingerprint: str = os.getenv("VLESS_REALITY_FINGERPRINT", "chrome")
+    vless_reality_fingerprint: str = os.getenv("VLESS_REALITY_FINGERPRINT", "firefox")
     vless_reality_spider_x: str = os.getenv("VLESS_REALITY_SPIDER_X", "/")
     hysteria_port: int = _get_int("HYSTERIA_PORT", 8443)
     amnezia_port: int = _get_int("AMNEZIA_PORT", 51820)

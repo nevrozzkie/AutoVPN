@@ -641,11 +641,21 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
-            "amnezia_key_url": f"{base_url}/amnezia-key/{client['token']}",
             "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip),
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
         },
     )
+
+
+@app.post("/client/{token}/protocols/refresh")
+async def client_refresh_protocols(token: str) -> RedirectResponse:
+    client = get_client_by_token(token)
+    if not client or not client["enabled"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    current_ip = get_setting("current_ip")
+    if current_ip:
+        await refresh_protocol_statuses(current_ip)
+    return RedirectResponse(f"/client/{token}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/client/{token}/subscription.qr")

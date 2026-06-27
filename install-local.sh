@@ -298,7 +298,7 @@ write_env_file() {
     env_line VLESS_REALITY_TARGET "ok.ru:443"
     env_line VLESS_REALITY_SERVER_NAMES "ok.ru,www.ok.ru"
     env_line VLESS_REALITY_SERVER_NAME "ok.ru"
-    env_line VLESS_REALITY_FINGERPRINT "chrome"
+    env_line VLESS_REALITY_FINGERPRINT "firefox"
     env_line VLESS_REALITY_SPIDER_X "/"
     env_line HYSTERIA_PORT "8443"
     env_line AMNEZIA_PORT "51820"
