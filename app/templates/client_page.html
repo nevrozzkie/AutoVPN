@@ -200,15 +200,26 @@
             {% for protocol in protocols %}
               <div class="status">
                 <strong>{{ protocol.name }}</strong>
-                {% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}
+                {% if protocol.status == "VERIFIED" %}
                   <span class="ok">{{ protocol.status|status_label }}</span>
                 {% elif protocol.status == "FAILED" %}
                   <span class="bad">{{ protocol.status|status_label }}</span>
+                {% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
+                  <span class="warn">{{ protocol.status|status_label }}</span>
                 {% else %}
                   <span class="warn">{{ protocol.status|status_label }}</span>
                 {% endif %}
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
+                {% endif %}
+                {% if protocol.status == "VERIFIED" %}
+                  <br><span class="muted">Запрос через VPN прошёл.</span>
+                {% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
+                  {% if protocol.udp %}
+                    <br><span class="muted">Это не проверяет handshake, SNI и авторизацию.</span>
+                  {% else %}
+                    <br><span class="muted">Это не проверяет авторизацию и параметры клиента.</span>
+                  {% endif %}
                 {% endif %}
                 {% if protocol.failed_since %}
                   <br><span class="bad">Проблема с: {{ protocol.failed_since|msk }}</span>

@@ -59,15 +59,22 @@
         <tr>
           <td>{{ protocol.name }}</td>
           <td>{{ protocol.port or "позже" }}</td>
-          <td class="{% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
+          <td class="{% if protocol.status == "VERIFIED" %}ok{% elif protocol.status == "FAILED" %}danger{% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}muted{% else %}muted{% endif %}">
             {{ protocol.status|status_label }}
           </td>
           <td>{{ protocol.last_checked_at|msk }}</td>
           <td>
-            {% if protocol.failed_since %}
+            {% if protocol.status == "VERIFIED" and protocol.last_ok_at %}
+              <span class="ok">Запрос через VPN прошёл: {{ protocol.last_ok_at|msk }}</span>
+            {% elif protocol.failed_since %}
               <span class="danger">Не работает с {{ protocol.failed_since|msk }}</span>
             {% elif protocol.last_ok_at %}
-              <span class="muted">Последний OK: {{ protocol.last_ok_at|msk }}</span>
+              <span class="muted">Последний сетевой probe: {{ protocol.last_ok_at|msk }}</span>
+              {% if protocol.udp %}
+                <br><span class="muted">Это не проверяет QUIC-handshake, SNI и авторизацию клиента.</span>
+              {% else %}
+                <br><span class="muted">Это не проверяет авторизацию и параметры клиента.</span>
+              {% endif %}
             {% else %}
               <span class="muted">Нет данных</span>
             {% endif %}

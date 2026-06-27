@@ -64,14 +64,15 @@ async def check_vpn_health(
     vless_port: int,
     hysteria_port: int,
 ) -> dict[str, bool]:
-    ssh, vless = await asyncio.gather(
+    ssh, vless, hysteria_udp = await asyncio.gather(
         tcp_check(host, ssh_port),
         tcp_check(host, vless_port),
+        udp_probe(host, hysteria_port),
     )
-    hysteria = bool(hysteria_port)
+    hysteria_udp_packet_sent = hysteria_udp.ok
     return {
         "ssh": ssh,
-        "vless": vless,
-        "hysteria_udp_configured": hysteria,
-        "ok": ssh and vless and hysteria,
+        "vless_tcp_reachable": vless,
+        "hysteria_udp_packet_sent": hysteria_udp_packet_sent,
+        "ok": ssh and vless and hysteria_udp_packet_sent,
     }

@@ -88,7 +88,10 @@ def format_msk(value: object) -> str:
 
 
 STATUS_LABELS = {
-    "OK": "Работает",
+    "OK": "Сетевой probe прошёл",
+    "VERIFIED": "Проверено запросом",
+    "TCP_REACHABLE": "TCP-порт доступен",
+    "UDP_PACKET_SENT": "UDP-пакет отправлен",
     "FAILED": "Ошибка",
     "UNKNOWN": "Нет данных",
     "NOT_CONFIGURED": "Не настроено",

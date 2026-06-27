@@ -4,6 +4,7 @@ import asyncio
 
 from app.config import settings
 from app.db import get_setting, now_iso, set_setting
+from app.deep_protocol_checks import run_deep_protocol_checks
 from app.health import ProbeResult, tcp_probe, udp_probe
 
 
@@ -33,6 +34,7 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
 
 async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int | bool | None]]:
     checked_at = now_iso()
+    deep_results = await run_deep_protocol_checks(current_ip)
     check_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:
         port = protocol["port"]
@@ -59,7 +61,17 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
             result = results[result_index]
             result_index += 1
             ok = result.ok if isinstance(result, ProbeResult) else False
-            status = "OK" if ok else "FAILED"
+            if ok and protocol.get("udp"):
+                status = "UDP_PACKET_SENT"
+            elif ok:
+                status = "TCP_REACHABLE"
+            else:
+                status = "FAILED"
+            deep_result = deep_results.get(key)
+            if deep_result and deep_result.verified:
+                status = "VERIFIED"
+            elif deep_result and not deep_result.verified:
+                status = "FAILED"
             set_setting(f"protocol.{key}.last_checked_at", checked_at)
             if ok:
                 set_setting(f"protocol.{key}.last_ok_at", checked_at)
