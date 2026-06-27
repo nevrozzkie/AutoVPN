@@ -495,3 +495,32 @@ def update_install_operation(operation_id: int, **fields: Any) -> None:
             f"UPDATE vpn_install_operations SET {assignments} WHERE id = ?",
             values,
         )
+
+
+def reset_server_and_aeza_state() -> None:
+    with get_db() as db:
+        db.execute(
+            """
+            DELETE FROM settings
+            WHERE key IN (
+                'current_ip',
+                'last_healthcheck_status',
+                'stats.last_refresh_at',
+                'stats.last_error'
+            )
+            OR key LIKE 'config.eu_%'
+            OR key LIKE 'config.aeza_%'
+            OR key LIKE 'protocol.%'
+            """
+        )
+        db.execute("DELETE FROM ip_change_operations")
+        db.execute("DELETE FROM vpn_install_operations")
+        db.execute("DELETE FROM client_stats")
+        db.execute(
+            "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+            ("current_ip", ""),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+            ("last_healthcheck_status", "UNKNOWN"),
+        )

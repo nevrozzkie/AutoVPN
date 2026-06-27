@@ -28,6 +28,7 @@ from app.db import (
     list_clients_with_stats,
     list_install_operations,
     list_operations,
+    reset_server_and_aeza_state,
     set_setting,
     set_client_enabled,
     update_client_name,
@@ -504,6 +505,17 @@ async def _refresh_stats_background() -> None:
         await refresh_client_stats()
     except Exception as exc:
         set_setting("stats.last_error", str(exc)[-4000:])
+
+
+@app.post("/admin/reset-server")
+def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
+    if has_running_operation() or has_running_install_operation():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot reset server settings while an operation is running",
+        )
+    reset_server_and_aeza_state()
+    return RedirectResponse("/setup", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse)
