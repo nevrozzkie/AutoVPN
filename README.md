@@ -30,6 +30,8 @@ http://127.0.0.1:8000/setup
 - SSH-доступ к VPS: root/password или root/key;
 - Aeza token/service id, если нужна смена IP через Aeza.
 
+Для EU/VPN VPS сейчас лучше выбирать Ubuntu 24.04 LTS. Ubuntu 26.04 может работать для VLESS/Hysteria, но AmneziaWG PPA для неё может быть недоступен.
+
 В install-скриптах необязательные поля можно оставлять пустыми. Их можно заполнить позже на `/setup`.
 
 ### Вариант 2: локально на Windows
@@ -264,17 +266,17 @@ Installer:
 
 ## Установка VPN на VPS
 
-В админке нажми `Установить VPN`.
+В админке нажми `Установить / синхронизировать VPN`.
 
 AutoVPN подключится к VPS по SSH и настроит:
 
 - Xray VLESS REALITY + Vision на `443/tcp`;
 - Hysteria2 на `8443/tcp/udp`;
-- AmneziaWG на `51820/udp`;
+- AmneziaWG на `51820/udp`, если пакет доступен для версии Ubuntu;
 - пользователей для всех enabled-клиентов;
 - Xray StatsService для VLESS-статистики.
 
-После изменения клиентов нажимай `Обновить клиентов на VPN`.
+После изменения клиентов нажимай `Установить / синхронизировать VPN`.
 
 ## Протоколы
 
@@ -387,5 +389,5 @@ journalctl -u autovpn -f
 
 - Hysteria2 per-client traffic пока не собирается.
 - AmneziaVPN не объединяется в общую подписку, отдаётся отдельным config/QR.
-- Для AmneziaWG auto-setup ожидается Ubuntu-compatible VPS с Amnezia PPA.
+- Для AmneziaWG auto-setup лучше использовать Ubuntu 24.04 LTS. Если AmneziaWG-пакет недоступен, установка VLESS/Hysteria продолжится, а AmneziaWG будет пропущен с warning в логе.
 - UI простой, без React.

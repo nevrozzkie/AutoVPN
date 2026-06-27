@@ -166,7 +166,48 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+remove_amnezia_apt_sources() {{
+  find /etc/apt/sources.list.d -maxdepth 1 -type f \\( -iname '*amnezia*' -o -iname '*ppa_amnezia_ppa*' \\) -delete 2>/dev/null || true
+}}
+
+install_amneziawg_best_effort() {{
+  AMNEZIAWG_INSTALLED=0
+  remove_amnezia_apt_sources
+  if apt-get update && apt-cache show amneziawg >/dev/null 2>&1; then
+    if apt-get install -y amneziawg; then
+      AMNEZIAWG_INSTALLED=1
+      return 0
+    fi
+  fi
+
+  local codename=""
+  if [ -r /etc/os-release ]; then
+    codename="$(. /etc/os-release && printf "%s" "${{UBUNTU_CODENAME:-${{VERSION_CODENAME:-}}}}")"
+  fi
+
+  case "$codename" in
+    focal|jammy|noble)
+      add-apt-repository -y ppa:amnezia/ppa || true
+      if apt-get update && apt-cache show amneziawg >/dev/null 2>&1; then
+        if apt-get install -y amneziawg; then
+          AMNEZIAWG_INSTALLED=1
+          return 0
+        fi
+      fi
+      ;;
+    *)
+      echo "[autovpn] WARNING: AmneziaWG PPA is not enabled for Ubuntu codename '$codename'. Skipping AmneziaWG install."
+      ;;
+  esac
+
+  remove_amnezia_apt_sources
+  apt-get update || true
+  echo "[autovpn] WARNING: AmneziaWG was not installed. VLESS and Hysteria will still be configured."
+  return 0
+}}
+
 echo "[autovpn] installing base packages"
+remove_amnezia_apt_sources
 apt-get update
 apt-get install -y ca-certificates curl gnupg iptables openssl software-properties-common unzip
 
@@ -177,9 +218,7 @@ echo "[autovpn] installing hysteria2"
 bash -c "$(curl -fsSL https://get.hy2.sh/)"
 
 echo "[autovpn] installing amneziawg"
-add-apt-repository -y ppa:amnezia/ppa
-apt-get update
-apt-get install -y amneziawg
+install_amneziawg_best_effort
 
 echo "[autovpn] writing configs"
 install -d -m 0755 /etc/autovpn /usr/local/etc/xray /etc/hysteria /etc/amnezia/amneziawg
@@ -221,15 +260,22 @@ AWG
 chmod 600 /etc/amnezia/amneziawg/awg0.conf
 
 echo "[autovpn] enabling services"
-systemctl enable xray hysteria-server awg-quick@awg0
+systemctl enable xray hysteria-server
 systemctl restart xray
 systemctl restart hysteria-server
-systemctl restart awg-quick@awg0
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl enable awg-quick@awg0
+  systemctl restart awg-quick@awg0
+else
+  echo "[autovpn] WARNING: awg-quick is unavailable; AmneziaWG service was not started."
+fi
 
 echo "[autovpn] status"
 systemctl --no-pager --full status xray || true
 systemctl --no-pager --full status hysteria-server || true
-systemctl --no-pager --full status awg-quick@awg0 || true
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl --no-pager --full status awg-quick@awg0 || true
+fi
 
 echo "[autovpn] done"
 """
