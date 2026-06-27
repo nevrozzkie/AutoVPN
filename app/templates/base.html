@@ -4,17 +4,51 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {% if auto_refresh %}<meta http-equiv="refresh" content="3">{% endif %}
+    <script>
+      (function () {
+        const saved = localStorage.getItem("autovpn-theme");
+        document.documentElement.dataset.theme = saved || "dark";
+      })();
+    </script>
     <title>AutoVPN Admin</title>
     <style>
       :root {
         color-scheme: light;
         --bg: #f6f7f9;
         --panel: #ffffff;
+        --panel-soft: #fbfcfd;
         --border: #d7dce2;
         --text: #20242a;
         --muted: #66707c;
         --accent: #0f766e;
+        --accent-hover: #115e59;
         --danger: #b42318;
+        --code-bg: #eef1f5;
+        --pre-bg: #111827;
+        --pre-text: #e5e7eb;
+        --header-bg: #111827;
+        --header-text: #ffffff;
+        --nav-text: #d1d5db;
+        --input-bg: #ffffff;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel-soft: #1f2630;
+        --border: #303844;
+        --text: #e6edf3;
+        --muted: #9aa7b4;
+        --accent: #14b8a6;
+        --accent-hover: #2dd4bf;
+        --danger: #f87171;
+        --code-bg: #222a35;
+        --pre-bg: #070b12;
+        --pre-text: #d7dee8;
+        --header-bg: #070b12;
+        --header-text: #f8fafc;
+        --nav-text: #b8c2cc;
+        --input-bg: #0f141b;
       }
       body {
         margin: 0;
@@ -23,20 +57,23 @@
         color: var(--text);
       }
       header {
-        background: #111827;
-        color: #fff;
+        background: var(--header-bg);
+        color: var(--header-text);
         padding: 14px 28px;
         display: flex;
         align-items: center;
         gap: 24px;
       }
       header strong { font-size: 17px; }
+      nav {
+        flex: 1;
+      }
       nav a {
-        color: #d1d5db;
+        color: var(--nav-text);
         margin-right: 16px;
         text-decoration: none;
       }
-      nav a:hover { color: #fff; }
+      nav a:hover { color: var(--header-text); }
       main {
         max-width: 1180px;
         margin: 0 auto;
@@ -77,6 +114,9 @@
         cursor: pointer;
         text-decoration: none;
       }
+      button:hover, input[type="submit"]:hover, a.button:hover {
+        background: var(--accent-hover);
+      }
       button[disabled] {
         opacity: .5;
         cursor: not-allowed;
@@ -89,6 +129,8 @@
         border-radius: 6px;
         padding: 9px 10px;
         min-width: 260px;
+        background: var(--input-bg);
+        color: var(--text);
       }
       table {
         width: 100%;
@@ -104,10 +146,10 @@
       th {
         font-size: 13px;
         color: var(--muted);
-        background: #fbfcfd;
+        background: var(--panel-soft);
       }
       code {
-        background: #eef1f5;
+        background: var(--code-bg);
         border-radius: 5px;
         padding: 2px 5px;
         overflow-wrap: anywhere;
@@ -160,10 +202,19 @@
       pre {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
-        background: #111827;
-        color: #e5e7eb;
+        background: var(--pre-bg);
+        color: var(--pre-text);
         border-radius: 8px;
         padding: 14px;
+      }
+      .theme-toggle {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--header-text);
+        padding: 7px 10px;
+      }
+      .theme-toggle:hover {
+        background: rgba(255, 255, 255, .08);
       }
     </style>
   </head>
@@ -175,9 +226,18 @@
         <a href="/admin/clients">Clients</a>
         <a href="/admin/operations">Operations</a>
       </nav>
+      <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
     </header>
     <main>
       {% block content %}{% endblock %}
     </main>
+    <script>
+      function toggleTheme() {
+        const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+        const next = current === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem("autovpn-theme", next);
+      }
+    </script>
   </body>
 </html>

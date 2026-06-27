@@ -50,6 +50,7 @@
         <th>Протокол</th>
         <th>Порт</th>
         <th>Статус</th>
+        <th>Пинг</th>
         <th>Последняя проверка</th>
         <th>Если отвалился</th>
       </tr>
@@ -61,6 +62,13 @@
           <td>{{ protocol.port or "later" }}</td>
           <td class="{% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
             {{ protocol.status }}
+          </td>
+          <td>
+            {% if protocol.ping_ms %}
+              {{ protocol.ping_ms }} мс
+            {% else %}
+              <span class="muted">Нет данных</span>
+            {% endif %}
           </td>
           <td>{{ protocol.last_checked_at|msk }}</td>
           <td>

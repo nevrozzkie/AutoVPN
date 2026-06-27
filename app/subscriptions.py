@@ -31,3 +31,78 @@ def build_subscription(client: dict, current_ip: str) -> str:
         f"?insecure=1&sni=autovpn-eu#{safe_name}-hysteria"
     )
     return f"{vless}\n{hysteria}\n"
+
+
+def build_sing_box_subscription(client: dict, current_ip: str) -> dict:
+    return {
+        "log": {
+            "level": "info",
+        },
+        "dns": {
+            "servers": [
+                {
+                    "tag": "cloudflare",
+                    "address": "1.1.1.1",
+                },
+            ],
+        },
+        "inbounds": [
+            {
+                "type": "tun",
+                "tag": "tun-in",
+                "address": ["172.19.0.1/30"],
+                "auto_route": True,
+                "strict_route": True,
+                "sniff": True,
+            },
+        ],
+        "outbounds": [
+            {
+                "type": "selector",
+                "tag": "proxy",
+                "outbounds": ["vless-reality", "hysteria2"],
+                "default": "vless-reality",
+            },
+            {
+                "type": "vless",
+                "tag": "vless-reality",
+                "server": current_ip,
+                "server_port": settings.vless_port,
+                "uuid": client["vless_uuid"],
+                "flow": "xtls-rprx-vision",
+                "tls": {
+                    "enabled": True,
+                    "server_name": settings.vless_reality_server_name,
+                    "utls": {
+                        "enabled": True,
+                        "fingerprint": settings.vless_reality_fingerprint,
+                    },
+                    "reality": {
+                        "enabled": True,
+                        "public_key": get_setting("vless.reality_public_key"),
+                        "short_id": get_setting("vless.reality_short_id"),
+                    },
+                },
+            },
+            {
+                "type": "hysteria2",
+                "tag": "hysteria2",
+                "server": current_ip,
+                "server_port": settings.hysteria_port,
+                "password": client["hysteria_password"],
+                "tls": {
+                    "enabled": True,
+                    "server_name": "autovpn-eu",
+                    "insecure": True,
+                },
+            },
+            {
+                "type": "direct",
+                "tag": "direct",
+            },
+        ],
+        "route": {
+            "auto_detect_interface": True,
+            "final": "proxy",
+        },
+    }

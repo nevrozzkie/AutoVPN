@@ -6,7 +6,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
@@ -62,7 +62,7 @@ from app.runtime_config import (
     eu_ssh_user,
 )
 from app.stats import format_bytes, refresh_client_stats
-from app.subscriptions import build_subscription
+from app.subscriptions import build_sing_box_subscription, build_subscription
 
 app = FastAPI(title="AutoVPN")
 templates = Jinja2Templates(directory="app/templates")
@@ -619,6 +619,17 @@ def subscription(token: str) -> PlainTextResponse:
     return PlainTextResponse(build_subscription(client, current_ip))
 
 
+@app.get("/sing-box/{token}", response_class=JSONResponse)
+def sing_box_subscription(token: str) -> JSONResponse:
+    client = get_client_by_token(token)
+    if not client or not client["enabled"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    current_ip = get_setting("current_ip")
+    if not current_ip:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return JSONResponse(build_sing_box_subscription(client, current_ip))
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     client = get_client_by_token(token)
@@ -638,6 +649,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
+            "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
             "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip),
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",

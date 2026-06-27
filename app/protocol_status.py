@@ -4,7 +4,7 @@ import asyncio
 
 from app.config import settings
 from app.db import get_setting, now_iso, set_setting
-from app.health import tcp_check
+from app.health import ProbeResult, tcp_probe, udp_probe
 
 
 PROTOCOLS = [
@@ -25,6 +25,7 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
                 "failed_since": get_setting(f"protocol.{key}.failed_since"),
+                "ping_ms": _get_ping_ms(key),
             }
         )
     return statuses
@@ -32,16 +33,14 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
 
 async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int | bool | None]]:
     checked_at = now_iso()
-    check_tasks = []
+    check_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:
         port = protocol["port"]
-        if (
-            current_ip
-            and protocol["enabled"]
-            and port is not None
-            and not protocol.get("udp")
-        ):
-            check_tasks.append(tcp_check(current_ip, int(port)))
+        if current_ip and protocol["enabled"] and port is not None:
+            if protocol.get("udp"):
+                check_tasks.append(asyncio.create_task(udp_probe(current_ip, int(port))))
+            else:
+                check_tasks.append(asyncio.create_task(tcp_probe(current_ip, int(port))))
         else:
             check_tasks.append(None)
 
@@ -54,24 +53,22 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     for index, protocol in enumerate(PROTOCOLS):
         key = protocol["key"]
         if check_tasks[index] is None:
-            if protocol.get("udp") and current_ip:
-                status = "CONFIGURED_UDP"
-                set_setting(f"protocol.{key}.last_checked_at", checked_at)
-                set_setting(f"protocol.{key}.last_ok_at", checked_at)
-                set_setting(f"protocol.{key}.failed_since", "")
-            else:
-                status = "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
+            status = "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
+            set_setting(f"protocol.{key}.ping_ms", "")
         else:
             result = results[result_index]
             result_index += 1
-            ok = bool(result) if not isinstance(result, Exception) else False
+            ok = result.ok if isinstance(result, ProbeResult) else False
             status = "OK" if ok else "FAILED"
             set_setting(f"protocol.{key}.last_checked_at", checked_at)
             if ok:
                 set_setting(f"protocol.{key}.last_ok_at", checked_at)
                 set_setting(f"protocol.{key}.failed_since", "")
-            elif not get_setting(f"protocol.{key}.failed_since"):
-                set_setting(f"protocol.{key}.failed_since", checked_at)
+                set_setting(f"protocol.{key}.ping_ms", str(result.latency_ms or ""))
+            else:
+                if not get_setting(f"protocol.{key}.failed_since"):
+                    set_setting(f"protocol.{key}.failed_since", checked_at)
+                set_setting(f"protocol.{key}.ping_ms", "")
         set_setting(f"protocol.{key}.status", status)
         statuses.append(
             {
@@ -80,6 +77,15 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
                 "failed_since": get_setting(f"protocol.{key}.failed_since"),
+                "ping_ms": _get_ping_ms(key),
             }
         )
     return statuses
+
+
+def _get_ping_ms(key: str) -> int | None:
+    value = get_setting(f"protocol.{key}.ping_ms")
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
