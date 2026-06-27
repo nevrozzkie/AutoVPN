@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Clients</h1>
+
+<form method="post" action="/admin/clients" class="actions">
+  <input type="text" name="name" placeholder="Client name" required>
+  <input type="submit" value="Create client">
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Enabled</th>
+      <th>Subscription URL</th>
+      <th>Current IP URL</th>
+      <th>VLESS UUID</th>
+      <th>Hysteria password</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for client in clients %}
+      <tr>
+        <td>{{ client.name }}</td>
+        <td>{{ "yes" if client.enabled else "no" }}</td>
+        <td><code>{{ base_url }}/sub/{{ client.token }}</code></td>
+        <td><code>{{ base_url }}/ip/{{ client.token }}</code></td>
+        <td><code>{{ client.vless_uuid }}</code></td>
+        <td><code>{{ client.hysteria_password }}</code></td>
+        <td>
+          {% if client.enabled %}
+            <form class="inline" method="post" action="/admin/clients/{{ client.id }}/disable">
+              <button type="submit">Disable</button>
+            </form>
+          {% else %}
+            <form class="inline" method="post" action="/admin/clients/{{ client.id }}/enable">
+              <button type="submit">Enable</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No clients yet</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

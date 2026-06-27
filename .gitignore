@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+run-local.ps1
+run-local.sh
+data/
+*.sqlite3
+*.egg-info/

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ client.name }} · AutoVPN</title>
+    <style>
+      body {
+        margin: 0;
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f7f9;
+        color: #20242a;
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+      section {
+        background: #fff;
+        border: 1px solid #d7dce2;
+        border-radius: 8px;
+        padding: 18px;
+        margin: 16px 0;
+      }
+      code {
+        background: #eef1f5;
+        border-radius: 5px;
+        padding: 2px 5px;
+        overflow-wrap: anywhere;
+      }
+      button, a.button {
+        display: inline-block;
+        border: 0;
+        border-radius: 6px;
+        background: #0f766e;
+        color: #fff;
+        padding: 9px 13px;
+        font-weight: 650;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .muted { color: #66707c; }
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 10px;
+      }
+      .status {
+        border: 1px solid #d7dce2;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fbfcfd;
+      }
+      .status strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+      .ok { color: #047857; font-weight: 650; }
+      .warn { color: #b45309; font-weight: 650; }
+      .bad { color: #b91c1c; font-weight: 650; }
+      .qr {
+        display: none;
+        margin-top: 16px;
+      }
+      .qr.is-visible {
+        display: block;
+      }
+      .qr img {
+        width: 220px;
+        height: 220px;
+      }
+      .guides {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+      .guide {
+        border: 1px solid #d7dce2;
+        border-radius: 8px;
+        padding: 14px;
+        background: #fbfcfd;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>{{ client.name }}</h1>
+      <p class="muted">EU VPN IP: {{ current_ip }}</p>
+
+      <section>
+        <h2>Статус VPN</h2>
+        <div class="status-grid">
+          {% for protocol in protocols %}
+            <div class="status">
+              <strong>{{ protocol.name }}</strong>
+              {% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}
+                <span class="ok">{{ protocol.status }}</span>
+              {% elif protocol.status == "FAILED" %}
+                <span class="bad">{{ protocol.status }}</span>
+              {% else %}
+                <span class="warn">{{ protocol.status }}</span>
+              {% endif %}
+              {% if protocol.last_checked_at %}
+                <br><span class="muted">Проверено: {{ protocol.last_checked_at }}</span>
+              {% endif %}
+              {% if protocol.failed_since %}
+                <br><span class="bad">Проблема с: {{ protocol.failed_since }}</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section>
+        <h2>Подписка VLESS + Hysteria</h2>
+        <p><code>{{ subscription_url }}</code></p>
+        <a class="button" href="{{ subscription_url }}">Открыть подписку</a>
+        <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
+        <div id="subscription-qr" class="qr">
+          <img src="/client/{{ client.token }}/subscription.qr" alt="Subscription QR">
+        </div>
+      </section>
+
+      <section>
+        <h2>AmneziaVPN</h2>
+        <p><code>{{ amnezia_url }}</code></p>
+        <a class="button" href="{{ amnezia_url }}">Скачать Amnezia config</a>
+        <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
+        <div id="amnezia-qr" class="qr">
+          <img src="{{ amnezia_qr_url }}" alt="Amnezia QR">
+        </div>
+      </section>
+
+      <section>
+        <h2>Гайды</h2>
+        <div class="guides">
+          <div class="guide">
+            <strong>iOS</strong>
+            <p class="muted">Место под инструкцию со скриншотами.</p>
+          </div>
+          <div class="guide">
+            <strong>Android</strong>
+            <p class="muted">Место под инструкцию со скриншотами.</p>
+          </div>
+          <div class="guide">
+            <strong>Windows / macOS</strong>
+            <p class="muted">Место под инструкцию со скриншотами.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

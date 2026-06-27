@@ -1,0 +1,17 @@
+[Unit]
+Description=AutoVPN RU control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=autovpn
+Group=autovpn
+WorkingDirectory=/opt/autovpn
+EnvironmentFile=/etc/autovpn.env
+ExecStart=/opt/autovpn/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

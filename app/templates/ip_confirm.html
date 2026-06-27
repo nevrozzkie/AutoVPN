@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Подтверждение смены IP</h1>
+
+<section class="panel">
+  <div class="label">Текущий EU VPN IP</div>
+  <div class="value">{{ current_ip or "not set" }}</div>
+</section>
+
+<section class="panel">
+  <div class="label">Цена нового IPv4 по Aeza API</div>
+  {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}
+    <div class="value">{{ format_eur_minor_units(aeza_ipv4_price.price) }}</div>
+    {% if aeza_ipv4_price.protected_price is not none %}
+      <p class="muted">Protected price: {{ format_eur_minor_units(aeza_ipv4_price.protected_price) }}</p>
+    {% endif %}
+  {% else %}
+    <div class="value danger">Не удалось получить цену</div>
+    <p class="muted">Aeza может всё равно списать деньги за новый IPv4. Проверь баланс/кабинет, если сомневаешься.</p>
+  {% endif %}
+</section>
+
+<section class="panel danger">
+  При смене IP сервис сначала добавляет новый IPv4 и только после успешной проверки удаляет старый.
+  Если операция упадёт до удаления старого IP, оба IPv4 могут временно остаться активными и платными.
+  После покупки сервис подождёт примерно {{ after_purchase_delay_seconds // 60 }} мин., потому что новый IP может появиться в Aeza не сразу.
+</section>
+
+<div class="actions action-bar">
+  <a class="button" href="/admin">Назад</a>
+  <form method="post" action="/admin/ip/refresh" class="inline">
+    <button type="submit" {% if operation_running %}disabled{% endif %}>Подтвердить и обновить IP</button>
+  </form>
+</div>
+
+{% if operation_running %}
+  <p class="muted">Операция смены IP уже выполняется.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Админка</h1>
+
+<div class="grid">
+  <section class="panel">
+    <div class="label">Current EU VPN IP</div>
+    <div class="value">{{ current_ip or "not set" }}</div>
+  </section>
+  <section class="panel">
+    <div class="label">Last IP operation</div>
+    {% if latest_operation %}
+      <div class="value">{{ latest_operation.status }}</div>
+      <div class="muted">{{ latest_operation.current_step }} · {{ latest_operation.updated_at }}</div>
+      {% if latest_operation.server_reachable_at %}
+        <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at }}</div>
+      {% elif latest_operation.current_step == "wait_vps_health" %}
+        <div class="muted">Ждём, когда сервер поднимется после reboot.</div>
+      {% endif %}
+    {% else %}
+      <div class="value">none</div>
+    {% endif %}
+  </section>
+  <section class="panel">
+    <div class="label">Last VPN install/sync</div>
+    {% if latest_install_operation %}
+      <div class="value">{{ latest_install_operation.status }}</div>
+      <div class="muted">{{ latest_install_operation.current_step }} · {{ latest_install_operation.updated_at }}</div>
+    {% else %}
+      <div class="value">none</div>
+    {% endif %}
+  </section>
+</div>
+
+<h2>Статус протоколов</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Протокол</th>
+      <th>Порт</th>
+      <th>Статус</th>
+      <th>Последняя проверка</th>
+      <th>Если отвалился</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for protocol in protocols %}
+      <tr>
+        <td>{{ protocol.name }}</td>
+        <td>{{ protocol.port or "later" }}</td>
+        <td class="{% if protocol.status == "OK" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
+          {{ protocol.status }}
+        </td>
+        <td>{{ protocol.last_checked_at or "" }}</td>
+        <td>
+          {% if protocol.failed_since %}
+            <span class="danger">Не работает с {{ protocol.failed_since }}</span>
+          {% elif protocol.last_ok_at %}
+            <span class="muted">Последний OK: {{ protocol.last_ok_at }}</span>
+          {% else %}
+            <span class="muted">Нет данных</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Клиенты</h2>
+<form method="post" action="/admin/clients" class="actions">
+  <input type="text" name="name" placeholder="Имя, например Мама" required>
+  <input type="submit" value="Добавить клиента">
+</form>
+<form method="post" action="/admin/stats/refresh" class="actions">
+  <button type="submit">Обновить статистику</button>
+  {% if stats_last_refresh_at %}
+    <span class="muted">Последнее обновление: {{ stats_last_refresh_at }}</span>
+  {% endif %}
+</form>
+{% if stats_last_error %}
+  <section class="panel danger">Ошибка обновления статистики: {{ stats_last_error }}</section>
+{% endif %}
+
+<section class="client-list">
+  {% for client in clients %}
+    <details class="panel client-details">
+      <summary>
+        <strong>{{ client.name }}</strong>
+        <span class="muted">{{ "enabled" if client.enabled else "disabled" }}</span>
+        <span class="muted">
+          VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
+        </span>
+        <span class="muted">
+          Amnezia: ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
+        </span>
+        {% if client.stats_last_seen_at %}
+          <span class="ok">last seen {{ client.stats_last_seen_at }}</span>
+        {% else %}
+          <span class="muted">not seen yet</span>
+        {% endif %}
+      </summary>
+
+      <div class="client-grid">
+        <form method="post" action="/admin/clients/{{ client.id }}/rename">
+          <label class="label" for="client-name-{{ client.id }}">Имя</label>
+          <input id="client-name-{{ client.id }}" type="text" name="name" value="{{ client.name }}" required>
+          <input type="submit" value="Сохранить">
+        </form>
+
+        <div>
+          <div class="label">Страница клиента</div>
+          <code>{{ base_url }}/client/{{ client.token }}</code>
+        </div>
+        <div>
+          <div class="label">Подписка</div>
+          <code>{{ base_url }}/sub/{{ client.token }}</code>
+        </div>
+        <div>
+          <div class="label">VLESS UUID</div>
+          <code>{{ client.vless_uuid }}</code>
+        </div>
+        <div>
+          <div class="label">Hysteria password</div>
+          <code>{{ client.hysteria_password }}</code>
+        </div>
+        <div>
+          <div class="label">VLESS traffic</div>
+          ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
+          <br><span class="muted">Updated: {{ client.stats_updated_at or "never" }}</span>
+        </div>
+        <div>
+          <div class="label">AmneziaWG traffic</div>
+          ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
+          {% if client.amnezia_latest_handshake %}
+            <br><span class="muted">Latest handshake: {{ client.amnezia_latest_handshake }}</span>
+          {% else %}
+            <br><span class="muted">No handshake yet</span>
+          {% endif %}
+        </div>
+        <div>
+          <div class="label">Online status</div>
+          {% if client.stats_last_seen_at %}
+            <span class="ok">Active recently: {{ client.stats_last_seen_at }}</span>
+          {% else %}
+            <span class="muted">No traffic seen yet</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="actions">
+        {% if client.enabled %}
+          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/disable">
+            <button type="submit">Отключить</button>
+          </form>
+        {% else %}
+          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/enable">
+            <button type="submit">Включить</button>
+          </form>
+        {% endif %}
+        <form class="inline" method="post" action="/admin/clients/{{ client.id }}/delete" onsubmit="return confirm('Удалить клиента {{ client.name }}? После этого его подписка перестанет работать.')">
+          <button type="submit" class="danger-button">Удалить</button>
+        </form>
+      </div>
+    </details>
+  {% else %}
+    <section class="panel muted">Клиентов пока нет</section>
+  {% endfor %}
+</section>
+
+<h2>Действия</h2>
+<div class="actions action-bar">
+  <form method="post" action="/admin/install/run" class="inline">
+    <button type="submit" {% if install_running %}disabled{% endif %}>Обновить клиентов на VPN</button>
+  </form>
+  <form method="post" action="/admin/install/run" class="inline">
+    <button type="submit" {% if install_running %}disabled{% endif %}>Установить VPN</button>
+  </form>
+  {% if operation_running or not aeza_ip_rotation_available %}
+    <button type="button" disabled>Обновить IP</button>
+  {% else %}
+    <a class="button" href="/admin/ip/confirm">Обновить IP</a>
+    <a class="button" href="/admin/ip">Ручной режим IP</a>
+  {% endif %}
+</div>
+
+{% if install_running %}
+  <p class="muted">Установка или синхронизация уже выполняется.</p>
+{% endif %}
+
+{% if operation_running %}
+  <p class="muted">Операция смены IP уже выполняется.</p>
+{% elif not aeza_ip_rotation_available %}
+  <p class="muted">Смена IP доступна только для Aeza: настройте AEZA_TOKEN и AEZA_SERVICE_ID.</p>
+{% endif %}
+
+<p class="danger">
+  Важно: при обновлении IP Aeza добавляет новый IPv4, за это могут списаться дополнительные деньги.
+  {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}
+    Сейчас Aeza API показывает цену: {{ format_eur_minor_units(aeza_ipv4_price.price) }}.
+  {% elif aeza_ip_rotation_available %}
+    Точная цена будет запрошена ещё раз на странице подтверждения.
+  {% endif %}
+</p>
+
+{% if latest_operation and latest_operation.error_message %}
+  <h2>Last IP error</h2>
+  <section class="panel danger">{{ latest_operation.error_message }}</section>
+{% endif %}
+
+{% if latest_install_operation and latest_install_operation.error_message %}
+  <h2>Last install error</h2>
+  <section class="panel danger">{{ latest_install_operation.error_message }}</section>
+{% endif %}
+{% endblock %}

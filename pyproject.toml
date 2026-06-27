@@ -1,0 +1,27 @@
+[project]
+name = "autovpn"
+version = "0.1.0"
+description = "RU source-of-truth VPN infrastructure control panel"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "jinja2>=3.1.4",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "qrcode[pil]>=7.4.2",
+    "cryptography>=42.0.0",
+    "paramiko>=3.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

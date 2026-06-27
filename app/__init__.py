@@ -1,0 +1,1 @@
+"""AutoVPN FastAPI application."""

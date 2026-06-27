@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Operation log</h1>
+
+<h2>IP changes</h2>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Status</th>
+      <th>Step</th>
+      <th>Old IP</th>
+      <th>New IP</th>
+      <th>Server up</th>
+      <th>Error</th>
+      <th>Created</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for operation in operations %}
+      <tr>
+        <td>{{ operation.id }}</td>
+        <td>{{ operation.status }}</td>
+        <td>{{ operation.current_step }}</td>
+        <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
+        <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
+        <td>
+          {{ operation.server_reachable_at or "" }}
+          {% if operation.healthcheck_result %}
+            <br><span class="muted">{{ operation.healthcheck_result }}</span>
+          {% endif %}
+        </td>
+        <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
+        <td>{{ operation.created_at }}</td>
+        <td>{{ operation.updated_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No operations yet</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>EU installs</h2>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Status</th>
+      <th>Target</th>
+      <th>Step</th>
+      <th>Error</th>
+      <th>Created</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for operation in install_operations %}
+      <tr>
+        <td>{{ operation.id }}</td>
+        <td>{{ operation.status }}</td>
+        <td>{{ operation.target_host or "" }}</td>
+        <td>{{ operation.current_step }}</td>
+        <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
+        <td>{{ operation.created_at }}</td>
+        <td>{{ operation.updated_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No install operations yet</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
