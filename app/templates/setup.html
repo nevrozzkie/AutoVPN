@@ -3,13 +3,47 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+      (function () {
+        const saved = localStorage.getItem("autovpn-theme");
+        document.documentElement.dataset.theme = saved || "dark";
+      })();
+    </script>
     <title>Первичная настройка · AutoVPN</title>
     <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --border: #d7dce2;
+        --text: #20242a;
+        --muted: #66707c;
+        --accent: #0f766e;
+        --accent-hover: #115e59;
+        --danger: #b91c1c;
+        --warning: #b45309;
+        --input-bg: #ffffff;
+        --code-bg: #eef1f5;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #303844;
+        --text: #e6edf3;
+        --muted: #9aa7b4;
+        --accent: #14b8a6;
+        --accent-hover: #2dd4bf;
+        --danger: #f87171;
+        --warning: #fbbf24;
+        --input-bg: #0f141b;
+        --code-bg: #222a35;
+      }
       body {
         margin: 0;
         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #f6f7f9;
-        color: #20242a;
+        background: var(--bg);
+        color: var(--text);
       }
       main {
         max-width: 860px;
@@ -17,8 +51,8 @@
         padding: 28px;
       }
       section {
-        background: #fff;
-        border: 1px solid #d7dce2;
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: 8px;
         padding: 18px;
         margin: 16px 0;
@@ -31,40 +65,72 @@
       input {
         box-sizing: border-box;
         width: 100%;
-        border: 1px solid #c6ccd4;
+        border: 1px solid var(--border);
         border-radius: 6px;
         padding: 9px 10px;
         font: inherit;
+        background: var(--input-bg);
+        color: var(--text);
       }
       button {
         border: 0;
         border-radius: 6px;
-        background: #0f766e;
+        background: var(--accent);
         color: #fff;
         padding: 10px 14px;
         font-weight: 700;
         cursor: pointer;
+      }
+      button:hover {
+        background: var(--accent-hover);
+      }
+      code {
+        background: var(--code-bg);
+        border-radius: 5px;
+        padding: 2px 5px;
+        overflow-wrap: anywhere;
       }
       .grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 12px;
       }
-      .muted { color: #66707c; }
-      .danger { color: #b91c1c; }
-      .warning { color: #b45309; }
-      .danger-button { background: #b91c1c; }
+      .muted { color: var(--muted); }
+      .danger { color: var(--danger); }
+      .warning { color: var(--warning); }
+      .danger-button { background: var(--danger); }
       .actions {
         display: flex;
         gap: 10px;
         align-items: center;
         flex-wrap: wrap;
       }
+      .page-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .page-top h1 {
+        margin-bottom: 0;
+      }
+      .theme-toggle {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 7px 10px;
+      }
+      .theme-toggle:hover {
+        background: var(--panel);
+      }
     </style>
   </head>
   <body>
     <main>
-      <h1>Настройка AutoVPN</h1>
+      <div class="page-top">
+        <h1>Настройка AutoVPN</h1>
+        <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
+      </div>
       {% if setup_complete %}
         <p class="muted">Страница защищена текущим паролем администратора. Здесь можно поменять VPS, SSH и настройки Aeza.</p>
       {% else %}
@@ -163,6 +229,13 @@
       {% endif %}
     </main>
     <script>
+      function toggleTheme() {
+        const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+        const next = current === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem("autovpn-theme", next);
+      }
+
       const currentIpInput = document.querySelector("#current_ip");
       const sshHostInput = document.querySelector("#eu_ssh_host_value");
       const sshHostWarning = document.querySelector("#ssh-host-warning");
