@@ -34,7 +34,13 @@ from app.db import (
     set_client_enabled,
     update_client_name,
 )
-from app.eu_install import build_eu_install_script, describe_ssh_command, resolve_eu_host, run_eu_install
+from app.eu_install import (
+    build_eu_install_script,
+    describe_ssh_command,
+    forget_ssh_known_host,
+    resolve_eu_host,
+    run_eu_install,
+)
 from app.ip_change import apply_manual_main_ip, run_ip_change
 from app.protocol_status import get_protocol_statuses, refresh_protocol_statuses
 from app.runtime_config import (
@@ -269,6 +275,14 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     clients = list_clients()
     target_host = resolve_eu_host()
     latest_install_operation = get_latest_install_operation()
+    latest_install_error = latest_install_operation["error_message"] if latest_install_operation else ""
+    ssh_host_key_changed = bool(
+        latest_install_error
+        and (
+            "REMOTE HOST IDENTIFICATION HAS CHANGED" in latest_install_error
+            or "Host key verification failed" in latest_install_error
+        )
+    )
     protocol_status_available = bool(
         current_ip
         and target_host
@@ -289,6 +303,8 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
             "latest_install_operation": latest_install_operation,
+            "ssh_host_key_changed": ssh_host_key_changed,
+            "ssh_known_host_reset_last_output": get_setting("ssh.known_host_reset_last_output"),
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
@@ -484,6 +500,19 @@ def admin_install_redirect(_: str = Depends(require_admin)) -> RedirectResponse:
 @app.get("/admin/install/script", response_class=PlainTextResponse)
 def admin_install_script(_: str = Depends(require_admin)) -> PlainTextResponse:
     return PlainTextResponse(build_eu_install_script())
+
+
+@app.post("/admin/ssh/known-host/forget")
+def admin_forget_ssh_known_host(_: str = Depends(require_admin)) -> RedirectResponse:
+    if has_running_install_operation():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot change SSH known_hosts while install is running",
+        )
+    host = resolve_eu_host()
+    output = forget_ssh_known_host(host)
+    set_setting("ssh.known_host_reset_last_output", output[-4000:])
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/install/run")

@@ -4,7 +4,7 @@ import tempfile
 os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
 from app.db import create_client, init_db
-from app.eu_install import build_eu_install_script, describe_ssh_command
+from app.eu_install import build_eu_install_script, describe_ssh_command, forget_ssh_known_host
 
 
 def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
@@ -48,3 +48,32 @@ def test_describe_ssh_command_marks_password_auth() -> None:
     finally:
         object.__setattr__(settings, "eu_ssh_password", original_password)
         object.__setattr__(settings, "eu_ssh_key_path", original_key_path)
+
+
+def test_forget_ssh_known_host_uses_ssh_keygen(monkeypatch) -> None:
+    from app.config import settings
+    import app.eu_install as eu_install
+
+    calls: list[list[str]] = []
+
+    class Result:
+        stdout = b"removed\n"
+
+    def fake_run(command: list[str], **_: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    original_port = settings.eu_ssh_port
+    try:
+        object.__setattr__(settings, "eu_ssh_port", 2222)
+        monkeypatch.setattr(eu_install.subprocess, "run", fake_run)
+
+        output = forget_ssh_known_host("203.0.113.10")
+
+        assert "removed" in output
+        assert calls == [
+            ["ssh-keygen", "-R", "203.0.113.10"],
+            ["ssh-keygen", "-R", "[203.0.113.10]:2222"],
+        ]
+    finally:
+        object.__setattr__(settings, "eu_ssh_port", original_port)

@@ -128,6 +128,21 @@
   <section class="panel danger">{{ latest_install_operation.error_message }}</section>
 {% endif %}
 
+{% if ssh_host_key_changed %}
+  <section class="panel danger">
+    SSH host key для {{ target_host }} изменился. Это нормально после переустановки VPS, но также может быть признаком MITM-атаки.
+    Нажимайте кнопку ниже только если вы уверены, что это тот же ваш VPS после переустановки или замены сервера.
+    <form method="post" action="/admin/ssh/known-host/forget" class="actions" onsubmit="return confirm('Удалить старый SSH host key для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.')">
+      <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH host key</button>
+    </form>
+  </section>
+{% endif %}
+
+{% if ssh_known_host_reset_last_output %}
+  <h2>SSH known_hosts</h2>
+  <pre>{{ ssh_known_host_reset_last_output }}</pre>
+{% endif %}
+
 {% if ssh_command %}
   <h2>SSH diagnostic</h2>
   <section class="panel">

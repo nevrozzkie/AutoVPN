@@ -321,6 +321,28 @@ def describe_ssh_command(host: str) -> str:
     return command
 
 
+def forget_ssh_known_host(host: str) -> str:
+    if not host:
+        raise EuInstallError("EU SSH host is not configured and current_ip is empty")
+
+    targets = [host, f"[{host}]:{eu_ssh_port()}"]
+    outputs: list[str] = []
+    for target in dict.fromkeys(targets):
+        try:
+            result = subprocess.run(
+                ["ssh-keygen", "-R", target],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise EuInstallError("ssh-keygen is not installed on this machine") from exc
+        output = result.stdout.decode("utf-8", errors="replace").strip()
+        if output:
+            outputs.append(output)
+    return "\n".join(outputs) or f"No known_hosts entries found for {host}"
+
+
 def _probe_ssh_banner(host: str) -> str:
     timeout = max(1, min(5, ssh_connect_timeout_seconds()))
     with socket.create_connection((host, eu_ssh_port()), timeout=timeout) as sock:
