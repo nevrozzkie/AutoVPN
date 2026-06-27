@@ -259,6 +259,39 @@ def describe_ssh_command(host: str) -> str:
     return command
 
 
+def _probe_ssh_banner(host: str) -> str:
+    timeout = max(1, min(5, ssh_connect_timeout_seconds()))
+    with socket.create_connection((host, eu_ssh_port()), timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        data = sock.recv(256)
+    return data.decode("utf-8", errors="replace").strip()
+
+
+def _format_ssh_error(host: str, exc: Exception) -> str:
+    target = f"{eu_ssh_user()}@{host}:{eu_ssh_port()}"
+    message = str(exc) or exc.__class__.__name__
+    if "Error reading SSH protocol banner" in message or "No existing session" in message:
+        hint = (
+            f"SSH handshake failed for {target}: TCP connection opened, but the server did not "
+            "send a valid SSH banner. Check that this is the VPS public IP, SSH is listening on "
+            "this port, firewall allows it, and the VPS is fully booted."
+        )
+        try:
+            banner = _probe_ssh_banner(host)
+        except socket.timeout:
+            return f"{hint} TCP probe timed out while waiting for SSH banner."
+        except EOFError:
+            return f"{hint} TCP probe connected, but the server closed the connection immediately."
+        except OSError as probe_exc:
+            return f"{hint} TCP probe failed: {probe_exc}."
+        if banner.startswith("SSH-"):
+            return f"{hint} TCP probe saw SSH banner {banner!r}, so retrying later may help."
+        if banner:
+            return f"{hint} TCP probe received non-SSH data: {banner[:120]!r}."
+        return f"{hint} TCP probe received an empty response."
+    return f"SSH connection failed for {target}: {message}"
+
+
 def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     import paramiko
 
@@ -287,6 +320,28 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         connect_kwargs["key_filename"] = key_path
 
     try:
+        banner = _probe_ssh_banner(host)
+        if not banner:
+            raise EuInstallError(
+                f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
+                "TCP connection opened, but the server closed it before sending an SSH banner. "
+                "Check that SSH is running on this port and the VPS is fully booted."
+            )
+        if not banner.startswith("SSH-"):
+            raise EuInstallError(
+                f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
+                f"port is open, but it does not look like SSH. Received: {banner[:120]!r}"
+            )
+    except (socket.timeout, TimeoutError) as exc:
+        raise EuInstallError(
+            f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
+            "TCP connection opened, but no SSH banner arrived before timeout. "
+            "Check firewall, SSH service status, and whether the VPS is still booting."
+        ) from exc
+    except OSError as exc:
+        raise EuInstallError(_format_ssh_error(host, exc)) from exc
+
+    try:
         ssh.connect(**connect_kwargs)
         stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
         if stdin_data:
@@ -296,8 +351,15 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         error_output = stderr.read().decode("utf-8", errors="replace")
         exit_code = stdout.channel.recv_exit_status()
         return exit_code, output + error_output
-    except (paramiko.SSHException, socket.error, TimeoutError) as exc:
-        raise EuInstallError(f"SSH connection failed: {exc}") from exc
+    except EuInstallError:
+        raise
+    except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as exc:
+        raise EuInstallError(
+            f"SSH authentication failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}. "
+            "Check SSH username and password/key in /setup."
+        ) from exc
+    except (paramiko.SSHException, socket.error, TimeoutError, EOFError) as exc:
+        raise EuInstallError(_format_ssh_error(host, exc)) from exc
     finally:
         ssh.close()
 

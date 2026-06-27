@@ -32,10 +32,11 @@
   {% endif %}
 </div>
 
-<h2>SSH command</h2>
+<h2>SSH diagnostic command</h2>
 <section class="panel">
   {% if ssh_command %}
     <code>{{ ssh_command }}</code>
+    <p class="muted">AutoVPN runs SSH through its built-in client. Use this command manually to check host, port, and credentials.</p>
   {% else %}
     <span class="danger">Set EU_SSH_HOST or settings.current_ip first.</span>
   {% endif %}
