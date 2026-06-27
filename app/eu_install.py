@@ -227,12 +227,14 @@ cat >/usr/local/etc/xray/config.json <<'JSON'
 {json.dumps(xray_config, indent=2, ensure_ascii=False)}
 JSON
 
-if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ]; then
+HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
+if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ] || ! openssl x509 -in /etc/autovpn/hysteria.crt -noout -subject | grep -Eq "CN ?= ?${{HYSTERIA_SNI}}"; then
+  rm -f /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
   openssl req -x509 -newkey rsa:2048 -nodes \\
     -keyout /etc/autovpn/hysteria.key \\
     -out /etc/autovpn/hysteria.crt \\
     -days 3650 \\
-    -subj "/CN=autovpn-eu"
+    -subj "/CN=${{HYSTERIA_SNI}}"
 fi
 chmod 644 /etc/autovpn/hysteria.crt
 if id hysteria >/dev/null 2>&1; then
@@ -260,6 +262,14 @@ masquerade:
     url: https://example.com/
     rewriteHost: true
 YAML
+
+echo "[autovpn] opening firewall ports"
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow {settings.hysteria_port}/udp || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {settings.hysteria_port} -j ACCEPT || true
+fi
 
 cat >/etc/amnezia/amneziawg/awg0.conf <<'AWG'
 {amnezia_config}

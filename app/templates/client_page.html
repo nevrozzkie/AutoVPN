@@ -160,6 +160,13 @@
       .theme-toggle:hover {
         background: var(--panel-soft);
       }
+      .config-freshness {
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel-soft);
+      }
     </style>
   </head>
   <body>
@@ -168,6 +175,15 @@
         <div>
           <h1>{{ client.name }}</h1>
           <p class="muted">IP VPN: {{ current_ip }}</p>
+          <p class="config-freshness">
+            <strong>Конфиг обновлён:</strong>
+            {% if config_updated_at %}
+              {{ config_updated_at|msk }}
+            {% else %}
+              <span class="muted">ещё не фиксировалось</span>
+            {% endif %}
+          </p>
+          <p class="muted">Если это время новее, чем последнее обновление в приложении VPN, обновите подписку.</p>
         </div>
         <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
       </div>

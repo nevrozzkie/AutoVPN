@@ -6,7 +6,7 @@ from typing import Any
 
 from app.aeza import AezaClient
 from app.config import settings
-from app.db import get_setting, now_iso, set_setting, update_operation
+from app.db import get_setting, mark_vpn_config_updated, now_iso, set_setting, update_operation
 from app.eu_install import build_eu_install_script, run_remote_command
 from app.health import check_vpn_health
 from app.protocol_status import refresh_protocol_statuses
@@ -109,6 +109,7 @@ async def run_ip_change(operation_id: int) -> None:
 
         await _step(operation_id, "sync_vpn_after_ip_change")
         await _sync_vpn_after_ip_change(new_ip_address)
+        mark_vpn_config_updated()
         await _step(operation_id, "refresh_protocol_statuses")
         await refresh_protocol_statuses(new_ip_address)
 
@@ -180,4 +181,5 @@ async def _sync_vpn_after_ip_change(host: str) -> None:
 async def apply_manual_main_ip(new_ip: str) -> None:
     set_setting("current_ip", new_ip)
     await _sync_vpn_after_ip_change(new_ip)
+    mark_vpn_config_updated()
     await refresh_protocol_statuses(new_ip)

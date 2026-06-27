@@ -173,6 +173,10 @@ def _set_setting(db: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def _mark_vpn_config_updated(db: sqlite3.Connection) -> None:
+    _set_setting(db, "vpn.config_updated_at", now_iso())
+
+
 def _ensure_amnezia_settings(db: sqlite3.Connection) -> None:
     private_key = _setting(db, "amnezia.server_private_key")
     if not private_key:
@@ -234,6 +238,11 @@ def set_setting(key: str, value: str) -> None:
             """,
             (key, value),
         )
+
+
+def mark_vpn_config_updated() -> None:
+    with get_db() as db:
+        _mark_vpn_config_updated(db)
 
 
 def list_clients() -> list[dict[str, Any]]:
@@ -306,6 +315,7 @@ def create_client(name: str) -> dict[str, Any]:
             "UPDATE clients SET amnezia_ipv4 = ? WHERE id = ?",
             (client_amnezia_address(client_id), client_id),
         )
+        _mark_vpn_config_updated(db)
         return db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
 
 
@@ -315,6 +325,7 @@ def set_client_enabled(client_id: int, enabled: bool) -> None:
             "UPDATE clients SET enabled = ? WHERE id = ?",
             (1 if enabled else 0, client_id),
         )
+        _mark_vpn_config_updated(db)
 
 
 def update_client_name(client_id: int, name: str) -> None:
@@ -323,11 +334,13 @@ def update_client_name(client_id: int, name: str) -> None:
             "UPDATE clients SET name = ? WHERE id = ?",
             (name, client_id),
         )
+        _mark_vpn_config_updated(db)
 
 
 def delete_client(client_id: int) -> None:
     with get_db() as db:
         db.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        _mark_vpn_config_updated(db)
 
 
 def get_client_stats(client_id: int) -> dict[str, Any] | None:

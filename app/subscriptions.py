@@ -14,7 +14,8 @@ def hysteria_auth(client: dict) -> str:
 def build_subscription(client: dict, current_ip: str) -> str:
     vless_name = quote(profile_name(client, "vless"))
     hysteria_name = quote(profile_name(client, "hysteria"))
-    hysteria_userinfo = quote(hysteria_auth(client))
+    hysteria_username = quote(f"client{client['id']}")
+    hysteria_password = quote(client["hysteria_password"])
     vless_query = urlencode(
         {
             "type": "tcp",
@@ -32,8 +33,8 @@ def build_subscription(client: dict, current_ip: str) -> str:
         f"?{vless_query}#{vless_name}"
     )
     hysteria = (
-        f"hysteria2://{hysteria_userinfo}@{current_ip}:{settings.hysteria_port}/"
-        f"?insecure=1&sni=autovpn-eu#{hysteria_name}"
+        f"hy2://{hysteria_username}:{hysteria_password}@{current_ip}:{settings.hysteria_port}/"
+        f"?insecure=1&sni={quote(settings.vless_reality_server_name)}#{hysteria_name}"
     )
     return f"{vless}\n{hysteria}\n"
 
@@ -97,7 +98,7 @@ def build_sing_box_subscription(client: dict, current_ip: str) -> dict:
                 "password": hysteria_auth(client),
                 "tls": {
                     "enabled": True,
-                    "server_name": "autovpn-eu",
+                    "server_name": settings.vless_reality_server_name,
                     "insecure": True,
                 },
             },

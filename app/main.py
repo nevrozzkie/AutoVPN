@@ -31,6 +31,7 @@ from app.db import (
     list_clients_with_stats,
     list_install_operations,
     list_operations,
+    mark_vpn_config_updated,
     reset_server_and_aeza_state,
     set_setting,
     set_client_enabled,
@@ -336,6 +337,7 @@ def setup_submit(
     set_setting("config.aeza_ipv4_payment_method", "balance")
     set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
     set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "300")
+    mark_vpn_config_updated()
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -690,6 +692,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         {
             "client": client,
             "current_ip": current_ip,
+            "config_updated_at": get_setting("vpn.config_updated_at"),
             "protocols": get_protocol_statuses(),
             "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
             "base_url": base_url,
