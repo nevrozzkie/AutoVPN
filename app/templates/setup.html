@@ -55,8 +55,12 @@
   </head>
   <body>
     <main>
-      <h1>Первичная настройка AutoVPN</h1>
-      <p class="muted">Эта страница доступна только пока не задан пароль администратора.</p>
+      <h1>Настройка AutoVPN</h1>
+      {% if setup_complete %}
+        <p class="muted">Страница защищена текущим admin-паролем. Здесь можно поменять VPS, SSH и Aeza-настройки.</p>
+      {% else %}
+        <p class="muted">Задайте пароль администратора и заполните нужные поля. Остальное можно добавить позже.</p>
+      {% endif %}
 
       <form method="post" action="/setup">
         <section>
@@ -68,7 +72,12 @@
             </div>
             <div>
               <label for="admin_password_value">Пароль</label>
-              <input id="admin_password_value" name="admin_password_value" type="password" required autocomplete="new-password">
+              <input id="admin_password_value" name="admin_password_value" type="password" {% if not setup_complete %}required{% endif %} autocomplete="new-password">
+              {% if setup_complete %}<span class="muted">Оставьте пустым, чтобы не менять.</span>{% endif %}
+            </div>
+            <div>
+              <label for="admin_password_confirm_value">Повтор пароля</label>
+              <input id="admin_password_confirm_value" name="admin_password_confirm_value" type="password" {% if not setup_complete %}required{% endif %} autocomplete="new-password">
             </div>
           </div>
         </section>
@@ -78,27 +87,28 @@
           <div class="grid">
             <div>
               <label for="current_ip">Текущий IP VPN</label>
-              <input id="current_ip" name="current_ip" placeholder="203.0.113.10">
+              <input id="current_ip" name="current_ip" value="{{ current_ip }}" placeholder="203.0.113.10">
             </div>
             <div>
               <label for="eu_ssh_host_value">SSH host</label>
-              <input id="eu_ssh_host_value" name="eu_ssh_host_value" placeholder="оставьте пустым, чтобы использовать текущий IP">
+              <input id="eu_ssh_host_value" name="eu_ssh_host_value" value="{{ eu_ssh_host }}" placeholder="оставьте пустым, чтобы использовать текущий IP">
             </div>
             <div>
               <label for="eu_ssh_user_value">SSH user</label>
-              <input id="eu_ssh_user_value" name="eu_ssh_user_value" value="root">
+              <input id="eu_ssh_user_value" name="eu_ssh_user_value" value="{{ eu_ssh_user or 'root' }}">
             </div>
             <div>
               <label for="eu_ssh_port_value">SSH port</label>
-              <input id="eu_ssh_port_value" name="eu_ssh_port_value" type="number" value="22" min="1" max="65535">
+              <input id="eu_ssh_port_value" name="eu_ssh_port_value" type="number" value="{{ eu_ssh_port or 22 }}" min="1" max="65535">
             </div>
             <div>
               <label for="eu_ssh_password_value">SSH password</label>
               <input id="eu_ssh_password_value" name="eu_ssh_password_value" type="password">
+              {% if eu_ssh_password_configured %}<span class="muted">Пароль уже задан. Оставьте пустым, чтобы не менять.</span>{% endif %}
             </div>
             <div>
               <label for="eu_ssh_key_path_value">SSH key path</label>
-              <input id="eu_ssh_key_path_value" name="eu_ssh_key_path_value" placeholder="/home/user/.ssh/id_ed25519">
+              <input id="eu_ssh_key_path_value" name="eu_ssh_key_path_value" value="{{ eu_ssh_key_path }}" placeholder="/home/user/.ssh/id_ed25519">
             </div>
           </div>
         </section>
@@ -109,14 +119,15 @@
             <div>
               <label for="aeza_token_value">AEZA_TOKEN</label>
               <input id="aeza_token_value" name="aeza_token_value" type="password">
+              {% if aeza_token_configured %}<span class="muted">Токен уже задан. Оставьте пустым, чтобы не менять.</span>{% endif %}
             </div>
             <div>
               <label for="aeza_service_id_value">AEZA_SERVICE_ID</label>
-              <input id="aeza_service_id_value" name="aeza_service_id_value">
+              <input id="aeza_service_id_value" name="aeza_service_id_value" value="{{ aeza_service_id }}">
             </div>
             <div>
               <label for="aeza_ipv4_domain_value">AEZA_IPV4_DOMAIN</label>
-              <input id="aeza_ipv4_domain_value" name="aeza_ipv4_domain_value" placeholder="например aqua">
+              <input id="aeza_ipv4_domain_value" name="aeza_ipv4_domain_value" value="{{ aeza_ipv4_domain }}" placeholder="например aqua">
             </div>
           </div>
         </section>

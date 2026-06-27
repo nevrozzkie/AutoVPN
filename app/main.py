@@ -45,6 +45,11 @@ from app.runtime_config import (
     aeza_service_id,
     aeza_token,
     setup_complete,
+    eu_ssh_host,
+    eu_ssh_key_path,
+    eu_ssh_password,
+    eu_ssh_port,
+    eu_ssh_user,
 )
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_subscription
@@ -52,6 +57,7 @@ from app.subscriptions import build_subscription
 app = FastAPI(title="AutoVPN")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()
+setup_security = HTTPBasic(auto_error=False)
 
 
 def aeza_ip_rotation_available() -> bool:
@@ -128,6 +134,32 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     return credentials.username
 
 
+def require_setup_access(
+    credentials: HTTPBasicCredentials | None = Depends(setup_security),
+) -> str | None:
+    if not setup_complete():
+        return None
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    expected_password = admin_password()
+    username_ok = secrets.compare_digest(credentials.username, admin_username())
+    password_ok = bool(expected_password) and secrets.compare_digest(
+        credentials.password,
+        expected_password,
+    )
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
     if not setup_complete():
@@ -136,22 +168,35 @@ def root() -> RedirectResponse:
 
 
 @app.get("/setup", response_class=HTMLResponse)
-def setup_page(request: Request) -> HTMLResponse:
-    if setup_complete():
-        return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+def setup_page(
+    request: Request,
+    _: str | None = Depends(require_setup_access),
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "setup.html",
         {
             "admin_username": admin_username(),
+            "current_ip": get_setting("current_ip"),
+            "eu_ssh_host": eu_ssh_host(),
+            "eu_ssh_user": eu_ssh_user(),
+            "eu_ssh_port": eu_ssh_port(),
+            "eu_ssh_key_path": eu_ssh_key_path(),
+            "eu_ssh_password_configured": bool(eu_ssh_password()),
+            "aeza_token_configured": bool(aeza_token()),
+            "aeza_service_id": aeza_service_id(),
+            "aeza_ipv4_domain": aeza_ipv4_domain(),
+            "setup_complete": setup_complete(),
         },
     )
 
 
 @app.post("/setup")
 def setup_submit(
+    _: str | None = Depends(require_setup_access),
     admin_username_value: str = Form("admin"),
-    admin_password_value: str = Form(...),
+    admin_password_value: str = Form(""),
+    admin_password_confirm_value: str = Form(""),
     current_ip: str = Form(""),
     eu_ssh_host_value: str = Form(""),
     eu_ssh_user_value: str = Form("root"),
@@ -162,24 +207,33 @@ def setup_submit(
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
 ) -> RedirectResponse:
-    if setup_complete():
-        return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
-    if not admin_password_value.strip():
+    password = admin_password_value.strip()
+    password_confirm = admin_password_confirm_value.strip()
+    if password != password_confirm:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin passwords do not match")
+    if not setup_complete() and not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin password is required")
 
     set_setting("config.admin_username", admin_username_value.strip() or "admin")
-    set_setting("config.admin_password", admin_password_value)
+    if password:
+        set_setting("config.admin_password", password)
     if current_ip.strip():
         set_setting("current_ip", current_ip.strip())
 
     set_setting("config.eu_ssh_host", eu_ssh_host_value.strip() or current_ip.strip())
     set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
     set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
-    set_setting("config.eu_ssh_password", eu_ssh_password_value)
-    set_setting("config.eu_ssh_key_path", "" if eu_ssh_password_value else eu_ssh_key_path_value.strip())
+    if eu_ssh_password_value:
+        set_setting("config.eu_ssh_password", eu_ssh_password_value)
+        set_setting("config.eu_ssh_key_path", "")
+    else:
+        if not eu_ssh_password() or eu_ssh_key_path_value.strip():
+            set_setting("config.eu_ssh_password", "")
+        set_setting("config.eu_ssh_key_path", eu_ssh_key_path_value.strip())
 
     set_setting("config.aeza_api_base", "https://my.aeza.net")
-    set_setting("config.aeza_token", aeza_token_value.strip())
+    if aeza_token_value.strip():
+        set_setting("config.aeza_token", aeza_token_value.strip())
     set_setting("config.aeza_service_id", aeza_service_id_value.strip())
     set_setting("config.aeza_ipv4_payment_method", "balance")
     set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
