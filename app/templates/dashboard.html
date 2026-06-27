@@ -139,20 +139,24 @@
 {% endif %}
 
 {% if ssh_known_host_reset_last_output %}
-  <h2>SSH known_hosts</h2>
-  <pre>{{ ssh_known_host_reset_last_output }}</pre>
+  <details class="panel technical-details">
+    <summary>SSH known_hosts</summary>
+    <pre>{{ ssh_known_host_reset_last_output }}</pre>
+  </details>
 {% endif %}
 
 {% if ssh_command %}
-  <h2>SSH diagnostic</h2>
-  <section class="panel">
+  <details class="panel technical-details">
+    <summary>SSH diagnostic</summary>
     <code>{{ ssh_command }}</code>
     <p class="muted">Это только проверка SSH. AutoVPN устанавливает VPN отдельно, отправляя install script через stdin.</p>
-  </section>
+  </details>
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.output %}
-  <h2>Last install output</h2>
-  <pre>{{ latest_install_operation.output }}</pre>
+  <details class="panel technical-details">
+    <summary>Last install output</summary>
+    <pre>{{ latest_install_operation.output }}</pre>
+  </details>
 {% endif %}
 {% endblock %}
