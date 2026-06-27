@@ -36,7 +36,7 @@
 <section class="panel">
   {% if ssh_command %}
     <code>{{ ssh_command }}</code>
-    <p class="muted">AutoVPN runs SSH through its built-in client. Use this command manually to check host, port, and credentials.</p>
+    <p class="muted">Это только проверка SSH: после пароля команда должна быстро вывести autovpn-ssh-ok и uname. AutoVPN устанавливает VPN отдельно, отправляя install script через stdin.</p>
   {% else %}
     <span class="danger">Set EU_SSH_HOST or settings.current_ip first.</span>
   {% endif %}

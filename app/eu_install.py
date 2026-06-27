@@ -231,7 +231,7 @@ echo "[autovpn] done"
 """
 
 
-def build_ssh_command(host: str) -> list[str]:
+def build_ssh_command(host: str, remote_command: str = "printf 'autovpn-ssh-ok\\n' && uname -a") -> list[str]:
     if not host:
         raise EuInstallError("EU SSH host is not configured and current_ip is empty")
 
@@ -249,7 +249,7 @@ def build_ssh_command(host: str) -> list[str]:
         command.extend(["-o", "PreferredAuthentications=password"])
     elif eu_ssh_key_path():
         command.extend(["-i", eu_ssh_key_path()])
-    command.extend([destination, "bash -s"])
+    command.extend([destination, remote_command])
     return command
 
 

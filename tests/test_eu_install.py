@@ -40,6 +40,8 @@ def test_describe_ssh_command_marks_password_auth() -> None:
         assert "PreferredAuthentications=password" in command
         assert "secret" not in command
         assert "password auth via EU_SSH_PASSWORD" in command
+        assert "autovpn-ssh-ok" in command
+        assert "bash -s" not in command
     finally:
         object.__setattr__(settings, "eu_ssh_password", original_password)
         object.__setattr__(settings, "eu_ssh_key_path", original_key_path)
