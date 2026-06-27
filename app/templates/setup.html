@@ -52,6 +52,7 @@
       }
       .muted { color: #66707c; }
       .danger { color: #b91c1c; }
+      .warning { color: #b45309; }
       .danger-button { background: #b91c1c; }
       .actions {
         display: flex;
@@ -99,7 +100,9 @@
             </div>
             <div>
               <label for="eu_ssh_host_value">SSH host</label>
-              <input id="eu_ssh_host_value" name="eu_ssh_host_value" value="{{ eu_ssh_host }}" placeholder="оставьте пустым, чтобы использовать текущий IP">
+              <input id="eu_ssh_host_value" name="eu_ssh_host_value" value="{{ eu_ssh_host }}" placeholder="{{ current_ip or 'оставьте пустым, чтобы использовать текущий IP VPN' }}">
+              <span class="muted">Можно оставить пустым: тогда SSH будет подключаться к текущему IP VPN.</span>
+              <span id="ssh-host-warning" class="warning" style="display: none;">SSH host отличается от текущего IP VPN. Это нормально только если SSH доступен по другому адресу.</span>
             </div>
             <div>
               <label for="eu_ssh_user_value">SSH user</label>
@@ -117,6 +120,7 @@
             <div>
               <label for="eu_ssh_key_path_value">SSH key path</label>
               <input id="eu_ssh_key_path_value" name="eu_ssh_key_path_value" value="{{ eu_ssh_key_path }}" placeholder="/home/user/.ssh/id_ed25519">
+              <span class="muted">Можно оставить пустым, если используете SSH password.</span>
             </div>
           </div>
         </section>
@@ -132,10 +136,12 @@
             <div>
               <label for="aeza_service_id_value">AEZA_SERVICE_ID</label>
               <input id="aeza_service_id_value" name="aeza_service_id_value" value="{{ aeza_service_id }}">
+              <span class="muted">ID сервиса Aeza. Его проще получить через Network-панель браузера в my.aeza.net: откройте страницу VPS и посмотрите requests вида <code>/api/v2/services/{serviceId}/...</code>.</span>
             </div>
             <div>
               <label for="aeza_ipv4_domain_value">AEZA_IPV4_DOMAIN</label>
               <input id="aeza_ipv4_domain_value" name="aeza_ipv4_domain_value" value="{{ aeza_ipv4_domain }}" placeholder="например aqua">
+              <span class="muted">Опциональное поле из Aeza UI/HAR при покупке IPv4. В HAR оно выглядело как <code>{"domain":"aqua"}</code>. Если не знаете, оставьте пустым.</span>
             </div>
           </div>
         </section>
@@ -156,5 +162,22 @@
         </section>
       {% endif %}
     </main>
+    <script>
+      const currentIpInput = document.querySelector("#current_ip");
+      const sshHostInput = document.querySelector("#eu_ssh_host_value");
+      const sshHostWarning = document.querySelector("#ssh-host-warning");
+
+      function syncSshHostHint() {
+        const currentIp = currentIpInput.value.trim();
+        const sshHost = sshHostInput.value.trim();
+        sshHostInput.placeholder = currentIp || "оставьте пустым, чтобы использовать текущий IP VPN";
+        const differs = currentIp && sshHost && currentIp !== sshHost;
+        sshHostWarning.style.display = differs ? "block" : "none";
+      }
+
+      currentIpInput.addEventListener("input", syncSshHostHint);
+      sshHostInput.addEventListener("input", syncSshHostHint);
+      syncSshHostHint();
+    </script>
   </body>
 </html>

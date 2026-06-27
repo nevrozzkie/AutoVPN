@@ -173,13 +173,19 @@ def setup_page(
     request: Request,
     _: str | None = Depends(require_setup_access),
 ) -> HTMLResponse:
+    current_ip = get_setting("current_ip")
+    configured_ssh_host = eu_ssh_host()
+    ssh_host_form_value = ""
+    if configured_ssh_host and configured_ssh_host != current_ip:
+        ssh_host_form_value = configured_ssh_host
     return templates.TemplateResponse(
         request,
         "setup.html",
         {
             "admin_username": admin_username(),
-            "current_ip": get_setting("current_ip"),
-            "eu_ssh_host": eu_ssh_host(),
+            "current_ip": current_ip,
+            "eu_ssh_host": ssh_host_form_value,
+            "configured_eu_ssh_host": configured_ssh_host,
             "eu_ssh_user": eu_ssh_user(),
             "eu_ssh_port": eu_ssh_port(),
             "eu_ssh_key_path": eu_ssh_key_path(),
@@ -220,10 +226,14 @@ def setup_submit(
     set_setting("config.admin_username", admin_username_value.strip() or "admin")
     if password:
         set_setting("config.admin_password", password)
-    if current_ip.strip():
-        set_setting("current_ip", current_ip.strip())
+    current_ip_value = current_ip.strip()
+    if current_ip_value:
+        set_setting("current_ip", current_ip_value)
 
-    set_setting("config.eu_ssh_host", eu_ssh_host_value.strip() or current_ip.strip())
+    ssh_host_value = eu_ssh_host_value.strip()
+    if ssh_host_value == current_ip_value:
+        ssh_host_value = ""
+    set_setting("config.eu_ssh_host", ssh_host_value)
     set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
     set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
     if eu_ssh_password_value:
