@@ -26,6 +26,7 @@ from app.runtime_config import (
     eu_ssh_user,
     ssh_connect_timeout_seconds,
 )
+from app.protocol_status import refresh_protocol_statuses
 
 
 class EuInstallError(RuntimeError):
@@ -454,6 +455,7 @@ async def run_eu_install(operation_id: int) -> None:
             raise EuInstallError(
                 f"SSH install failed with exit code {exit_code}\n{output_tail}"
             )
+        await refresh_protocol_statuses(host)
         update_install_operation(
             operation_id,
             status="DONE",

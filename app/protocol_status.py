@@ -14,6 +14,22 @@ PROTOCOLS = [
 ]
 
 
+def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
+    statuses = []
+    for protocol in PROTOCOLS:
+        key = protocol["key"]
+        statuses.append(
+            {
+                **protocol,
+                "status": get_setting(f"protocol.{key}.status", "UNKNOWN"),
+                "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
+                "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
+                "failed_since": get_setting(f"protocol.{key}.failed_since"),
+            }
+        )
+    return statuses
+
+
 async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int | bool | None]]:
     checked_at = now_iso()
     check_tasks = []

@@ -88,29 +88,31 @@
       <h1>{{ client.name }}</h1>
       <p class="muted">EU VPN IP: {{ current_ip }}</p>
 
-      <section>
-        <h2>Статус VPN</h2>
-        <div class="status-grid">
-          {% for protocol in protocols %}
-            <div class="status">
-              <strong>{{ protocol.name }}</strong>
-              {% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}
-                <span class="ok">{{ protocol.status }}</span>
-              {% elif protocol.status == "FAILED" %}
-                <span class="bad">{{ protocol.status }}</span>
-              {% else %}
-                <span class="warn">{{ protocol.status }}</span>
-              {% endif %}
-              {% if protocol.last_checked_at %}
-                <br><span class="muted">Проверено: {{ protocol.last_checked_at }}</span>
-              {% endif %}
-              {% if protocol.failed_since %}
-                <br><span class="bad">Проблема с: {{ protocol.failed_since }}</span>
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
+      {% if protocol_status_available %}
+        <section>
+          <h2>Статус VPN</h2>
+          <div class="status-grid">
+            {% for protocol in protocols %}
+              <div class="status">
+                <strong>{{ protocol.name }}</strong>
+                {% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}
+                  <span class="ok">{{ protocol.status }}</span>
+                {% elif protocol.status == "FAILED" %}
+                  <span class="bad">{{ protocol.status }}</span>
+                {% else %}
+                  <span class="warn">{{ protocol.status }}</span>
+                {% endif %}
+                {% if protocol.last_checked_at %}
+                  <br><span class="muted">Проверено: {{ protocol.last_checked_at }}</span>
+                {% endif %}
+                {% if protocol.failed_since %}
+                  <br><span class="bad">Проблема с: {{ protocol.failed_since }}</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
 
       <section>
         <h2>Подписка VLESS + Hysteria</h2>

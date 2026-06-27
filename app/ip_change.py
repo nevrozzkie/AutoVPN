@@ -9,6 +9,7 @@ from app.config import settings
 from app.db import get_setting, now_iso, set_setting, update_operation
 from app.eu_install import build_eu_install_script, run_remote_command
 from app.health import check_vpn_health
+from app.protocol_status import refresh_protocol_statuses
 from app.runtime_config import (
     aeza_api_base,
     aeza_ipv4_after_purchase_delay_seconds,
@@ -108,6 +109,8 @@ async def run_ip_change(operation_id: int) -> None:
 
         await _step(operation_id, "sync_vpn_after_ip_change")
         await _sync_vpn_after_ip_change(new_ip_address)
+        await _step(operation_id, "refresh_protocol_statuses")
+        await refresh_protocol_statuses(new_ip_address)
 
         await _step(operation_id, "delete_old_ipv4")
         await client.delete_ipv4(service_id, old_ip_id)
@@ -177,3 +180,4 @@ async def _sync_vpn_after_ip_change(host: str) -> None:
 async def apply_manual_main_ip(new_ip: str) -> None:
     set_setting("current_ip", new_ip)
     await _sync_vpn_after_ip_change(new_ip)
+    await refresh_protocol_statuses(new_ip)

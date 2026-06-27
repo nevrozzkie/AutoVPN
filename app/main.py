@@ -36,7 +36,7 @@ from app.db import (
 )
 from app.eu_install import build_eu_install_script, describe_ssh_command, resolve_eu_host, run_eu_install
 from app.ip_change import apply_manual_main_ip, run_ip_change
-from app.protocol_status import refresh_protocol_statuses
+from app.protocol_status import get_protocol_statuses, refresh_protocol_statuses
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -266,7 +266,6 @@ def healthz() -> dict[str, str]:
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     current_ip = get_setting("current_ip")
-    protocols = await refresh_protocol_statuses(current_ip)
     clients = list_clients_with_stats()
     target_host = resolve_eu_host()
     return templates.TemplateResponse(
@@ -277,7 +276,8 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "target_host": target_host,
             "ssh_command": describe_ssh_command(target_host) if target_host else "",
             "enabled_clients_count": len([client for client in clients if client["enabled"]]),
-            "protocols": protocols,
+            "protocols": get_protocol_statuses() if current_ip else [],
+            "protocol_status_available": bool(current_ip),
             "clients": clients,
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
@@ -500,6 +500,14 @@ async def _run_install_background(operation_id: int) -> None:
         return
 
 
+@app.post("/admin/protocols/refresh")
+def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
+    current_ip = get_setting("current_ip")
+    if current_ip:
+        background_tasks.add_task(refresh_protocol_statuses, current_ip)
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/admin/stats/refresh")
 def admin_refresh_stats(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     background_tasks.add_task(_refresh_stats_background)
@@ -543,7 +551,6 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     current_ip = get_setting("current_ip")
     if not current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    protocols = await refresh_protocol_statuses(current_ip)
     base_url = str(request.base_url).rstrip("/")
     return templates.TemplateResponse(
         request,
@@ -551,7 +558,8 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         {
             "client": client,
             "current_ip": current_ip,
-            "protocols": protocols,
+            "protocols": get_protocol_statuses(),
+            "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",

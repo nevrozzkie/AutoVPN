@@ -37,39 +37,46 @@
   </section>
 </div>
 
-<h2>Статус протоколов</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Протокол</th>
-      <th>Порт</th>
-      <th>Статус</th>
-      <th>Последняя проверка</th>
-      <th>Если отвалился</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for protocol in protocols %}
+{% if protocol_status_available %}
+  <div class="section-title">
+    <h2>Статус протоколов</h2>
+    <form method="post" action="/admin/protocols/refresh" class="inline">
+      <button type="submit" title="Обновить статус протоколов">↻</button>
+    </form>
+  </div>
+  <table>
+    <thead>
       <tr>
-        <td>{{ protocol.name }}</td>
-        <td>{{ protocol.port or "later" }}</td>
-        <td class="{% if protocol.status == "OK" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
-          {{ protocol.status }}
-        </td>
-        <td>{{ protocol.last_checked_at or "" }}</td>
-        <td>
-          {% if protocol.failed_since %}
-            <span class="danger">Не работает с {{ protocol.failed_since }}</span>
-          {% elif protocol.last_ok_at %}
-            <span class="muted">Последний OK: {{ protocol.last_ok_at }}</span>
-          {% else %}
-            <span class="muted">Нет данных</span>
-          {% endif %}
-        </td>
+        <th>Протокол</th>
+        <th>Порт</th>
+        <th>Статус</th>
+        <th>Последняя проверка</th>
+        <th>Если отвалился</th>
       </tr>
-    {% endfor %}
-  </tbody>
-</table>
+    </thead>
+    <tbody>
+      {% for protocol in protocols %}
+        <tr>
+          <td>{{ protocol.name }}</td>
+          <td>{{ protocol.port or "later" }}</td>
+          <td class="{% if protocol.status == "OK" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
+            {{ protocol.status }}
+          </td>
+          <td>{{ protocol.last_checked_at or "" }}</td>
+          <td>
+            {% if protocol.failed_since %}
+              <span class="danger">Не работает с {{ protocol.failed_since }}</span>
+            {% elif protocol.last_ok_at %}
+              <span class="muted">Последний OK: {{ protocol.last_ok_at }}</span>
+            {% else %}
+              <span class="muted">Нет данных</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
 
 <h2>Клиенты</h2>
 <form method="post" action="/admin/clients" class="actions">
