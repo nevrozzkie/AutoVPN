@@ -181,9 +181,6 @@
     <a class="button" href="/admin/ip/confirm">Обновить IP</a>
     <a class="button" href="/admin/ip">Ручной режим IP</a>
   {% endif %}
-  <form method="post" action="/admin/reset-server" class="inline" onsubmit="return confirm('Сбросить всё о VPN-сервере и Aeza? Клиенты останутся, но current_ip, SSH/Aeza-настройки, статусы, статистика и история операций будут очищены.')">
-    <button type="submit" class="danger-button" {% if install_running or operation_running %}disabled{% endif %}>Сбросить сервер и Aeza</button>
-  </form>
 </div>
 
 {% if install_running %}

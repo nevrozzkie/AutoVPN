@@ -188,6 +188,8 @@ def setup_page(
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
             "setup_complete": setup_complete(),
+            "install_running": has_running_install_operation(),
+            "operation_running": has_running_operation(),
         },
     )
 

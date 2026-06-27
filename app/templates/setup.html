@@ -51,6 +51,14 @@
         gap: 12px;
       }
       .muted { color: #66707c; }
+      .danger { color: #b91c1c; }
+      .danger-button { background: #b91c1c; }
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
     </style>
   </head>
   <body>
@@ -134,6 +142,19 @@
 
         <button type="submit">Сохранить и открыть админку</button>
       </form>
+
+      {% if setup_complete %}
+        <section>
+          <h2>Сброс сервера и Aeza</h2>
+          <p class="muted">Очистит current IP, SSH/Aeza-настройки, статусы, статистику и историю операций. Клиенты, токены и ключи останутся.</p>
+          <form method="post" action="/admin/reset-server" class="actions" onsubmit="return confirm('Сбросить всё о VPN-сервере и Aeza? Клиенты останутся, но current_ip, SSH/Aeza-настройки, статусы, статистика и история операций будут очищены.')">
+            <button type="submit" class="danger-button" {% if install_running or operation_running %}disabled{% endif %}>Сбросить сервер и Aeza</button>
+            {% if install_running or operation_running %}
+              <span class="danger">Сейчас идёт операция, сброс временно недоступен.</span>
+            {% endif %}
+          </form>
+        </section>
+      {% endif %}
     </main>
   </body>
 </html>
