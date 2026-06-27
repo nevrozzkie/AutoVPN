@@ -521,6 +521,7 @@ def reset_server_and_aeza_state() -> None:
             WHERE key IN (
                 'current_ip',
                 'last_healthcheck_status',
+                'ssh.known_host_reset_last_output',
                 'stats.last_refresh_at',
                 'stats.last_error'
             )

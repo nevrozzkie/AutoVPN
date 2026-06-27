@@ -59,7 +59,7 @@
         <tr>
           <td>{{ protocol.name }}</td>
           <td>{{ protocol.port or "later" }}</td>
-          <td class="{% if protocol.status == "OK" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
+          <td class="{% if protocol.status == "OK" or protocol.status == "CONFIGURED_UDP" %}ok{% elif protocol.status == "FAILED" %}danger{% else %}muted{% endif %}">
             {{ protocol.status }}
           </td>
           <td>{{ protocol.last_checked_at|msk }}</td>
@@ -136,13 +136,6 @@
       <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH host key</button>
     </form>
   </section>
-{% endif %}
-
-{% if ssh_known_host_reset_last_output %}
-  <details class="panel technical-details">
-    <summary>SSH known_hosts</summary>
-    <pre>{{ ssh_known_host_reset_last_output }}</pre>
-  </details>
 {% endif %}
 
 {% if ssh_command %}

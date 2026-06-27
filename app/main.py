@@ -334,7 +334,6 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "latest_operation": get_latest_operation(),
             "latest_install_operation": latest_install_operation,
             "ssh_host_key_changed": ssh_host_key_changed,
-            "ssh_known_host_reset_last_output": get_setting("ssh.known_host_reset_last_output"),
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
             "auto_refresh": has_running_operation() or has_running_install_operation(),
@@ -542,10 +541,9 @@ def admin_forget_ssh_known_host(_: str = Depends(require_admin)) -> RedirectResp
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot change SSH known_hosts while install is running",
-        )
+    )
     host = resolve_eu_host()
-    output = forget_ssh_known_host(host)
-    set_setting("ssh.known_host_reset_last_output", output[-4000:])
+    forget_ssh_known_host(host)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 

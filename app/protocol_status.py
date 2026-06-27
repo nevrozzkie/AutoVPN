@@ -9,8 +9,8 @@ from app.health import tcp_check
 
 PROTOCOLS = [
     {"key": "vless", "name": "VLESS", "port": settings.vless_port, "enabled": True},
-    {"key": "hysteria", "name": "Hysteria", "port": settings.hysteria_port, "enabled": True},
-    {"key": "amnezia", "name": "AmneziaWG", "port": settings.amnezia_port, "enabled": True},
+    {"key": "hysteria", "name": "Hysteria", "port": settings.hysteria_port, "enabled": True, "udp": True},
+    {"key": "amnezia", "name": "AmneziaWG", "port": settings.amnezia_port, "enabled": True, "udp": True},
 ]
 
 
@@ -35,7 +35,12 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     check_tasks = []
     for protocol in PROTOCOLS:
         port = protocol["port"]
-        if current_ip and protocol["enabled"] and port is not None and protocol["key"] != "amnezia":
+        if (
+            current_ip
+            and protocol["enabled"]
+            and port is not None
+            and not protocol.get("udp")
+        ):
             check_tasks.append(tcp_check(current_ip, int(port)))
         else:
             check_tasks.append(None)
@@ -49,9 +54,11 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     for index, protocol in enumerate(PROTOCOLS):
         key = protocol["key"]
         if check_tasks[index] is None:
-            if protocol["key"] == "amnezia" and current_ip:
+            if protocol.get("udp") and current_ip:
                 status = "CONFIGURED_UDP"
                 set_setting(f"protocol.{key}.last_checked_at", checked_at)
+                set_setting(f"protocol.{key}.last_ok_at", checked_at)
+                set_setting(f"protocol.{key}.failed_since", "")
             else:
                 status = "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
         else:
