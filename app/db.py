@@ -470,6 +470,22 @@ def has_running_install_operation() -> bool:
         return row is not None
 
 
+def fail_incomplete_install_operations(reason: str) -> None:
+    timestamp = now_iso()
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE vpn_install_operations
+            SET status = 'FAILED',
+                current_step = 'interrupted',
+                error_message = ?,
+                updated_at = ?
+            WHERE status IN ('PENDING', 'RUNNING')
+            """,
+            (reason, timestamp),
+        )
+
+
 def create_install_operation(target_host: str) -> int:
     timestamp = now_iso()
     with get_db() as db:

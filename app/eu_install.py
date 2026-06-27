@@ -4,10 +4,10 @@ import asyncio
 import json
 import os
 import re
-import select
 import shlex
-import signal
 import socket
+import subprocess
+import tempfile
 import time
 from typing import Any
 
@@ -307,22 +307,6 @@ def _format_ssh_error(host: str, exc: Exception) -> str:
     return f"SSH connection failed for {target}: {message}"
 
 
-def _drain_fd(fd: int) -> bytes:
-    chunks: list[bytes] = []
-    while True:
-        readable, _, _ = select.select([fd], [], [], 0)
-        if not readable:
-            break
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
 def _redact_password(text: str, password: str) -> str:
     if not password:
         return text
@@ -330,77 +314,44 @@ def _redact_password(text: str, password: str) -> str:
 
 
 def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
-    import pty
-
     password = eu_ssh_password()
     if not password:
         raise EuInstallError("Configure EU_SSH_PASSWORD")
 
-    pid, master_fd = pty.fork()
-    if pid == 0:
-        try:
-            os.execvp("ssh", build_ssh_command(host, command))
-        except OSError:
-            os._exit(127)
-
-    chunks: list[bytes] = []
-    password_sent = False
-    host_confirmed = False
-    stdin_sent = not bool(stdin_data)
-    exit_status: int | None = None
+    askpass_path = ""
     try:
-        while True:
-            waited_pid, status = os.waitpid(pid, os.WNOHANG)
-            if waited_pid == pid:
-                exit_status = status
-                chunks.append(_drain_fd(master_fd))
-                break
+        with tempfile.NamedTemporaryFile("w", delete=False, prefix="autovpn-askpass-", dir=tempfile.gettempdir()) as file:
+            askpass_path = file.name
+            file.write("#!/bin/sh\n")
+            file.write("printf '%s\\n' \"$AUTOVPN_SSH_PASSWORD\"\n")
+        os.chmod(askpass_path, 0o700)
 
-            readable, _, _ = select.select([master_fd], [], [], 0.25)
-            if not readable:
-                continue
-
-            try:
-                chunk = os.read(master_fd, 4096)
-            except OSError:
-                waited_pid, status = os.waitpid(pid, os.WNOHANG)
-                if waited_pid == pid:
-                    exit_status = status
-                    break
-                raise
-            if not chunk:
-                continue
-            chunks.append(chunk)
-
-            recent = b"".join(chunks[-8:]).lower()
-            if not host_confirmed and (b"yes/no" in recent or b"fingerprint" in recent):
-                os.write(master_fd, b"yes\n")
-                host_confirmed = True
-
-            if not password_sent and (b"password:" in recent or b"password for" in recent):
-                os.write(master_fd, f"{password}\n".encode("utf-8"))
-                password_sent = True
-                if stdin_data and not stdin_sent:
-                    payload = stdin_data
-                    if not payload.endswith("\n"):
-                        payload += "\n"
-                    os.write(master_fd, payload.encode("utf-8"))
-                    os.write(master_fd, b"\x04")
-                    stdin_sent = True
-
-        output = b"".join(chunks).decode("utf-8", errors="replace")
-        exit_code = os.waitstatus_to_exitcode(exit_status) if exit_status is not None else 255
-        return exit_code, _redact_password(output, password)
-    except OSError as exc:
+        env = os.environ.copy()
+        env.update(
+            {
+                "AUTOVPN_SSH_PASSWORD": password,
+                "SSH_ASKPASS": askpass_path,
+                "SSH_ASKPASS_REQUIRE": "force",
+                "DISPLAY": env.get("DISPLAY") or "autovpn:0",
+            }
+        )
+        result = subprocess.run(
+            build_ssh_command(host, command),
+            input=stdin_data.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+            check=False,
+        )
+        output = result.stdout.decode("utf-8", errors="replace")
+        return result.returncode, _redact_password(output, password)
+    except (OSError, subprocess.SubprocessError) as exc:
         raise EuInstallError(f"OpenSSH password session failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}") from exc
     finally:
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        if exit_status is None:
+        if askpass_path:
             try:
-                os.kill(pid, signal.SIGTERM)
+                os.unlink(askpass_path)
             except OSError:
                 pass
 
@@ -491,6 +442,11 @@ async def run_eu_install(operation_id: int) -> None:
             status="RUNNING",
             target_host=host,
             current_step="ssh_connect",
+        )
+        update_install_operation(
+            operation_id,
+            current_step="remote_install_running",
+            output="Remote install started. It can take several minutes while apt, xray, hysteria and amneziawg are installed.",
         )
         exit_code, output = await asyncio.to_thread(_run_script_over_ssh, host, script)
         output_tail = output[-12000:]

@@ -30,6 +30,11 @@
       <div class="value">none</div>
     {% endif %}
   </section>
+  <section class="panel">
+    <div class="label">VPN VPS</div>
+    <div class="value">{{ target_host or "not configured" }}</div>
+    <div class="muted">Активных клиентов: {{ enabled_clients_count }}</div>
+  </section>
 </div>
 
 <h2>Статус протоколов</h2>
@@ -170,11 +175,9 @@
 <h2>Действия</h2>
 <div class="actions action-bar">
   <form method="post" action="/admin/install/run" class="inline">
-    <button type="submit" {% if install_running %}disabled{% endif %}>Обновить клиентов на VPN</button>
+    <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  <form method="post" action="/admin/install/run" class="inline">
-    <button type="submit" {% if install_running %}disabled{% endif %}>Установить VPN</button>
-  </form>
+  <a href="/admin/install/script">Скачать install script</a>
   {% if operation_running or not aeza_ip_rotation_available %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
@@ -185,6 +188,8 @@
 
 {% if install_running %}
   <p class="muted">Установка или синхронизация уже выполняется.</p>
+{% elif not target_host %}
+  <p class="muted">Для установки VPN укажите текущий IP VPN или SSH host на странице /setup.</p>
 {% endif %}
 
 {% if operation_running %}
@@ -210,5 +215,18 @@
 {% if latest_install_operation and latest_install_operation.error_message %}
   <h2>Last install error</h2>
   <section class="panel danger">{{ latest_install_operation.error_message }}</section>
+{% endif %}
+
+{% if ssh_command %}
+  <h2>SSH diagnostic</h2>
+  <section class="panel">
+    <code>{{ ssh_command }}</code>
+    <p class="muted">Это только проверка SSH. AutoVPN устанавливает VPN отдельно, отправляя install script через stdin.</p>
+  </section>
+{% endif %}
+
+{% if latest_install_operation and latest_install_operation.output %}
+  <h2>Last install output</h2>
+  <pre>{{ latest_install_operation.output }}</pre>
 {% endif %}
 {% endblock %}

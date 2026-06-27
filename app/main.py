@@ -16,6 +16,7 @@ from app.db import (
     create_install_operation,
     create_operation,
     delete_client,
+    fail_incomplete_install_operations,
     get_client_by_id,
     get_client_by_token,
     get_latest_install_operation,
@@ -112,6 +113,9 @@ def format_eur_minor_units(value: object) -> str:
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    fail_incomplete_install_operations(
+        "AutoVPN was restarted while this install operation was still running. Start install/sync again."
+    )
 
 
 def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -264,11 +268,15 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     current_ip = get_setting("current_ip")
     protocols = await refresh_protocol_statuses(current_ip)
     clients = list_clients_with_stats()
+    target_host = resolve_eu_host()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
             "current_ip": current_ip,
+            "target_host": target_host,
+            "ssh_command": describe_ssh_command(target_host) if target_host else "",
+            "enabled_clients_count": len([client for client in clients if client["enabled"]]),
             "protocols": protocols,
             "clients": clients,
             "base_url": str(request.base_url).rstrip("/"),
@@ -461,23 +469,9 @@ def admin_operations(request: Request, _: str = Depends(require_admin)) -> HTMLR
     )
 
 
-@app.get("/admin/install", response_class=HTMLResponse)
-def admin_install(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
-    host = resolve_eu_host()
-    ssh_command = ""
-    if host:
-        ssh_command = describe_ssh_command(host)
-    return templates.TemplateResponse(
-        request,
-        "install.html",
-        {
-            "target_host": host,
-            "ssh_command": ssh_command,
-            "enabled_clients": [client for client in list_clients() if client["enabled"]],
-            "latest_install_operation": get_latest_install_operation(),
-            "install_running": has_running_install_operation(),
-        },
-    )
+@app.get("/admin/install")
+def admin_install_redirect(_: str = Depends(require_admin)) -> RedirectResponse:
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/admin/install/script", response_class=PlainTextResponse)
