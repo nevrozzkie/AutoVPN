@@ -76,111 +76,15 @@
       {% endfor %}
     </tbody>
   </table>
+{% else %}
+  <section class="panel muted">
+    Статус протоколов появится после успешной установки или синхронизации VPN на текущем VPS.
+  </section>
 {% endif %}
-
-<h2>Клиенты</h2>
-<form method="post" action="/admin/clients" class="actions">
-  <input type="text" name="name" placeholder="Имя, например Мама" required>
-  <input type="submit" value="Добавить клиента">
-</form>
-<form method="post" action="/admin/stats/refresh" class="actions">
-  <button type="submit">Обновить статистику</button>
-  {% if stats_last_refresh_at %}
-    <span class="muted">Последнее обновление: {{ stats_last_refresh_at }}</span>
-  {% endif %}
-</form>
-{% if stats_last_error %}
-  <section class="panel danger">Ошибка обновления статистики: {{ stats_last_error }}</section>
-{% endif %}
-
-<section class="client-list">
-  {% for client in clients %}
-    <details class="panel client-details">
-      <summary>
-        <strong>{{ client.name }}</strong>
-        <span class="muted">{{ "enabled" if client.enabled else "disabled" }}</span>
-        <span class="muted">
-          VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
-        </span>
-        <span class="muted">
-          Amnezia: ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
-        </span>
-        {% if client.stats_last_seen_at %}
-          <span class="ok">last seen {{ client.stats_last_seen_at }}</span>
-        {% else %}
-          <span class="muted">not seen yet</span>
-        {% endif %}
-      </summary>
-
-      <div class="client-grid">
-        <form method="post" action="/admin/clients/{{ client.id }}/rename">
-          <label class="label" for="client-name-{{ client.id }}">Имя</label>
-          <input id="client-name-{{ client.id }}" type="text" name="name" value="{{ client.name }}" required>
-          <input type="submit" value="Сохранить">
-        </form>
-
-        <div>
-          <div class="label">Страница клиента</div>
-          <code>{{ base_url }}/client/{{ client.token }}</code>
-        </div>
-        <div>
-          <div class="label">Подписка</div>
-          <code>{{ base_url }}/sub/{{ client.token }}</code>
-        </div>
-        <div>
-          <div class="label">VLESS UUID</div>
-          <code>{{ client.vless_uuid }}</code>
-        </div>
-        <div>
-          <div class="label">Hysteria password</div>
-          <code>{{ client.hysteria_password }}</code>
-        </div>
-        <div>
-          <div class="label">VLESS traffic</div>
-          ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
-          <br><span class="muted">Updated: {{ client.stats_updated_at or "never" }}</span>
-        </div>
-        <div>
-          <div class="label">AmneziaWG traffic</div>
-          ↓ {{ format_bytes(client.amnezia_rx) }} · ↑ {{ format_bytes(client.amnezia_tx) }}
-          {% if client.amnezia_latest_handshake %}
-            <br><span class="muted">Latest handshake: {{ client.amnezia_latest_handshake }}</span>
-          {% else %}
-            <br><span class="muted">No handshake yet</span>
-          {% endif %}
-        </div>
-        <div>
-          <div class="label">Online status</div>
-          {% if client.stats_last_seen_at %}
-            <span class="ok">Active recently: {{ client.stats_last_seen_at }}</span>
-          {% else %}
-            <span class="muted">No traffic seen yet</span>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="actions">
-        {% if client.enabled %}
-          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/disable">
-            <button type="submit">Отключить</button>
-          </form>
-        {% else %}
-          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/enable">
-            <button type="submit">Включить</button>
-          </form>
-        {% endif %}
-        <form class="inline" method="post" action="/admin/clients/{{ client.id }}/delete" onsubmit="return confirm('Удалить клиента {{ client.name }}? После этого его подписка перестанет работать.')">
-          <button type="submit" class="danger-button">Удалить</button>
-        </form>
-      </div>
-    </details>
-  {% else %}
-    <section class="panel muted">Клиентов пока нет</section>
-  {% endfor %}
-</section>
 
 <h2>Действия</h2>
 <div class="actions action-bar">
+  <a class="button" href="/admin/clients">Клиенты</a>
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>

@@ -266,8 +266,16 @@ def healthz() -> dict[str, str]:
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     current_ip = get_setting("current_ip")
-    clients = list_clients_with_stats()
+    clients = list_clients()
     target_host = resolve_eu_host()
+    latest_install_operation = get_latest_install_operation()
+    protocol_status_available = bool(
+        current_ip
+        and target_host
+        and latest_install_operation
+        and latest_install_operation["status"] == "DONE"
+        and latest_install_operation["target_host"] == target_host
+    )
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -276,20 +284,16 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "target_host": target_host,
             "ssh_command": describe_ssh_command(target_host) if target_host else "",
             "enabled_clients_count": len([client for client in clients if client["enabled"]]),
-            "protocols": get_protocol_statuses() if current_ip else [],
-            "protocol_status_available": bool(current_ip),
-            "clients": clients,
+            "protocols": get_protocol_statuses() if protocol_status_available else [],
+            "protocol_status_available": protocol_status_available,
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
-            "latest_install_operation": get_latest_install_operation(),
+            "latest_install_operation": latest_install_operation,
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
-            "format_bytes": format_bytes,
-            "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
-            "stats_last_error": get_setting("stats.last_error"),
         },
     )
 
@@ -414,8 +418,11 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
         request,
         "clients.html",
         {
-            "clients": list_clients(),
+            "clients": list_clients_with_stats(),
             "base_url": str(request.base_url).rstrip("/"),
+            "format_bytes": format_bytes,
+            "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
+            "stats_last_error": get_setting("stats.last_error"),
         },
     )
 
@@ -426,7 +433,7 @@ def admin_create_client(
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
     create_client(name.strip())
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/clients/{client_id}/rename")
@@ -436,25 +443,25 @@ def admin_rename_client(
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
     update_client_name(client_id, name.strip())
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/clients/{client_id}/enable")
 def admin_enable_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
     set_client_enabled(client_id, True)
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/clients/{client_id}/disable")
 def admin_disable_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
     set_client_enabled(client_id, False)
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/clients/{client_id}/delete")
 def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
     delete_client(client_id)
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/admin/operations", response_class=HTMLResponse)
@@ -503,7 +510,15 @@ async def _run_install_background(operation_id: int) -> None:
 @app.post("/admin/protocols/refresh")
 def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     current_ip = get_setting("current_ip")
-    if current_ip:
+    target_host = resolve_eu_host()
+    latest_install_operation = get_latest_install_operation()
+    if (
+        current_ip
+        and target_host
+        and latest_install_operation
+        and latest_install_operation["status"] == "DONE"
+        and latest_install_operation["target_host"] == target_host
+    ):
         background_tasks.add_task(refresh_protocol_statuses, current_ip)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
