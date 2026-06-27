@@ -5,6 +5,7 @@ import json
 import re
 import shlex
 import socket
+import time
 from typing import Any
 
 from app.config import settings
@@ -271,21 +272,21 @@ def _format_ssh_error(host: str, exc: Exception) -> str:
     target = f"{eu_ssh_user()}@{host}:{eu_ssh_port()}"
     message = str(exc) or exc.__class__.__name__
     if "Error reading SSH protocol banner" in message or "No existing session" in message:
-        hint = (
-            f"SSH handshake failed for {target}: TCP connection opened, but the server did not "
-            "send a valid SSH banner. Check that this is the VPS public IP, SSH is listening on "
-            "this port, firewall allows it, and the VPS is fully booted."
-        )
+        hint = f"SSH handshake failed for {target}: Paramiko could not complete the SSH handshake."
         try:
             banner = _probe_ssh_banner(host)
         except socket.timeout:
-            return f"{hint} TCP probe timed out while waiting for SSH banner."
+            return f"{hint} TCP probe timed out while waiting for SSH banner. Check firewall and SSH service status."
         except EOFError:
             return f"{hint} TCP probe connected, but the server closed the connection immediately."
         except OSError as probe_exc:
             return f"{hint} TCP probe failed: {probe_exc}."
         if banner.startswith("SSH-"):
-            return f"{hint} TCP probe saw SSH banner {banner!r}, so retrying later may help."
+            return (
+                f"{hint} TCP probe saw SSH banner {banner!r}. "
+                "The port is SSH, so this is likely a transient server-side drop/rate-limit or Paramiko compatibility issue. "
+                "Retry in a minute; if it repeats, try SSH key auth or verify password login with ssh -vvv."
+            )
         if banner:
             return f"{hint} TCP probe received non-SSH data: {banner[:120]!r}."
         return f"{hint} TCP probe received an empty response."
@@ -302,15 +303,13 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     if not password and not key_path:
         raise EuInstallError("Configure EU_SSH_PASSWORD or EU_SSH_KEY_PATH")
 
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
         "port": eu_ssh_port(),
         "username": eu_ssh_user(),
         "timeout": ssh_connect_timeout_seconds(),
-        "banner_timeout": ssh_connect_timeout_seconds(),
-        "auth_timeout": ssh_connect_timeout_seconds(),
+        "banner_timeout": max(30, ssh_connect_timeout_seconds()),
+        "auth_timeout": max(30, ssh_connect_timeout_seconds()),
         "look_for_keys": False,
         "allow_agent": False,
     }
@@ -319,49 +318,40 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     else:
         connect_kwargs["key_filename"] = key_path
 
-    try:
-        banner = _probe_ssh_banner(host)
-        if not banner:
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            ssh.connect(**connect_kwargs)
+            stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
+            if stdin_data:
+                stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
+            output = stdout.read().decode("utf-8", errors="replace")
+            error_output = stderr.read().decode("utf-8", errors="replace")
+            exit_code = stdout.channel.recv_exit_status()
+            return exit_code, output + error_output
+        except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as exc:
             raise EuInstallError(
-                f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
-                "TCP connection opened, but the server closed it before sending an SSH banner. "
-                "Check that SSH is running on this port and the VPS is fully booted."
+                f"SSH authentication failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}. "
+                "Check SSH username and password/key in /setup."
+            ) from exc
+        except (paramiko.SSHException, socket.error, TimeoutError, EOFError) as exc:
+            last_exc = exc
+            message = str(exc)
+            transient_banner_error = (
+                "Error reading SSH protocol banner" in message
+                or "No existing session" in message
             )
-        if not banner.startswith("SSH-"):
-            raise EuInstallError(
-                f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
-                f"port is open, but it does not look like SSH. Received: {banner[:120]!r}"
-            )
-    except (socket.timeout, TimeoutError) as exc:
-        raise EuInstallError(
-            f"SSH handshake failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
-            "TCP connection opened, but no SSH banner arrived before timeout. "
-            "Check firewall, SSH service status, and whether the VPS is still booting."
-        ) from exc
-    except OSError as exc:
-        raise EuInstallError(_format_ssh_error(host, exc)) from exc
+            if transient_banner_error and attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise EuInstallError(_format_ssh_error(host, exc)) from exc
+        finally:
+            ssh.close()
 
-    try:
-        ssh.connect(**connect_kwargs)
-        stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
-        if stdin_data:
-            stdin.write(stdin_data)
-        stdin.channel.shutdown_write()
-        output = stdout.read().decode("utf-8", errors="replace")
-        error_output = stderr.read().decode("utf-8", errors="replace")
-        exit_code = stdout.channel.recv_exit_status()
-        return exit_code, output + error_output
-    except EuInstallError:
-        raise
-    except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as exc:
-        raise EuInstallError(
-            f"SSH authentication failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}. "
-            "Check SSH username and password/key in /setup."
-        ) from exc
-    except (paramiko.SSHException, socket.error, TimeoutError, EOFError) as exc:
-        raise EuInstallError(_format_ssh_error(host, exc)) from exc
-    finally:
-        ssh.close()
+    raise EuInstallError(_format_ssh_error(host, last_exc or RuntimeError("unknown SSH error")))
 
 
 def _run_script_over_ssh(host: str, script: str) -> tuple[int, str]:
