@@ -12,15 +12,8 @@ from app.runtime_config import amnezia_port, hysteria_port, vless_port
 #   * a network probe from the control plane (tcp/udp reachability), and
 #   * a server-side "deep" check over SSH (real handshake / liveness).
 #
-# Hysteria is shown as TWO rows on purpose:
-#   * hysteria_quic        -> is the UDP port reachable and is hysteria-server
-#                             actually running ("transport / QUIC" layer);
-#   * hysteria_salamander  -> does a real Hysteria 2 client WITH Salamander
-#                             obfuscation complete the handshake and proxy
-#                             traffic ("obfuscated tunnel" layer).
-# Both probes run from the control plane / VPS, so neither can observe TSPU
-# blocking on the path to the end client. A green tunnel here means the server
-# is configured correctly, not that it is reachable from inside Russia.
+# Hysteria is tracked in two internal rows: service liveness and a full tunnel
+# check. The client page shows only the tunnel row with a plain product name.
 PROTOCOLS = [
     {
         "key": "vless",
@@ -43,13 +36,12 @@ PROTOCOLS = [
     },
     {
         "key": "hysteria_salamander",
-        "name": "Hysteria · туннель (Salamander)",
+        "name": "Hysteria · туннель",
         "port": hysteria_port,
         "enabled": True,
         "probe": None,
         "deep_key": "hysteria_salamander",
         "kind": "hysteria_tunnel",
-        "note": "Проверка с VPS, не учитывает блокировку ТСПУ на пути до клиента.",
     },
     {
         "key": "amnezia",
@@ -89,6 +81,17 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
     return statuses
 
 
+def get_client_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
+    statuses = []
+    for status in get_protocol_statuses():
+        if status["key"] == "hysteria_quic":
+            continue
+        if status["key"] == "hysteria_salamander":
+            status = {**status, "name": "Hysteria", "note": ""}
+        statuses.append(status)
+    return statuses
+
+
 def _compute_status(protocol: dict, probe_ok: bool | None, deep: DeepCheckResult | None) -> str:
     kind = protocol["kind"]
     if kind == "hysteria_service":
@@ -101,7 +104,7 @@ def _compute_status(protocol: dict, probe_ok: bool | None, deep: DeepCheckResult
             return "UDP_PACKET_SENT"
         return "FAILED"
     if kind == "hysteria_tunnel":
-        # "Salamander" row: purely the obfuscated end-to-end deep check.
+        # Tunnel row: purely the end-to-end deep check.
         if deep is None:
             return "UNKNOWN"
         return "VERIFIED" if deep.verified else "FAILED"
@@ -132,7 +135,7 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
         elif current_ip and protocol["enabled"] and protocol["probe"] == "udp":
             probe_tasks.append(asyncio.create_task(udp_probe(current_ip, int(port))))
         else:
-            # No network probe (e.g. the Salamander tunnel row).
+            # No network probe for tunnel-only rows.
             probe_tasks.append(None)
 
     gathered = await asyncio.gather(

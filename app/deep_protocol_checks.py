@@ -220,7 +220,7 @@ def parse_deep_check_output(output: str) -> dict[str, DeepCheckResult]:
             results["hysteria_salamander"] = DeepCheckResult(True)
         elif line == "HYSTERIA_DEEP=FAILED":
             results["hysteria_salamander"] = DeepCheckResult(
-                False, "Salamander tunnel handshake failed (check obfs/auth password)"
+                False, "Hysteria tunnel handshake failed"
             )
         elif line == "AMNEZIA_DEEP=VERIFIED":
             results["amnezia"] = DeepCheckResult(True)

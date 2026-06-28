@@ -46,7 +46,7 @@ from app.eu_install import (
     run_eu_install,
 )
 from app.ip_change import apply_manual_main_ip, run_ip_change
-from app.protocol_status import get_protocol_statuses, refresh_protocol_statuses
+from app.protocol_status import get_client_protocol_statuses, get_protocol_statuses, refresh_protocol_statuses
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -459,6 +459,11 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
+def robots_txt() -> PlainTextResponse:
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     current_ip = get_setting("current_ip")
@@ -843,7 +848,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "client": client,
             "current_ip": current_ip,
             "config_updated_at": get_setting("vpn.config_updated_at"),
-            "protocols": get_protocol_statuses(),
+            "protocols": get_client_protocol_statuses(),
             "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",

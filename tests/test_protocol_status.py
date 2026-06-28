@@ -7,7 +7,7 @@ os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 from app.db import init_db, set_setting
 from app.deep_protocol_checks import DeepCheckResult
 from app.health import ProbeResult
-from app.protocol_status import refresh_protocol_statuses
+from app.protocol_status import get_client_protocol_statuses, refresh_protocol_statuses
 
 
 def test_refresh_protocol_statuses_checks_udp_protocol_pings(monkeypatch) -> None:
@@ -161,5 +161,22 @@ def test_refresh_protocol_statuses_isolates_salamander_failure(monkeypatch) -> N
 
         assert by_key["hysteria_quic"]["status"] == "SERVICE_ACTIVE"
         assert by_key["hysteria_salamander"]["status"] == "FAILED"
+    finally:
+        set_setting("config.hysteria_enabled", "0")
+
+
+def test_client_protocol_statuses_show_single_plain_hysteria_row(monkeypatch) -> None:
+    init_db()
+    set_setting("config.hysteria_enabled", "1")
+    set_setting("protocol.hysteria_quic.status", "SERVICE_ACTIVE")
+    set_setting("protocol.hysteria_salamander.status", "VERIFIED")
+
+    try:
+        statuses = get_client_protocol_statuses()
+        by_key = {status["key"]: status for status in statuses}
+
+        assert "hysteria_quic" not in by_key
+        assert by_key["hysteria_salamander"]["name"] == "Hysteria"
+        assert by_key["hysteria_salamander"].get("note") == ""
     finally:
         set_setting("config.hysteria_enabled", "0")

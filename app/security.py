@@ -241,6 +241,7 @@ def csrf_failure_detail(request) -> str:  # type: ignore[no-untyped-def]
 SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex, nofollow, noarchive",
     "Referrer-Policy": "no-referrer",
     # Inline scripts/styles and onclick handlers are used in templates, so
     # 'unsafe-inline' is required for now. frame-ancestors 'none' is the

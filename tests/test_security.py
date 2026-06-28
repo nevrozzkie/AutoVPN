@@ -42,7 +42,17 @@ def test_security_headers_present() -> None:
     response = client.get("/healthz")
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive"
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+
+
+def test_robots_txt_disallows_all() -> None:
+    client = _client()
+    response = client.get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.text == "User-agent: *\nDisallow: /\n"
+    assert response.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive"
 
 
 def test_hashed_login_authenticates() -> None:

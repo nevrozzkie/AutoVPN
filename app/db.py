@@ -209,9 +209,8 @@ def _ensure_hysteria_settings(db: sqlite3.Connection) -> None:
         client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
         password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
         _set_setting(db, "hysteria.password", password)
-    # Salamander obfuscation password. Required to get Hysteria through DPI
-    # systems that throttle/block plain QUIC/HTTP3 (e.g. Russian TSPU). Must be
-    # identical on server and client; both are generated from this value.
+    # Hysteria transport password. Must be identical on server and client;
+    # both configs are generated from this value.
     if not _setting(db, "hysteria.obfs_password"):
         _set_setting(db, "hysteria.obfs_password", secrets.token_urlsafe(16))
 
