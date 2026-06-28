@@ -128,7 +128,7 @@ def vless_port() -> int | None:
 
 
 def hysteria_port() -> int | None:
-    return protocol_port("hysteria", settings.hysteria_port, False)
+    return protocol_port("hysteria", settings.hysteria_port, True)
 
 
 def amnezia_port() -> int | None:
@@ -152,7 +152,7 @@ def vless_enabled() -> bool:
 
 
 def hysteria_enabled() -> bool:
-    return protocol_enabled("hysteria", False)
+    return protocol_enabled("hysteria", True)
 
 
 def amnezia_enabled() -> bool:

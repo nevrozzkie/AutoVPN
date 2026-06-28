@@ -20,7 +20,7 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
-    assert "hy2://" not in subscription
+    assert f"hy2://{get_setting('hysteria.password')}@" in subscription
     assert "hysteria2://" not in subscription
 
 
@@ -33,14 +33,15 @@ def test_sing_box_subscription_contains_enabled_protocols() -> None:
 
     assert subscription["inbounds"][0]["type"] == "tun"
     assert outbounds["proxy"]["type"] == "selector"
-    assert outbounds["proxy"]["outbounds"] == ["vless-reality"]
+    assert outbounds["proxy"]["outbounds"] == ["vless-reality", "hysteria2"]
+    assert outbounds["proxy"]["default"] == "vless-reality"
     assert outbounds["vless-reality"]["type"] == "vless"
     assert outbounds["vless-reality"]["server"] == "203.0.113.10"
     assert outbounds["vless-reality"]["server_port"] == settings.vless_port
     assert outbounds["vless-reality"]["uuid"] == client["vless_uuid"]
     assert outbounds["vless-reality"]["flow"] == "xtls-rprx-vision"
     assert outbounds["vless-reality"]["tls"]["reality"]["enabled"] is True
-    assert "hysteria2" not in outbounds
+    assert outbounds["hysteria2"]["type"] == "hysteria2"
 
 
 def test_subscriptions_include_hysteria_when_enabled() -> None:
