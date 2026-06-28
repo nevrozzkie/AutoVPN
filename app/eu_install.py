@@ -89,6 +89,7 @@ def build_eu_install_script() -> str:
         for client in clients
     ]
     hysteria_password = get_setting("hysteria.password")
+    hysteria_obfs_password = get_setting("hysteria.obfs_password")
 
     xray_config = {
         "log": {"loglevel": "warning"},
@@ -191,6 +192,11 @@ tls:
 auth:
   type: password
   password: {json.dumps(hysteria_password)}
+
+obfs:
+  type: salamander
+  salamander:
+    password: {json.dumps(hysteria_obfs_password)}
 
 masquerade:
   type: proxy
@@ -505,6 +511,50 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
                 pass
 
 
+def _known_hosts_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".ssh", "known_hosts")
+
+
+def _build_verified_ssh_client(paramiko):  # type: ignore[no-untyped-def]
+    """Build an SSHClient that pins host keys (TOFU / accept-new).
+
+    The host key is recorded in ~/.ssh/known_hosts on first contact and the
+    connection is REJECTED if a previously seen host presents a different key
+    (paramiko raises BadHostKeyException once known_hosts is loaded). This is
+    the same trust-on-first-use model the OpenSSH path uses with
+    StrictHostKeyChecking=accept-new, and it shares the same known_hosts file,
+    so the existing "forget SSH host key" action clears both paths.
+    """
+
+    class _AcceptNewHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+        def missing_host_key(self, client, hostname, key):  # type: ignore[no-untyped-def]
+            client.get_host_keys().add(hostname, key.get_name(), key)
+            filename = getattr(client, "_host_keys_filename", None)
+            if filename:
+                try:
+                    client.save_host_keys(filename)
+                except OSError:
+                    pass
+
+    ssh = paramiko.SSHClient()
+    known_hosts = _known_hosts_path()
+    try:
+        os.makedirs(os.path.dirname(known_hosts), mode=0o700, exist_ok=True)
+        if not os.path.exists(known_hosts):
+            # Create an empty file so paramiko can persist newly pinned keys.
+            with open(known_hosts, "a", encoding="utf-8"):
+                pass
+            os.chmod(known_hosts, 0o600)
+        ssh.load_host_keys(known_hosts)
+    except OSError:
+        # If known_hosts cannot be prepared we still refuse to blindly trust:
+        # without a persistent store, fall back to rejecting unknown hosts.
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        return ssh
+    ssh.set_missing_host_key_policy(_AcceptNewHostKeyPolicy())
+    return ssh
+
+
 def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     import paramiko
 
@@ -535,8 +585,7 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
 
     last_exc: Exception | None = None
     for attempt in range(1, 4):
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh = _build_verified_ssh_client(paramiko)
         try:
             ssh.connect(**connect_kwargs)
             stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
@@ -547,6 +596,13 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
             error_output = stderr.read().decode("utf-8", errors="replace")
             exit_code = stdout.channel.recv_exit_status()
             return exit_code, output + error_output
+        except paramiko.BadHostKeyException as exc:
+            raise EuInstallError(
+                f"Host key verification failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
+                f"the server presented a different SSH host key than the one previously pinned "
+                f"({exc}). This may be a server reinstall/replacement — or a man-in-the-middle. "
+                "If you are sure the VPS was rebuilt, use 'forget SSH host key' and retry."
+            ) from exc
         except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as exc:
             raise EuInstallError(
                 f"SSH authentication failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}. "

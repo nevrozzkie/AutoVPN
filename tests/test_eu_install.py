@@ -23,6 +23,8 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert f"client{client['id']}" not in script
     assert f"password: {get_setting('hysteria.password')!r}".replace("'", '"') in script
     assert "type: password" in script
+    assert "type: salamander" in script
+    assert get_setting("hysteria.obfs_password") in script
     assert "userpass:" not in script
     assert "systemctl restart xray" in script
     assert "systemctl restart hysteria-server" in script

@@ -155,6 +155,58 @@ print(secrets.token_urlsafe(32))
 PY
 }
 
+read_value() {
+  local _prompt="$1" _default="${2:-}" _v=""
+  if [ -e /dev/tty ]; then
+    if [ -n "$_default" ]; then
+      printf '%s [%s]: ' "$_prompt" "$_default" >/dev/tty
+    else
+      printf '%s: ' "$_prompt" >/dev/tty
+    fi
+    IFS= read -r _v </dev/tty || _v=""
+  fi
+  printf '%s' "${_v:-$_default}"
+}
+
+read_secret() {
+  local _prompt="$1" _v=""
+  if [ -e /dev/tty ]; then
+    printf '%s: ' "$_prompt" >/dev/tty
+    IFS= read -r -s _v </dev/tty || _v=""
+    printf '\n' >/dev/tty
+  fi
+  printf '%s' "$_v"
+}
+
+collect_admin_credentials() {
+  if [ -z "${ADMIN_USERNAME:-}" ]; then
+    ADMIN_USERNAME="$(read_value "Admin username" "admin")"
+  fi
+  ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+  if [ -z "${ADMIN_PASSWORD:-}" ]; then
+    if [ ! -e /dev/tty ]; then
+      echo "ERROR: admin password is required. Pass --admin-password or set ADMIN_PASSWORD (no interactive terminal)." >&2
+      exit 1
+    fi
+    local _p1 _p2
+    while true; do
+      _p1="$(read_secret "Admin password")"
+      _p2="$(read_secret "Confirm admin password")"
+      if [ -z "$_p1" ]; then
+        echo "Password cannot be empty." >&2
+        continue
+      fi
+      if [ "$_p1" != "$_p2" ]; then
+        echo "Passwords do not match, please try again." >&2
+        continue
+      fi
+      ADMIN_PASSWORD="$_p1"
+      break
+    done
+  fi
+  export ADMIN_USERNAME ADMIN_PASSWORD
+}
+
 sanitize_env_value() {
   printf "%s" "$1" | LC_ALL=C tr -d '[:cntrl:]'
 }
@@ -225,7 +277,8 @@ write_env_file() {
     env_line APP_PORT "$APP_PORT"
     env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
     env_line ADMIN_USERNAME "$admin_username"
-    env_line ADMIN_PASSWORD "$admin_password"
+    # ADMIN_PASSWORD is intentionally NOT written here. It is stored as a
+    # salted scrypt hash in the database by init_local_db().
     echo
     env_line AEZA_API_BASE "https://my.aeza.net"
     env_line AEZA_TOKEN "$aeza_token"
@@ -320,11 +373,16 @@ init_local_db() {
   "$APP_DIR/.venv/bin/python" - <<'PY'
 import os
 from app.db import init_db, set_setting
+from app.security import hash_password
 
 init_db()
 current_ip = os.getenv("AUTOVPN_INITIAL_CURRENT_IP", "")
 if current_ip:
     set_setting("current_ip", current_ip)
+set_setting("config.admin_username", os.environ.get("ADMIN_USERNAME") or "admin")
+admin_password = os.environ.get("ADMIN_PASSWORD", "")
+if admin_password:
+    set_setting("config.admin_password", hash_password(admin_password))
 PY
 }
 
@@ -333,6 +391,7 @@ main() {
   echo "[autovpn] local installer"
   require_command git "Install git first."
   require_command python3 "Install Python 3.12+ first."
+  collect_admin_credentials
   prepare_source
   cd "$APP_DIR"
   write_env_file

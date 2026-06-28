@@ -21,6 +21,10 @@
   <section class="panel danger">{{ error }}</section>
 {% endif %}
 
+{% if synced_main_ip %}
+  <section class="panel ok">AutoVPN обновил текущий IP по данным Aeza: {{ synced_main_ip }}</section>
+{% endif %}
+
 <p class="muted">Новокупленный IPv4 может появиться в списке с задержкой примерно 1-2 минуты.</p>
 
 <div class="actions action-bar">

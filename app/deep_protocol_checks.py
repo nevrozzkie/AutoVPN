@@ -35,7 +35,8 @@ async def run_deep_protocol_checks(current_ip: str) -> dict[str, DeepCheckResult
     if exit_code != 0:
         return {
             "vless": DeepCheckResult(False, "deep check failed over SSH"),
-            "hysteria": DeepCheckResult(False, "deep check failed over SSH"),
+            "hysteria_quic": DeepCheckResult(False, "deep check failed over SSH"),
+            "hysteria_salamander": DeepCheckResult(False, "deep check failed over SSH"),
         }
     return parse_deep_check_output(output)
 
@@ -93,6 +94,15 @@ def build_deep_check_script(client: dict, current_ip: str) -> str:
             ],
         }
     current_hysteria_port = hysteria_port()
+    hysteria_obfs_password = get_setting("hysteria.obfs_password")
+    hysteria_obfs_yaml = ""
+    if hysteria_obfs_password:
+        hysteria_obfs_yaml = (
+            "obfs:\n"
+            "  type: salamander\n"
+            "  salamander:\n"
+            f"    password: {shlex.quote(hysteria_obfs_password)}\n"
+        )
 
     return f"""#!/usr/bin/env bash
 set +e
@@ -139,11 +149,21 @@ else
   echo "VLESS_DEEP=UNAVAILABLE"
 fi
 
+if [ {shlex.quote("1" if current_hysteria_port is not None else "0")} = "1" ]; then
+  if systemctl is-active --quiet hysteria-server 2>/dev/null; then
+    echo "HYSTERIA_SERVICE=active"
+  else
+    echo "HYSTERIA_SERVICE=inactive"
+  fi
+else
+  echo "HYSTERIA_SERVICE=UNAVAILABLE"
+fi
+
 if [ {shlex.quote("1" if current_hysteria_port is not None else "0")} = "1" ] && command -v curl >/dev/null 2>&1 && command -v hysteria >/dev/null 2>&1; then
   cat >"$WORKDIR/hysteria.yaml" <<'YAML'
 server: {shlex.quote(f"{current_ip}:{current_hysteria_port}" if current_hysteria_port is not None else "")}
 auth: {shlex.quote(hysteria_auth(client))}
-tls:
+{hysteria_obfs_yaml}tls:
   sni: {shlex.quote(settings.vless_reality_server_name)}
   insecure: true
 socks5:
@@ -192,10 +212,16 @@ def parse_deep_check_output(output: str) -> dict[str, DeepCheckResult]:
             results["vless"] = DeepCheckResult(True)
         elif line == "VLESS_DEEP=FAILED":
             results["vless"] = DeepCheckResult(False, "request through VLESS failed")
+        elif line == "HYSTERIA_SERVICE=active":
+            results["hysteria_quic"] = DeepCheckResult(True)
+        elif line == "HYSTERIA_SERVICE=inactive":
+            results["hysteria_quic"] = DeepCheckResult(False, "hysteria-server is not active")
         elif line == "HYSTERIA_DEEP=VERIFIED":
-            continue
+            results["hysteria_salamander"] = DeepCheckResult(True)
         elif line == "HYSTERIA_DEEP=FAILED":
-            continue
+            results["hysteria_salamander"] = DeepCheckResult(
+                False, "Salamander tunnel handshake failed (check obfs/auth password)"
+            )
         elif line == "AMNEZIA_DEEP=VERIFIED":
             results["amnezia"] = DeepCheckResult(True)
         elif line == "AMNEZIA_DEEP=FAILED":

@@ -72,7 +72,6 @@ function Write-EnvFile([string]$Path, [hashtable]$Values) {
         "APP_PORT=$($Values.APP_PORT)",
         "DATABASE_PATH=$($Values.DATABASE_PATH)",
         "ADMIN_USERNAME=$($Values.ADMIN_USERNAME)",
-        "ADMIN_PASSWORD=$($Values.ADMIN_PASSWORD)",
         "",
         "AEZA_API_BASE=https://my.aeza.net",
         "AEZA_TOKEN=$($Values.AEZA_TOKEN)",
@@ -184,6 +183,22 @@ if ($EuPassword) {
     $EuKeyPath = ""
 }
 
+# Require an admin login + password (with confirmation) at install time.
+if (-not $AdminUsername) {
+    $AdminUsername = Ask "Admin username" "admin"
+}
+if (-not $AdminUsername) { $AdminUsername = "admin" }
+if (-not $AdminPassword) {
+    while ($true) {
+        $p1 = Ask-SecretText "Admin password"
+        $p2 = Ask-SecretText "Confirm admin password"
+        if (-not $p1) { Write-Host "Password cannot be empty."; continue }
+        if ($p1 -ne $p2) { Write-Host "Passwords do not match, please try again."; continue }
+        $AdminPassword = $p1
+        break
+    }
+}
+
 $DataDir = Join-Path $AppDir "data"
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 $EnvPath = Join-Path $AppDir ".env"
@@ -212,7 +227,23 @@ Write-Host "[autovpn] creating virtualenv"
 
 Load-EnvFile $EnvPath
 $env:AUTOVPN_INITIAL_CURRENT_IP = $CurrentIp
-& ".\.venv\Scripts\python.exe" -c "import os; from app.db import init_db, set_setting; init_db(); ip = os.getenv('AUTOVPN_INITIAL_CURRENT_IP', ''); set_setting('current_ip', ip) if ip else None"
+$env:ADMIN_USERNAME = $AdminUsername
+$env:ADMIN_PASSWORD = $AdminPassword
+$BootstrapPy = @"
+import os
+from app.db import init_db, set_setting
+from app.security import hash_password
+
+init_db()
+ip = os.getenv('AUTOVPN_INITIAL_CURRENT_IP', '')
+if ip:
+    set_setting('current_ip', ip)
+set_setting('config.admin_username', os.environ.get('ADMIN_USERNAME') or 'admin')
+pw = os.environ.get('ADMIN_PASSWORD', '')
+if pw:
+    set_setting('config.admin_password', hash_password(pw))
+"@
+$BootstrapPy | & ".\.venv\Scripts\python.exe" -
 
 Write-RunScript $AppDir $EnvPath $AppHost $AppPort
 

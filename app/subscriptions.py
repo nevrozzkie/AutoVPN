@@ -37,9 +37,17 @@ def build_subscription(client: dict, current_ip: str) -> str:
     if current_hysteria_port is not None:
         hysteria_name = quote(profile_name(client, "hysteria"))
         hysteria_password = quote(hysteria_auth(client))
+        hysteria_obfs_password = get_setting("hysteria.obfs_password")
+        hysteria_query = {
+            "insecure": "1",
+            "sni": settings.vless_reality_server_name,
+        }
+        if hysteria_obfs_password:
+            hysteria_query["obfs"] = "salamander"
+            hysteria_query["obfs-password"] = hysteria_obfs_password
         links.append(
-            f"hy2://{hysteria_password}@{current_ip}:{current_hysteria_port}/"
-            f"?insecure=1&sni={quote(settings.vless_reality_server_name)}#{hysteria_name}"
+            f"hysteria2://{hysteria_password}@{current_ip}:{current_hysteria_port}/"
+            f"?{urlencode(hysteria_query)}#{hysteria_name}"
         )
     return "\n".join(links) + ("\n" if links else "")
 
@@ -76,20 +84,25 @@ def build_sing_box_subscription(client: dict, current_ip: str) -> dict:
     current_hysteria_port = hysteria_port()
     if current_hysteria_port is not None:
         proxy_outbounds.append("hysteria2")
-        outbounds.append(
-            {
-                "type": "hysteria2",
-                "tag": "hysteria2",
-                "server": current_ip,
-                "server_port": current_hysteria_port,
-                "password": hysteria_auth(client),
-                "tls": {
-                    "enabled": True,
-                    "server_name": settings.vless_reality_server_name,
-                    "insecure": True,
-                },
+        hysteria2_outbound = {
+            "type": "hysteria2",
+            "tag": "hysteria2",
+            "server": current_ip,
+            "server_port": current_hysteria_port,
+            "password": hysteria_auth(client),
+            "tls": {
+                "enabled": True,
+                "server_name": settings.vless_reality_server_name,
+                "insecure": True,
+            },
+        }
+        hysteria_obfs_password = get_setting("hysteria.obfs_password")
+        if hysteria_obfs_password:
+            hysteria2_outbound["obfs"] = {
+                "type": "salamander",
+                "password": hysteria_obfs_password,
             }
-        )
+        outbounds.append(hysteria2_outbound)
     if not proxy_outbounds:
         proxy_outbounds.append("direct")
     outbounds.insert(

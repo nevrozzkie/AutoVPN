@@ -101,7 +101,7 @@ def test_refresh_protocol_statuses_marks_disabled_protocol_hidden(monkeypatch) -
         set_setting("config.vless_enabled", "1")
 
 
-def test_refresh_protocol_statuses_shows_enabled_hysteria_placeholder(monkeypatch) -> None:
+def test_refresh_protocol_statuses_splits_hysteria_into_two_rows(monkeypatch) -> None:
     init_db()
     set_setting("config.hysteria_enabled", "1")
 
@@ -111,15 +111,55 @@ def test_refresh_protocol_statuses_shows_enabled_hysteria_placeholder(monkeypatc
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
         return ProbeResult(True, 56)
 
+    async def fake_deep_checks(host: str) -> dict[str, DeepCheckResult]:
+        return {
+            "hysteria_quic": DeepCheckResult(True),
+            "hysteria_salamander": DeepCheckResult(True),
+        }
+
     monkeypatch.setattr("app.protocol_status.tcp_probe", fake_tcp_probe)
     monkeypatch.setattr("app.protocol_status.udp_probe", fake_udp_probe)
+    monkeypatch.setattr("app.protocol_status.run_deep_protocol_checks", fake_deep_checks)
 
     try:
         statuses = asyncio.run(refresh_protocol_statuses("203.0.113.10"))
         by_key = {status["key"]: status for status in statuses}
 
-        assert by_key["hysteria"]["status"] == "PLACEHOLDER"
-        assert by_key["hysteria"]["port"] == 8443
-        assert by_key["hysteria"]["ping_ms"] is None
+        assert by_key["hysteria_quic"]["status"] == "SERVICE_ACTIVE"
+        assert by_key["hysteria_quic"]["port"] == 8443
+        assert by_key["hysteria_salamander"]["status"] == "VERIFIED"
+        assert by_key["hysteria_salamander"]["port"] == 8443
+    finally:
+        set_setting("config.hysteria_enabled", "0")
+
+
+def test_refresh_protocol_statuses_isolates_salamander_failure(monkeypatch) -> None:
+    init_db()
+    set_setting("config.hysteria_enabled", "1")
+
+    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+        return ProbeResult(True, 12)
+
+    async def fake_udp_probe(host: str, port: int) -> ProbeResult:
+        return ProbeResult(True, 56)
+
+    async def fake_deep_checks(host: str) -> dict[str, DeepCheckResult]:
+        # Service is up (port/QUIC ok) but the obfuscated tunnel fails:
+        # e.g. an obfs/auth password mismatch.
+        return {
+            "hysteria_quic": DeepCheckResult(True),
+            "hysteria_salamander": DeepCheckResult(False, "obfs mismatch"),
+        }
+
+    monkeypatch.setattr("app.protocol_status.tcp_probe", fake_tcp_probe)
+    monkeypatch.setattr("app.protocol_status.udp_probe", fake_udp_probe)
+    monkeypatch.setattr("app.protocol_status.run_deep_protocol_checks", fake_deep_checks)
+
+    try:
+        statuses = asyncio.run(refresh_protocol_statuses("203.0.113.10"))
+        by_key = {status["key"]: status for status in statuses}
+
+        assert by_key["hysteria_quic"]["status"] == "SERVICE_ACTIVE"
+        assert by_key["hysteria_salamander"]["status"] == "FAILED"
     finally:
         set_setting("config.hysteria_enabled", "0")

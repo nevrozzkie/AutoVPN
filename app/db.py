@@ -205,11 +205,15 @@ def _ensure_reality_settings(db: sqlite3.Connection) -> None:
 
 
 def _ensure_hysteria_settings(db: sqlite3.Connection) -> None:
-    if _setting(db, "hysteria.password"):
-        return
-    client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
-    password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
-    _set_setting(db, "hysteria.password", password)
+    if not _setting(db, "hysteria.password"):
+        client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
+        password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
+        _set_setting(db, "hysteria.password", password)
+    # Salamander obfuscation password. Required to get Hysteria through DPI
+    # systems that throttle/block plain QUIC/HTTP3 (e.g. Russian TSPU). Must be
+    # identical on server and client; both are generated from this value.
+    if not _setting(db, "hysteria.obfs_password"):
+        _set_setting(db, "hysteria.obfs_password", secrets.token_urlsafe(16))
 
 
 def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:

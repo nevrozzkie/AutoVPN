@@ -200,7 +200,7 @@
             {% for protocol in protocols %}
               <div class="status">
                 <strong>{{ protocol.name }}</strong>
-                {% if protocol.status == "VERIFIED" %}
+                {% if protocol.status in ["VERIFIED", "SERVICE_ACTIVE"] %}
                   <span class="ok">{{ protocol.status|status_label }}</span>
                 {% elif protocol.status == "FAILED" %}
                   <span class="bad">{{ protocol.status|status_label }}</span>
@@ -208,6 +208,9 @@
                   <span class="warn">{{ protocol.status|status_label }}</span>
                 {% else %}
                   <span class="warn">{{ protocol.status|status_label }}</span>
+                {% endif %}
+                {% if protocol.note %}
+                  <br><span class="muted">{{ protocol.note }}</span>
                 {% endif %}
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>

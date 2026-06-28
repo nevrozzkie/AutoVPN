@@ -52,13 +52,17 @@ def test_subscriptions_include_hysteria_when_enabled() -> None:
         sing_box_subscription = build_sing_box_subscription(client, "203.0.113.10")
         outbounds = {outbound["tag"]: outbound for outbound in sing_box_subscription["outbounds"]}
 
-        assert f"hy2://{get_setting('hysteria.password')}@" in text_subscription
+        assert f"hysteria2://{get_setting('hysteria.password')}@" in text_subscription
         assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in text_subscription
+        assert "obfs=salamander" in text_subscription
+        assert f"obfs-password={get_setting('hysteria.obfs_password')}" in text_subscription
         assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in text_subscription
         assert outbounds["proxy"]["outbounds"] == ["vless-reality", "hysteria2"]
         assert outbounds["hysteria2"]["type"] == "hysteria2"
         assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
         assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
+        assert outbounds["hysteria2"]["obfs"]["type"] == "salamander"
+        assert outbounds["hysteria2"]["obfs"]["password"] == get_setting("hysteria.obfs_password")
         assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
         assert outbounds["hysteria2"]["tls"]["insecure"] is True
     finally:

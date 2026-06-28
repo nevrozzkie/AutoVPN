@@ -10,7 +10,7 @@ NGINX_SITE="/etc/nginx/sites-available/autovpn"
 NGINX_LINK="/etc/nginx/sites-enabled/autovpn"
 DEFAULT_REPO_URL="https://github.com/nevrozzkie/AutoVPN.git"
 REPO_URL="${AUTOVPN_REPO_URL:-$DEFAULT_REPO_URL}"
-APP_HOST="${APP_HOST:-0.0.0.0}"
+APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-8000}"
 
 usage() {
@@ -163,6 +163,58 @@ print(secrets.token_urlsafe(32))
 PY
 }
 
+read_value() {
+  local _prompt="$1" _default="${2:-}" _v=""
+  if [ -e /dev/tty ]; then
+    if [ -n "$_default" ]; then
+      printf '%s [%s]: ' "$_prompt" "$_default" >/dev/tty
+    else
+      printf '%s: ' "$_prompt" >/dev/tty
+    fi
+    IFS= read -r _v </dev/tty || _v=""
+  fi
+  printf '%s' "${_v:-$_default}"
+}
+
+read_secret() {
+  local _prompt="$1" _v=""
+  if [ -e /dev/tty ]; then
+    printf '%s: ' "$_prompt" >/dev/tty
+    IFS= read -r -s _v </dev/tty || _v=""
+    printf '\n' >/dev/tty
+  fi
+  printf '%s' "$_v"
+}
+
+collect_admin_credentials() {
+  if [ -z "${ADMIN_USERNAME:-}" ]; then
+    ADMIN_USERNAME="$(read_value "Admin username" "admin")"
+  fi
+  ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+  if [ -z "${ADMIN_PASSWORD:-}" ]; then
+    if [ ! -e /dev/tty ]; then
+      echo "ERROR: admin password is required. Pass --admin-password or set ADMIN_PASSWORD (no interactive terminal)." >&2
+      exit 1
+    fi
+    local _p1 _p2
+    while true; do
+      _p1="$(read_secret "Admin password")"
+      _p2="$(read_secret "Confirm admin password")"
+      if [ -z "$_p1" ]; then
+        echo "Password cannot be empty." >&2
+        continue
+      fi
+      if [ "$_p1" != "$_p2" ]; then
+        echo "Passwords do not match, please try again." >&2
+        continue
+      fi
+      ADMIN_PASSWORD="$_p1"
+      break
+    done
+  fi
+  export ADMIN_USERNAME ADMIN_PASSWORD
+}
+
 sanitize_env_value() {
   printf "%s" "$1" | LC_ALL=C tr -d '[:cntrl:]'
 }
@@ -240,7 +292,8 @@ write_env_file() {
     env_line APP_PORT "$APP_PORT"
     env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
     env_line ADMIN_USERNAME "$admin_username"
-    env_line ADMIN_PASSWORD "$admin_password"
+    # ADMIN_PASSWORD is intentionally NOT written here. It is stored as a
+    # salted scrypt hash in the database by bootstrap_admin().
     echo
     env_line AEZA_API_BASE "https://my.aeza.net"
     env_line AEZA_TOKEN "$aeza_token"
@@ -322,20 +375,49 @@ EOF
   systemctl enable --now "$APP_NAME"
 }
 
-configure_nginx() {
-  if [ "${CONFIGURE_NGINX:-0}" != "1" ]; then
-    return
-  fi
+bootstrap_admin() {
+  echo "[autovpn] storing admin credentials (hashed) in the database"
+  AUTOVPN_BOOT_USER="$ADMIN_USERNAME" \
+  AUTOVPN_BOOT_PASS="$ADMIN_PASSWORD" \
+  AUTOVPN_BOOT_DB="$APP_DIR/data/autovpn.sqlite3" \
+  "$APP_DIR/.venv/bin/python" - <<'PY'
+import os, sqlite3
+from app.security import hash_password
 
-  local domain
-  domain="${AUTOVPN_DOMAIN:-_}"
+db = os.environ["AUTOVPN_BOOT_DB"]
+os.makedirs(os.path.dirname(db), exist_ok=True)
+conn = sqlite3.connect(db)
+conn.execute(
+    "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+)
+for key, value in (
+    ("config.admin_username", os.environ.get("AUTOVPN_BOOT_USER") or "admin"),
+    ("config.admin_password", hash_password(os.environ["AUTOVPN_BOOT_PASS"])),
+):
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+conn.commit()
+conn.close()
+PY
+  chown -R "$APP_USER:$APP_USER" "$APP_DIR/data"
+}
+
+write_nginx_proxy_block() {
+  local server_name="$1"
   cat >"$NGINX_SITE" <<EOF
 server {
     listen 80;
-    server_name $domain;
+    server_name $server_name;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
 
     location / {
-        proxy_pass http://$APP_HOST:$APP_PORT;
+        proxy_pass http://127.0.0.1:$APP_PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -349,11 +431,58 @@ EOF
   systemctl reload nginx
 }
 
+configure_nginx() {
+  # The app binds to 127.0.0.1, so a reverse proxy is required to reach it.
+  # nginx is configured by default; set CONFIGURE_NGINX=0 only if you put your
+  # own TLS-terminating proxy or SSH tunnel in front of 127.0.0.1:$APP_PORT.
+  if [ "${CONFIGURE_NGINX:-1}" != "1" ]; then
+    echo "[autovpn] WARNING: nginx not configured. The panel is only reachable on"
+    echo "[autovpn] 127.0.0.1:$APP_PORT. Put a TLS reverse proxy or SSH tunnel in front of it."
+    NGINX_TLS="skipped"
+    return
+  fi
+
+  local domain="${AUTOVPN_DOMAIN:-}"
+  if [ -z "$domain" ]; then
+    domain="$(read_value "Public domain for the panel (recommended — enables HTTPS; leave empty to skip TLS)" "")"
+  fi
+
+  if [ -z "$domain" ] || [ "$domain" = "_" ]; then
+    write_nginx_proxy_block "_"
+    NGINX_TLS="no"
+    echo "[autovpn] WARNING: no domain provided, the panel is served over PLAIN HTTP."
+    echo "[autovpn] Admin password, SSH and Aeza secrets would travel UNENCRYPTED over the network."
+    echo "[autovpn] Provide a domain and run: certbot --nginx -d <domain> --redirect"
+    echo "[autovpn] or access the panel only through an SSH tunnel."
+    return
+  fi
+
+  write_nginx_proxy_block "$domain"
+  if ! command -v certbot >/dev/null 2>&1; then
+    apt-get install -y certbot python3-certbot-nginx || true
+  fi
+  if command -v certbot >/dev/null 2>&1; then
+    if certbot --nginx -d "$domain" --non-interactive --agree-tos \
+        --register-unsafely-without-email --redirect; then
+      NGINX_TLS="yes"
+      AUTOVPN_PANEL_URL="https://$domain/admin/setup"
+    else
+      NGINX_TLS="failed"
+      echo "[autovpn] certbot failed. Finish TLS manually: certbot --nginx -d $domain --redirect"
+    fi
+  else
+    NGINX_TLS="failed"
+    echo "[autovpn] certbot is not available. Install it and run: certbot --nginx -d $domain --redirect"
+  fi
+}
+
 main() {
   install_packages
+  collect_admin_credentials
   prepare_source
   write_env_file
   install_python_app
+  bootstrap_admin
   write_systemd
   configure_nginx
 
@@ -361,7 +490,18 @@ main() {
   echo "AutoVPN installed."
   echo "Service status: systemctl status autovpn"
   echo "Config file: $ENV_FILE"
-  echo "Open: http://SERVER:$APP_PORT/admin/setup"
+  echo "Admin login was set during install (stored hashed in the database)."
+  case "${NGINX_TLS:-}" in
+    yes)
+      echo "Open: ${AUTOVPN_PANEL_URL:-https://YOUR_DOMAIN/admin/setup}"
+      ;;
+    no|failed|skipped)
+      echo "Open: http://SERVER/admin/setup  (NOT encrypted — set up TLS before real use)"
+      ;;
+    *)
+      echo "Open: http://SERVER/admin/setup"
+      ;;
+  esac
 }
 
 main "$@"

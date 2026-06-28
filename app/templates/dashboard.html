@@ -59,8 +59,9 @@
         <tr>
           <td>{{ protocol.name }}</td>
           <td>{{ protocol.port or "позже" }}</td>
-          <td class="{% if protocol.status == "VERIFIED" %}ok{% elif protocol.status == "FAILED" %}danger{% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}muted{% else %}muted{% endif %}">
+          <td class="{% if protocol.status in ["VERIFIED", "SERVICE_ACTIVE"] %}ok{% elif protocol.status == "FAILED" %}danger{% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}muted{% else %}muted{% endif %}">
             {{ protocol.status|status_label }}
+            {% if protocol.note %}<br><span class="muted">{{ protocol.note }}</span>{% endif %}
           </td>
           <td>{{ protocol.last_checked_at|msk }}</td>
           <td>

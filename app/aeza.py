@@ -82,6 +82,10 @@ class AezaClient:
         data = await self._request("GET", f"/api/v2/services/{service_id}/networks/ipv4/price")
         return normalize_ipv4_price(data)
 
+    async def get_service(self, service_id: str) -> dict[str, Any]:
+        data = await self._request("GET", f"/api/v2/services/{service_id}")
+        return normalize_service(data)
+
     async def add_ipv4(
         self,
         service_id: str,
@@ -163,6 +167,16 @@ def normalize_ipv4(data: Any) -> dict[str, Any]:
         "id": str(ipv4_id),
         "ip": str(ip),
         "is_main": is_main,
+        "raw": payload,
+    }
+
+
+def normalize_service(data: Any) -> dict[str, Any]:
+    payload = _unwrap_payload(data)
+    if not isinstance(payload, dict):
+        return {"ip": "", "raw": data}
+    return {
+        "ip": str(payload.get("ip") or payload.get("address") or payload.get("ipv4") or ""),
         "raw": payload,
     }
 

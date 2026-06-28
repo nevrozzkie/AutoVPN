@@ -74,11 +74,33 @@ from app.runtime_config import (
 )
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_sing_box_subscription, build_subscription
+from app.security import (
+    SECURITY_HEADERS,
+    client_key,
+    hash_password,
+    is_same_origin_request,
+    login_rate_limiter,
+    verify_password,
+)
 
 app = FastAPI(title="AutoVPN")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()
 setup_security = HTTPBasic(auto_error=False)
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    # CSRF: state-changing requests must come from the panel's own origin.
+    if not is_same_origin_request(request):
+        return PlainTextResponse(
+            "Cross-origin request blocked (CSRF protection).",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
 def format_msk(value: object) -> str:
@@ -124,6 +146,7 @@ def _ensure_unique_enabled_protocol_ports(protocol_settings: dict[str, tuple[boo
 STATUS_LABELS = {
     "OK": "Сетевой probe прошёл",
     "VERIFIED": "OK",
+    "SERVICE_ACTIVE": "Сервис активен",
     "TCP_REACHABLE": "TCP-порт доступен",
     "UDP_PACKET_SENT": "UDP-пакет отправлен",
     "FAILED": "Ошибка",
@@ -250,19 +273,36 @@ def on_startup() -> None:
     )
 
 
-def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+def _verify_admin_credentials(request: Request, credentials: HTTPBasicCredentials) -> bool:
+    """Constant-time check of admin credentials with login rate limiting."""
+    key = client_key(request)
+    retry_after = login_rate_limiter.retry_after(key)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    # Always evaluate both checks to keep timing roughly constant.
+    username_ok = secrets.compare_digest(credentials.username, admin_username())
+    password_ok = verify_password(credentials.password, admin_password())
+    if username_ok and password_ok:
+        login_rate_limiter.register_success(key)
+        return True
+    login_rate_limiter.register_failure(key)
+    return False
+
+
+def require_admin(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+) -> str:
     if not setup_complete():
         raise HTTPException(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
             headers={"Location": "/admin/setup"},
         )
-    expected_password = admin_password()
-    username_ok = secrets.compare_digest(credentials.username, admin_username())
-    password_ok = bool(expected_password) and secrets.compare_digest(
-        credentials.password,
-        expected_password,
-    )
-    if not (username_ok and password_ok):
+    if not _verify_admin_credentials(request, credentials):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
@@ -272,6 +312,7 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
 
 
 def require_setup_access(
+    request: Request,
     credentials: HTTPBasicCredentials | None = Depends(setup_security),
 ) -> str | None:
     if not setup_complete():
@@ -282,13 +323,7 @@ def require_setup_access(
             detail="Authentication required",
             headers={"WWW-Authenticate": "Basic"},
         )
-    expected_password = admin_password()
-    username_ok = secrets.compare_digest(credentials.username, admin_username())
-    password_ok = bool(expected_password) and secrets.compare_digest(
-        credentials.password,
-        expected_password,
-    )
-    if not (username_ok and password_ok):
+    if not _verify_admin_credentials(request, credentials):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
@@ -379,7 +414,7 @@ def setup_submit(
 
     set_setting("config.admin_username", admin_username_value.strip() or "admin")
     if password:
-        set_setting("config.admin_password", password)
+        set_setting("config.admin_password", hash_password(password))
     current_ip_value = current_ip.strip()
     if current_ip_value:
         set_setting("current_ip", current_ip_value)
@@ -503,17 +538,32 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
     error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
+    current_ip = get_setting("current_ip")
+    synced_main_ip = ""
     try:
-        ipv4_list = await get_aeza_client().get_ipv4_list(aeza_service_id())
+        client = get_aeza_client()
+        ipv4_list = await client.get_ipv4_list(aeza_service_id())
+        service = await client.get_service(aeza_service_id())
+        aeza_main_ip = service.get("ip", "")
+        if aeza_main_ip:
+            for item in ipv4_list:
+                if item.get("ip") == aeza_main_ip:
+                    item["is_main"] = True
+            if aeza_main_ip != current_ip:
+                set_setting("current_ip", aeza_main_ip)
+                mark_vpn_config_updated()
+                synced_main_ip = aeza_main_ip
+                current_ip = aeza_main_ip
     except Exception as exc:
         error = error or str(exc)
     return templates.TemplateResponse(
         request,
         "ip_manager.html",
         {
-            "current_ip": get_setting("current_ip"),
+            "current_ip": current_ip,
             "ipv4_list": ipv4_list,
             "error": error,
+            "synced_main_ip": synced_main_ip,
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
         },

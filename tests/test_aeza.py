@@ -7,6 +7,7 @@ from app.aeza import (
     normalize_ipv4,
     normalize_ipv4_list,
     normalize_ipv4_price,
+    normalize_service,
 )
 
 
@@ -82,6 +83,15 @@ def test_normalize_ipv4_from_single_result() -> None:
         "ip": "203.0.113.20",
         "is_main": False,
         "raw": {"uuid": "ip-id", "ipv4": "203.0.113.20"},
+    }
+
+
+def test_normalize_service_uses_service_ip_as_main_ip() -> None:
+    payload = {"id": 1870109, "name": "auto-vpn", "ip": "62.60.236.116"}
+
+    assert normalize_service(payload) == {
+        "ip": "62.60.236.116",
+        "raw": payload,
     }
 
 
