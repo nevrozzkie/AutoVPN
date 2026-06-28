@@ -29,12 +29,14 @@ class AezaClient:
         self.token = token
         self.timeout = timeout
 
-    def _headers(self) -> dict[str, str]:
-        return {
+    def _headers(self, *, has_json_body: bool = False) -> dict[str, str]:
+        headers = {
             "X-API-Key": aeza_api_key(self.token),
             "Accept": "application/json",
-            "Content-Type": "application/json",
         }
+        if has_json_body:
+            headers["Content-Type"] = "application/json"
+        return headers
 
     async def _request(
         self,
@@ -52,7 +54,7 @@ class AezaClient:
             response = await client.request(
                 method,
                 url,
-                headers=self._headers(),
+                headers=self._headers(has_json_body=json is not None),
                 json=json,
             )
             try:

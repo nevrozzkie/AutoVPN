@@ -31,6 +31,13 @@ def test_aeza_client_headers_use_x_api_key() -> None:
     assert "Authorization" not in client._headers()
 
 
+def test_aeza_client_only_sends_content_type_with_json_body() -> None:
+    client = AezaClient("https://my.aeza.net", "abc123")
+
+    assert "Content-Type" not in client._headers()
+    assert client._headers(has_json_body=True)["Content-Type"] == "application/json"
+
+
 class FakeResponse:
     def __init__(self, content: bytes, text: str) -> None:
         self.content = content
