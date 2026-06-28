@@ -111,11 +111,23 @@ async def run_ip_change(operation_id: int) -> None:
         await _step(operation_id, "refresh_protocol_statuses")
         await refresh_protocol_statuses(new_ip_address)
 
-        await _step(operation_id, "delete_old_ipv4")
-        await client.delete_ipv4(service_id, old_ip_id)
-        old_ip_deleted = True
+        cleanup_warning = ""
+        try:
+            await _step(operation_id, "delete_old_ipv4")
+            await client.delete_ipv4(service_id, old_ip_id)
+            old_ip_deleted = True
+        except Exception as exc:
+            cleanup_warning = (
+                f"IP was changed to {new_ip_address}, but old IPv4 cleanup failed: {exc}. "
+                f"Old IP was preserved: {old_ip} ({old_ip_id})"
+            )
 
-        update_operation(operation_id, status="DONE", current_step="done")
+        update_operation(
+            operation_id,
+            status="DONE",
+            current_step="done",
+            error_message=cleanup_warning,
+        )
     except Exception as exc:
         message = str(exc)
         if old_ip_id and not old_ip_deleted:

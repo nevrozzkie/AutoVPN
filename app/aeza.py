@@ -113,7 +113,7 @@ class AezaClient:
         return await self._request(
             "DELETE",
             f"/api/v2/services/{service_id}/networks/ipv4",
-            json={"key": ipv4_id},
+            json={"key": int(ipv4_id) if ipv4_id.isdecimal() else ipv4_id},
         )
 
     async def reboot_service(self, service_id: str) -> Any:

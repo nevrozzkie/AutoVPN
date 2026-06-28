@@ -127,8 +127,13 @@
 </p>
 
 {% if latest_operation and latest_operation.error_message %}
-  <h2>Последняя ошибка смены IP</h2>
-  <section class="panel danger">{{ latest_operation.error_message }}</section>
+  {% if latest_operation.status == "DONE" %}
+    <h2>Предупреждение смены IP</h2>
+    <section class="panel warning">{{ latest_operation.error_message }}</section>
+  {% else %}
+    <h2>Последняя ошибка смены IP</h2>
+    <section class="panel danger">{{ latest_operation.error_message }}</section>
+  {% endif %}
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.error_message %}

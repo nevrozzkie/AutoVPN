@@ -39,6 +39,25 @@ def test_aeza_client_only_sends_content_type_with_json_body() -> None:
     assert client._headers(has_json_body=True)["Content-Type"] == "application/json"
 
 
+@pytest.mark.anyio
+async def test_aeza_delete_ipv4_sends_numeric_key(monkeypatch) -> None:
+    sent: dict[str, object] = {}
+
+    async def fake_request(self, method: str, path: str, *, json=None):  # type: ignore[no-untyped-def]
+        sent.update({"method": method, "path": path, "json": json})
+        return {}
+
+    monkeypatch.setattr(AezaClient, "_request", fake_request)
+
+    await AezaClient("https://my.aeza.net", "abc123").delete_ipv4("1870109", "553770")
+
+    assert sent == {
+        "method": "DELETE",
+        "path": "/api/v2/services/1870109/networks/ipv4",
+        "json": {"key": 553770},
+    }
+
+
 class FakeResponse:
     def __init__(self, content: bytes, text: str) -> None:
         self.content = content
