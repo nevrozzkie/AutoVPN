@@ -1,4 +1,31 @@
-from app.aeza import normalize_ipv4, normalize_ipv4_list, normalize_ipv4_price
+import pytest
+
+from app.aeza import (
+    AezaClient,
+    aeza_authorization_header,
+    normalize_ipv4,
+    normalize_ipv4_list,
+    normalize_ipv4_price,
+)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("abc123", "Bearer abc123"),
+        (" Bearer abc123 ", "Bearer abc123"),
+        ("Authorization: Bearer abc123", "Bearer abc123"),
+        ("token abc123", "token abc123"),
+    ],
+)
+def test_aeza_authorization_header_accepts_raw_token_or_header(token: str, expected: str) -> None:
+    assert aeza_authorization_header(token) == expected
+
+
+def test_aeza_client_headers_do_not_double_prefix_bearer_token() -> None:
+    client = AezaClient("https://my.aeza.net", "Bearer abc123")
+
+    assert client._headers()["Authorization"] == "Bearer abc123"
 
 
 def test_normalize_ipv4_list_from_data_payload() -> None:
