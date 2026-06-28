@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
@@ -85,6 +86,7 @@ from app.security import (
 )
 
 app = FastAPI(title="AutoVPN")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()
 setup_security = HTTPBasic(auto_error=False)
