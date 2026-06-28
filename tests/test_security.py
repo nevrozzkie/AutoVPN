@@ -72,6 +72,22 @@ def test_csrf_cross_origin_post_blocked() -> None:
     assert allowed.status_code in (200, 303)
 
 
+def test_csrf_allows_loopback_host_aliases() -> None:
+    client = _client()
+    response = client.post(
+        "/admin/clients",
+        data={"name": "x"},
+        auth=("admin", "pw12345"),
+        headers={
+            "Host": "127.0.0.1:8000",
+            "Origin": "http://localhost:8000",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (200, 303)
+
+
 def test_login_rate_limiter_blocks_after_threshold() -> None:
     limiter = LoginRateLimiter(max_failures=3, window_seconds=60, block_seconds=60)
     key = "1.2.3.4"

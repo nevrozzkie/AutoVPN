@@ -16,7 +16,7 @@ import hmac
 import secrets
 import time
 from threading import Lock
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 # scrypt parameters (n, r, p). n=2**15 is a reasonable interactive cost.
 _SCRYPT_N = 2 ** 15
@@ -159,6 +159,46 @@ def _host_of(value: str) -> str:
     return parts.netloc or ""
 
 
+def _split_origin(value: str) -> SplitResult:
+    if "://" not in value:
+        value = f"//{value}"
+    return urlsplit(value)
+
+
+def _hostname_port(value: str) -> tuple[str, str]:
+    parts = _split_origin(value)
+    hostname = (parts.hostname or "").lower()
+    port = str(parts.port or "")
+    if not port:
+        if parts.scheme == "http":
+            port = "80"
+        elif parts.scheme == "https":
+            port = "443"
+    return hostname, port
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    return hostname in {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+def _same_host_or_loopback_alias(left: str, right: str) -> bool:
+    left_host, left_port = _hostname_port(left)
+    right_host, right_port = _hostname_port(right)
+    if not left_host or not right_host:
+        return False
+    if left_host == right_host and left_port == right_port:
+        return True
+    return _is_loopback_host(left_host) and _is_loopback_host(right_host) and left_port == right_port
+
+
+def _expected_hosts(request) -> set[str]:  # type: ignore[no-untyped-def]
+    hosts = {request.headers.get("host", "")}
+    forwarded_host = request.headers.get("x-forwarded-host", "")
+    if forwarded_host:
+        hosts.add(forwarded_host.split(",")[0].strip())
+    return {host for host in hosts if host}
+
+
 def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     """True if a state-changing request is safe from a CSRF standpoint.
 
@@ -172,13 +212,13 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     """
     if request.method in _SAFE_METHODS:
         return True
-    expected_host = request.headers.get("host", "")
+    expected_hosts = _expected_hosts(request)
     origin = request.headers.get("origin", "")
     if origin:
-        return _host_of(origin) == expected_host
+        return any(_same_host_or_loopback_alias(_host_of(origin), expected_host) for expected_host in expected_hosts)
     referer = request.headers.get("referer", "")
     if referer:
-        return _host_of(referer) == expected_host
+        return any(_same_host_or_loopback_alias(_host_of(referer), expected_host) for expected_host in expected_hosts)
     return True
 
 
