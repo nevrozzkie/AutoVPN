@@ -92,7 +92,6 @@
 <h2>Действия</h2>
 <div class="actions action-bar">
   <a class="button" href="/admin/clients">Клиенты</a>
-  <a class="button" href="/setup">Setup</a>
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
@@ -108,7 +107,7 @@
 {% if install_running %}
   <p class="muted">Установка или синхронизация уже выполняется.</p>
 {% elif not target_host %}
-  <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице /setup.</p>
+  <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице Setup.</p>
 {% endif %}
 
 {% if operation_running %}

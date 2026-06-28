@@ -1,171 +1,14 @@
-<!doctype html>
-<html lang="ru">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script>
-      (function () {
-        const saved = localStorage.getItem("autovpn-theme");
-        document.documentElement.dataset.theme = saved || "dark";
-      })();
-    </script>
-    <title>Первичная настройка · AutoVPN</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f6f7f9;
-        --panel: #ffffff;
-        --border: #d7dce2;
-        --text: #20242a;
-        --muted: #66707c;
-        --accent: #0f766e;
-        --accent-hover: #115e59;
-        --danger: #b91c1c;
-        --warning: #b45309;
-        --input-bg: #ffffff;
-        --code-bg: #eef1f5;
-      }
-      :root[data-theme="dark"] {
-        color-scheme: dark;
-        --bg: #0d1117;
-        --panel: #161b22;
-        --border: #303844;
-        --text: #e6edf3;
-        --muted: #9aa7b4;
-        --accent: #14b8a6;
-        --accent-hover: #2dd4bf;
-        --danger: #f87171;
-        --warning: #fbbf24;
-        --input-bg: #0f141b;
-        --code-bg: #222a35;
-      }
-      body {
-        margin: 0;
-        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-      }
-      main {
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 28px;
-      }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 18px;
-        margin: 16px 0;
-      }
-      label {
-        display: block;
-        font-weight: 650;
-        margin: 12px 0 5px;
-      }
-      input {
-        box-sizing: border-box;
-        width: 100%;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 9px 10px;
-        font: inherit;
-        background: var(--input-bg);
-        color: var(--text);
-      }
-      button {
-        border: 0;
-        border-radius: 6px;
-        background: var(--accent);
-        color: #fff;
-        padding: 10px 14px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      button:hover {
-        background: var(--accent-hover);
-      }
-      code {
-        background: var(--code-bg);
-        border-radius: 5px;
-        padding: 2px 5px;
-        overflow-wrap: anywhere;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 12px;
-      }
-      .muted { color: var(--muted); }
-      .danger { color: var(--danger); }
-      .warning { color: var(--warning); }
-      .danger-button { background: var(--danger); }
-      .actions {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      .page-top {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 16px;
-      }
-      .page-top h1 {
-        margin-bottom: 0;
-      }
-      .theme-toggle {
-        background: transparent;
-        border: 1px solid var(--border);
-        color: var(--text);
-        padding: 7px 10px;
-      }
-      .theme-toggle:hover {
-        background: var(--panel);
-      }
-      .field-error {
-        display: none;
-        color: var(--danger);
-        font-weight: 650;
-        margin-top: 5px;
-      }
-      .protocol-row {
-        display: grid;
-        grid-template-columns: minmax(140px, 1fr) minmax(120px, 180px);
-        gap: 12px;
-        align-items: end;
-      }
-      .check-label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 5px;
-      }
-      .check-label input {
-        width: auto;
-      }
-      input.invalid {
-        border-color: var(--danger);
-      }
-      button:disabled {
-        cursor: not-allowed;
-        opacity: 0.65;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <div class="page-top">
-        <h1>Настройка AutoVPN</h1>
-        <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
-      </div>
+{% extends "base.html" %}
+{% block content %}
+<div class="setup-page">
+      <h1>Настройка AutoVPN</h1>
       {% if setup_complete %}
         <p class="muted">Страница защищена текущим паролем администратора. Здесь можно поменять VPS, SSH и настройки Aeza.</p>
       {% else %}
         <p class="muted">Задайте пароль администратора и заполните нужные поля. Остальное можно добавить позже.</p>
       {% endif %}
 
-      <form method="post" action="/setup">
+      <form method="post" action="/admin/setup">
         <section>
           <h2>Админка</h2>
           <div class="grid">
@@ -303,15 +146,8 @@
           </form>
         </section>
       {% endif %}
-    </main>
+    </div>
     <script>
-      function toggleTheme() {
-        const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-        const next = current === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = next;
-        localStorage.setItem("autovpn-theme", next);
-      }
-
       const currentIpInput = document.querySelector("#current_ip");
       const sshHostInput = document.querySelector("#eu_ssh_host_value");
       const sshHostWarning = document.querySelector("#ssh-host-warning");
@@ -379,5 +215,4 @@
       syncPasswordMatch();
       syncProtocolPorts();
     </script>
-  </body>
-</html>
+{% endblock %}

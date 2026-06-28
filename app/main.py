@@ -249,7 +249,7 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     if not setup_complete():
         raise HTTPException(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
-            headers={"Location": "/setup"},
+            headers={"Location": "/admin/setup"},
         )
     expected_password = admin_password()
     username_ok = secrets.compare_digest(credentials.username, admin_username())
@@ -295,12 +295,17 @@ def require_setup_access(
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
     if not setup_complete():
-        return RedirectResponse("/setup")
+        return RedirectResponse("/admin/setup")
     return RedirectResponse("/admin")
 
 
 @app.get("/setup", response_class=HTMLResponse)
-def setup_page(
+def setup_page_redirect(_: str | None = Depends(require_setup_access)) -> RedirectResponse:
+    return RedirectResponse("/admin/setup")
+
+
+@app.get("/admin/setup", response_class=HTMLResponse)
+def admin_setup_page(
     request: Request,
     _: str | None = Depends(require_setup_access),
 ) -> HTMLResponse:
@@ -338,6 +343,7 @@ def setup_page(
 
 
 @app.post("/setup")
+@app.post("/admin/setup")
 def setup_submit(
     _: str | None = Depends(require_setup_access),
     admin_username_value: str = Form("admin"),
@@ -719,7 +725,7 @@ def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
             detail="Cannot reset server settings while an operation is running",
         )
     reset_server_and_aeza_state()
-    return RedirectResponse("/setup", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/setup", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse)
