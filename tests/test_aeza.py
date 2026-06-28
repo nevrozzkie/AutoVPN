@@ -2,7 +2,7 @@ import pytest
 
 from app.aeza import (
     AezaClient,
-    aeza_authorization_header,
+    aeza_api_key,
     normalize_ipv4,
     normalize_ipv4_list,
     normalize_ipv4_price,
@@ -12,20 +12,22 @@ from app.aeza import (
 @pytest.mark.parametrize(
     ("token", "expected"),
     [
-        ("abc123", "Bearer abc123"),
-        (" Bearer abc123 ", "Bearer abc123"),
-        ("Authorization: Bearer abc123", "Bearer abc123"),
-        ("token abc123", "token abc123"),
+        ("abc123", "abc123"),
+        (" Bearer abc123 ", "abc123"),
+        ("Authorization: Bearer abc123", "abc123"),
+        ("X-API-Key: abc123", "abc123"),
+        ("token abc123", "abc123"),
     ],
 )
-def test_aeza_authorization_header_accepts_raw_token_or_header(token: str, expected: str) -> None:
-    assert aeza_authorization_header(token) == expected
+def test_aeza_api_key_accepts_raw_token_or_header(token: str, expected: str) -> None:
+    assert aeza_api_key(token) == expected
 
 
-def test_aeza_client_headers_do_not_double_prefix_bearer_token() -> None:
+def test_aeza_client_headers_use_x_api_key() -> None:
     client = AezaClient("https://my.aeza.net", "Bearer abc123")
 
-    assert client._headers()["Authorization"] == "Bearer abc123"
+    assert client._headers()["X-API-Key"] == "abc123"
+    assert "Authorization" not in client._headers()
 
 
 def test_normalize_ipv4_list_from_data_payload() -> None:

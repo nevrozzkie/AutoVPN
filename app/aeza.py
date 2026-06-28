@@ -3,14 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 
-def aeza_authorization_header(token: str) -> str:
+def aeza_api_key(token: str) -> str:
     value = token.strip()
-    if value.lower().startswith("authorization:"):
+    header_name = value.split(":", 1)[0].strip().lower()
+    if header_name in {"authorization", "x-api-key"}:
         value = value.split(":", 1)[1].strip()
     scheme = value.split(" ", 1)[0].lower()
     if scheme in {"bearer", "basic", "token"}:
-        return value
-    return f"Bearer {value}"
+        return value.split(" ", 1)[1].strip()
+    return value
 
 
 class AezaClient:
@@ -21,7 +22,7 @@ class AezaClient:
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": aeza_authorization_header(self.token),
+            "X-API-Key": aeza_api_key(self.token),
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
@@ -51,7 +52,7 @@ class AezaClient:
                 if exc.response.status_code == 401:
                     raise RuntimeError(
                         "Aeza rejected AEZA_TOKEN with 401 Unauthorized. "
-                        "Update AEZA_TOKEN on Setup; you can paste either the raw token or the full Bearer header."
+                        "Update AEZA_TOKEN on Setup; you can paste either the raw token or the full X-API-Key header."
                     ) from None
                 raise
             if response.content:
