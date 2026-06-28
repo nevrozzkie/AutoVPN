@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 from io import BytesIO
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
@@ -524,6 +525,7 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
         "ip_buy_confirm.html",
         {
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
+            "error": request.query_params.get("error", ""),
             "format_eur_minor_units": format_eur_minor_units,
         },
     )
@@ -533,11 +535,17 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
 async def admin_ip_buy(_: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    await get_aeza_client().add_ipv4(
-        aeza_service_id(),
-        payment_method=aeza_ipv4_payment_method(),
-        domain=aeza_ipv4_domain(),
-    )
+    try:
+        await get_aeza_client().add_ipv4(
+            aeza_service_id(),
+            payment_method=aeza_ipv4_payment_method(),
+            domain=aeza_ipv4_domain(),
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            f"/admin/ip/buy/confirm?error={quote(str(exc))}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
 

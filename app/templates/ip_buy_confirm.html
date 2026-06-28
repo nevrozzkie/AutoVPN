@@ -2,6 +2,10 @@
 {% block content %}
 <h1>Подтверждение покупки IPv4</h1>
 
+{% if error %}
+  <section class="panel danger">{{ error }}</section>
+{% endif %}
+
 <section class="panel">
   <div class="label">Цена нового IPv4 по Aeza API</div>
   {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}

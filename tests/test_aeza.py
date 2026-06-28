@@ -2,6 +2,7 @@ import pytest
 
 from app.aeza import (
     AezaClient,
+    _response_text,
     aeza_api_key,
     normalize_ipv4,
     normalize_ipv4_list,
@@ -28,6 +29,18 @@ def test_aeza_client_headers_use_x_api_key() -> None:
 
     assert client._headers()["X-API-Key"] == "abc123"
     assert "Authorization" not in client._headers()
+
+
+class FakeResponse:
+    def __init__(self, content: bytes, text: str) -> None:
+        self.content = content
+        self.text = text
+
+
+def test_response_text_strips_response_body() -> None:
+    assert _response_text(FakeResponse(b'{"message":"bad request"}', ' {"message":"bad request"} ')) == (
+        '{"message":"bad request"}'
+    )
 
 
 def test_normalize_ipv4_list_from_data_payload() -> None:

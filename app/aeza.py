@@ -3,6 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 
+def _response_text(response: Any) -> str:
+    if not response.content:
+        return ""
+    try:
+        return response.text.strip()
+    except UnicodeDecodeError:
+        return response.content.decode("utf-8", errors="replace").strip()
+
+
 def aeza_api_key(token: str) -> str:
     value = token.strip()
     header_name = value.split(":", 1)[0].strip().lower()
@@ -54,7 +63,11 @@ class AezaClient:
                         "Aeza rejected AEZA_TOKEN with 401 Unauthorized. "
                         "Update AEZA_TOKEN on Setup; you can paste either the raw token or the full X-API-Key header."
                     ) from None
-                raise
+                detail = _response_text(exc.response)
+                message = f"Aeza API returned {exc.response.status_code} {exc.response.reason_phrase}"
+                if detail:
+                    message = f"{message}: {detail}"
+                raise RuntimeError(message) from None
             if response.content:
                 return response.json()
             return None
