@@ -47,59 +47,52 @@ def build_deep_check_script(client: dict, current_ip: str) -> str:
         for item in enabled_clients
         if item.get("amnezia_public_key")
     ]
-    xray_config = {
-        "log": {"loglevel": "warning"},
-        "inbounds": [
-            {
-                "listen": "127.0.0.1",
-                "port": 19080,
-                "protocol": "socks",
-                "settings": {"auth": "noauth", "udp": True},
-            }
-        ],
-        "outbounds": [
-            {
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [
-                        {
-                            "address": current_ip,
-                            "port": vless_port(),
-                            "users": [
-                                {
-                                    "id": client["vless_uuid"],
-                                    "encryption": "none",
-                                    "flow": "xtls-rprx-vision",
-                                }
-                            ],
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": {
-                        "serverName": settings.vless_reality_server_name,
-                        "fingerprint": settings.vless_reality_fingerprint,
-                        "publicKey": get_setting("vless.reality_public_key"),
-                        "shortId": get_setting("vless.reality_short_id"),
-                        "spiderX": settings.vless_reality_spider_x,
+    current_vless_port = vless_port()
+    xray_config = None
+    if current_vless_port is not None:
+        xray_config = {
+            "log": {"loglevel": "warning"},
+            "inbounds": [
+                {
+                    "listen": "127.0.0.1",
+                    "port": 19080,
+                    "protocol": "socks",
+                    "settings": {"auth": "noauth", "udp": True},
+                }
+            ],
+            "outbounds": [
+                {
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": current_ip,
+                                "port": current_vless_port,
+                                "users": [
+                                    {
+                                        "id": client["vless_uuid"],
+                                        "encryption": "none",
+                                        "flow": "xtls-rprx-vision",
+                                    }
+                                ],
+                            }
+                        ]
                     },
-                },
-            }
-        ],
-    }
-    hysteria_config = {
-        "server": f"{current_ip}:{hysteria_port()}",
-        "auth": hysteria_auth(client),
-        "tls": {
-            "sni": settings.vless_reality_server_name,
-            "insecure": True,
-        },
-        "socks5": {
-            "listen": "127.0.0.1:19081",
-        },
-    }
+                    "streamSettings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "realitySettings": {
+                            "serverName": settings.vless_reality_server_name,
+                            "fingerprint": settings.vless_reality_fingerprint,
+                            "publicKey": get_setting("vless.reality_public_key"),
+                            "shortId": get_setting("vless.reality_short_id"),
+                            "spiderX": settings.vless_reality_spider_x,
+                        },
+                    },
+                }
+            ],
+        }
+    current_hysteria_port = hysteria_port()
 
     return f"""#!/usr/bin/env bash
 set +e
@@ -131,21 +124,10 @@ check_socks() {{
     https://www.google.com/generate_204 -o /dev/null >/dev/null 2>&1
 }}
 
-cat >"$WORKDIR/xray.json" <<'JSON'
-{json.dumps(xray_config, indent=2, ensure_ascii=False)}
+if [ {shlex.quote("1" if xray_config else "0")} = "1" ] && command -v curl >/dev/null 2>&1 && command -v xray >/dev/null 2>&1; then
+  cat >"$WORKDIR/xray.json" <<'JSON'
+{json.dumps(xray_config or {}, indent=2, ensure_ascii=False)}
 JSON
-
-cat >"$WORKDIR/hysteria.yaml" <<'YAML'
-server: {shlex.quote(hysteria_config["server"])}
-auth: {shlex.quote(hysteria_config["auth"])}
-tls:
-  sni: {shlex.quote(hysteria_config["tls"]["sni"])}
-  insecure: true
-socks5:
-  listen: 127.0.0.1:19081
-YAML
-
-if command -v curl >/dev/null 2>&1 && command -v xray >/dev/null 2>&1; then
   xray run -c "$WORKDIR/xray.json" >"$WORKDIR/xray.log" 2>&1 &
   XRAY_PID="$!"
   if wait_tcp_port 19080 && check_socks 19080; then
@@ -157,7 +139,16 @@ else
   echo "VLESS_DEEP=UNAVAILABLE"
 fi
 
-if command -v curl >/dev/null 2>&1 && command -v hysteria >/dev/null 2>&1; then
+if [ {shlex.quote("1" if current_hysteria_port is not None else "0")} = "1" ] && command -v curl >/dev/null 2>&1 && command -v hysteria >/dev/null 2>&1; then
+  cat >"$WORKDIR/hysteria.yaml" <<'YAML'
+server: {shlex.quote(f"{current_ip}:{current_hysteria_port}" if current_hysteria_port is not None else "")}
+auth: {shlex.quote(hysteria_auth(client))}
+tls:
+  sni: {shlex.quote(settings.vless_reality_server_name)}
+  insecure: true
+socks5:
+  listen: 127.0.0.1:19081
+YAML
   hysteria client -c "$WORKDIR/hysteria.yaml" >"$WORKDIR/hysteria.log" 2>&1 &
   HYSTERIA_PID="$!"
   if wait_tcp_port 19081 && check_socks 19081; then

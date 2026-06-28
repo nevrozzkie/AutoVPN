@@ -257,14 +257,18 @@
 
       <section>
         <h2>AmneziaVPN</h2>
-        <a class="button" href="{{ amnezia_url }}">Скачать .conf</a>
-        <button type="button" onclick="navigator.clipboard.writeText(document.querySelector('#amnezia-key').value)">Скопировать ключ</button>
-        <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
-        <p class="muted">Если QR не считывается, скопируйте ключ ниже и вставьте его в AmneziaVPN вручную.</p>
-        <textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea>
-        <div id="amnezia-qr" class="qr">
-          <img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN">
-        </div>
+        {% if amnezia_enabled %}
+          <a class="button" href="{{ amnezia_url }}">Скачать .conf</a>
+          <button type="button" onclick="navigator.clipboard.writeText(document.querySelector('#amnezia-key').value)">Скопировать ключ</button>
+          <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
+          <p class="muted">Если QR не считывается, скопируйте ключ ниже и вставьте его в AmneziaVPN вручную.</p>
+          <textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea>
+          <div id="amnezia-qr" class="qr">
+            <img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN">
+          </div>
+        {% else %}
+          <p class="muted">AmneziaWG выключена в настройках сервера.</p>
+        {% endif %}
       </section>
 
       <section>

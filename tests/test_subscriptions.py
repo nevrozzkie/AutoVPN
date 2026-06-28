@@ -65,5 +65,25 @@ def test_subscriptions_use_runtime_protocol_ports() -> None:
         assert outbounds["vless-reality"]["server_port"] == 9443
         assert outbounds["hysteria2"]["server_port"] == 9444
     finally:
-        set_setting("config.vless_port", "")
-        set_setting("config.hysteria_port", "")
+        set_setting("config.vless_port", str(settings.vless_port))
+        set_setting("config.hysteria_port", str(settings.hysteria_port))
+
+
+def test_subscriptions_skip_protocols_with_empty_ports() -> None:
+    init_db()
+    set_setting("config.vless_port", "")
+    set_setting("config.hysteria_port", "")
+    try:
+        client = create_client("Alice")
+
+        text_subscription = build_subscription(client, "203.0.113.10")
+        sing_box_subscription = build_sing_box_subscription(client, "203.0.113.10")
+        outbounds = {outbound["tag"]: outbound for outbound in sing_box_subscription["outbounds"]}
+
+        assert text_subscription == ""
+        assert outbounds["proxy"]["outbounds"] == ["direct"]
+        assert "vless-reality" not in outbounds
+        assert "hysteria2" not in outbounds
+    finally:
+        set_setting("config.vless_port", str(settings.vless_port))
+        set_setting("config.hysteria_port", str(settings.hysteria_port))

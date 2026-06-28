@@ -3,12 +3,15 @@ import tempfile
 
 os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
-from app.db import create_client, get_setting, init_db
+from app.db import create_client, get_setting, init_db, set_setting
 from app.eu_install import build_eu_install_script, describe_ssh_command, forget_ssh_known_host
 
 
 def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     init_db()
+    set_setting("config.vless_port", "8443")
+    set_setting("config.hysteria_port", "443")
+    set_setting("config.amnezia_port", "51820")
     client = create_client("Alice")
 
     script = build_eu_install_script()
@@ -33,6 +36,29 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert "iptables -C INPUT -p udp --dport 443 -j ACCEPT" in script
     assert "firewall-cmd --permanent --add-port=443/udp" in script
     assert "systemctl is-active --quiet hysteria-server" in script
+
+
+def test_build_eu_install_script_disables_protocols_with_empty_ports() -> None:
+    init_db()
+    create_client("Alice")
+    set_setting("config.vless_port", "")
+    set_setting("config.hysteria_port", "")
+    set_setting("config.amnezia_port", "")
+    try:
+        script = build_eu_install_script()
+
+        assert '"tag": "vless-in"' not in script
+        assert "systemctl disable --now hysteria-server" in script
+        assert "listen: :443" not in script
+        assert "ufw allow 443/udp" not in script
+        assert "systemctl restart hysteria-server" not in script
+        assert "systemctl disable --now awg-quick@awg0" in script
+        assert "ListenPort = 51820" not in script
+        assert "systemctl restart awg-quick@awg0" not in script
+    finally:
+        set_setting("config.vless_port", "8443")
+        set_setting("config.hysteria_port", "443")
+        set_setting("config.amnezia_port", "51820")
 
 
 def test_describe_ssh_command_marks_password_auth() -> None:

@@ -61,15 +61,16 @@ async def check_vpn_health(
     host: str,
     *,
     ssh_port: int,
-    vless_port: int,
-    hysteria_port: int,
+    vless_port: int | None,
+    hysteria_port: int | None,
 ) -> dict[str, bool]:
-    ssh, vless, hysteria_udp = await asyncio.gather(
-        tcp_check(host, ssh_port),
-        tcp_check(host, vless_port),
-        udp_probe(host, hysteria_port),
-    )
-    hysteria_udp_packet_sent = hysteria_udp.ok
+    ssh_task = asyncio.create_task(tcp_check(host, ssh_port))
+    vless_task = asyncio.create_task(tcp_check(host, vless_port)) if vless_port is not None else None
+    hysteria_task = asyncio.create_task(udp_probe(host, hysteria_port)) if hysteria_port is not None else None
+    await asyncio.gather(*(task for task in (ssh_task, vless_task, hysteria_task) if task is not None))
+    ssh = ssh_task.result()
+    vless = vless_task.result() if vless_task else True
+    hysteria_udp_packet_sent = hysteria_task.result().ok if hysteria_task else True
     return {
         "ssh": ssh,
         "vless_tcp_reachable": vless,

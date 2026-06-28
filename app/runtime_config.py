@@ -21,6 +21,15 @@ def config_int(key: str, default: int) -> int:
     return int(value)
 
 
+def optional_config_int(key: str, default: int) -> int | None:
+    value = get_setting(f"config.{key}", None)  # type: ignore[arg-type]
+    if value == "":
+        return None
+    if value is None:
+        return default
+    return int(value)
+
+
 def config_csv(key: str, default: list[str]) -> list[str]:
     value = config_value(key, "")
     if not value:
@@ -84,16 +93,16 @@ def ssh_connect_timeout_seconds() -> int:
     return config_int("ssh_connect_timeout_seconds", 15)
 
 
-def vless_port() -> int:
-    return config_int("vless_port", settings.vless_port)
+def vless_port() -> int | None:
+    return optional_config_int("vless_port", settings.vless_port)
 
 
-def hysteria_port() -> int:
-    return config_int("hysteria_port", settings.hysteria_port)
+def hysteria_port() -> int | None:
+    return optional_config_int("hysteria_port", settings.hysteria_port)
 
 
-def amnezia_port() -> int:
-    return config_int("amnezia_port", settings.amnezia_port)
+def amnezia_port() -> int | None:
+    return optional_config_int("amnezia_port", settings.amnezia_port)
 
 
 def setup_complete() -> bool:

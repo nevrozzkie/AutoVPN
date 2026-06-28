@@ -20,10 +20,12 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
     for protocol in PROTOCOLS:
         key = protocol["key"]
         port = protocol["port"]()
+        enabled = bool(protocol["enabled"]) and port is not None
         statuses.append(
             {
                 **protocol,
                 "port": port,
+                "enabled": enabled,
                 "status": get_setting(f"protocol.{key}.status", "UNKNOWN"),
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
@@ -56,8 +58,9 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     statuses = []
     for index, protocol in enumerate(PROTOCOLS):
         key = protocol["key"]
+        port = protocol["port"]()
         if check_tasks[index] is None:
-            status = "PLACEHOLDER" if protocol.get("placeholder") else "NOT_CONFIGURED" if not protocol["enabled"] else "UNKNOWN"
+            status = "PLACEHOLDER" if protocol.get("placeholder") and port is not None else "NOT_CONFIGURED"
             set_setting(f"protocol.{key}.failed_since", "")
             set_setting(f"protocol.{key}.ping_ms", "")
         else:
@@ -88,7 +91,8 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
         statuses.append(
             {
                 **protocol,
-                "port": protocol["port"](),
+                "port": port,
+                "enabled": bool(protocol["enabled"]) and port is not None,
                 "status": status,
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),

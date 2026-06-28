@@ -72,12 +72,14 @@ def build_eu_install_script() -> str:
         "h3": int(get_setting("amnezia.h3", "3")),
         "h4": int(get_setting("amnezia.h4", "4")),
     }
-    amnezia_config = build_amnezia_server_config(
-        clients,
-        server_private_key=server_private_key,
-        obfuscation=amnezia_obfuscation,
-        listen_port=current_amnezia_port,
-    )
+    amnezia_config = ""
+    if current_amnezia_port is not None:
+        amnezia_config = build_amnezia_server_config(
+            clients,
+            server_private_key=server_private_key,
+            obfuscation=amnezia_obfuscation,
+            listen_port=current_amnezia_port,
+        )
     xray_clients = [
         {
             "id": client["vless_uuid"],
@@ -116,7 +118,24 @@ def build_eu_install_script() -> str:
                 "port": 10085,
                 "protocol": "dokodemo-door",
                 "settings": {"address": "127.0.0.1"},
-            },
+            }
+        ],
+        "outbounds": [
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "blocked"},
+        ],
+        "routing": {
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["api"],
+                    "outboundTag": "api",
+                }
+            ]
+        },
+    }
+    if current_vless_port is not None:
+        xray_config["inbounds"].append(
             {
                 "tag": "vless-in",
                 "listen": "0.0.0.0",
@@ -142,21 +161,112 @@ def build_eu_install_script() -> str:
                     "destOverride": ["http", "tls", "quic"],
                 },
             }
-        ],
-        "outbounds": [
-            {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "blocked"},
-        ],
-        "routing": {
-            "rules": [
-                {
-                    "type": "field",
-                    "inboundTag": ["api"],
-                    "outboundTag": "api",
-                }
-            ]
-        },
-    }
+        )
+    if current_hysteria_port is not None:
+        hysteria_config_script = f"""
+HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
+if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ] || ! openssl x509 -in /etc/autovpn/hysteria.crt -noout -subject | grep -Eq "CN ?= ?${{HYSTERIA_SNI}}"; then
+  rm -f /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
+  openssl req -x509 -newkey rsa:2048 -nodes \\
+    -keyout /etc/autovpn/hysteria.key \\
+    -out /etc/autovpn/hysteria.crt \\
+    -days 3650 \\
+    -subj "/CN=${{HYSTERIA_SNI}}"
+fi
+chmod 644 /etc/autovpn/hysteria.crt
+if id hysteria >/dev/null 2>&1; then
+  chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
+  chmod 640 /etc/autovpn/hysteria.key
+else
+  chmod 644 /etc/autovpn/hysteria.key
+fi
+
+cat >/etc/hysteria/config.yaml <<'YAML'
+listen: :{current_hysteria_port}
+
+tls:
+  cert: /etc/autovpn/hysteria.crt
+  key: /etc/autovpn/hysteria.key
+
+auth:
+  type: password
+  password: {json.dumps(hysteria_password)}
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://example.com/
+    rewriteHost: true
+YAML
+"""
+        hysteria_firewall_script = f"""
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow {current_hysteria_port}/udp || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C INPUT -p udp --dport {current_hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {current_hysteria_port} -j ACCEPT || true
+fi
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port={current_hysteria_port}/udp || true
+  firewall-cmd --reload || true
+fi
+if command -v nft >/dev/null 2>&1; then
+  nft list ruleset | grep -q "udp dport {current_hysteria_port} accept" || nft add rule inet filter input udp dport {current_hysteria_port} accept || true
+fi
+"""
+        hysteria_service_script = """
+systemctl enable hysteria-server
+systemctl restart hysteria-server
+"""
+        hysteria_check_script = """
+systemctl is-active --quiet hysteria-server
+"""
+        hysteria_status_script = """
+systemctl --no-pager --full status hysteria-server || true
+"""
+    else:
+        hysteria_config_script = """
+rm -f /etc/hysteria/config.yaml
+systemctl disable --now hysteria-server >/dev/null 2>&1 || true
+"""
+        hysteria_firewall_script = ""
+        hysteria_service_script = ""
+        hysteria_check_script = ""
+        hysteria_status_script = ""
+
+    if current_amnezia_port is not None:
+        amnezia_config_script = f"""
+cat >/etc/amnezia/amneziawg/awg0.conf <<'AWG'
+{amnezia_config}
+AWG
+chmod 600 /etc/amnezia/amneziawg/awg0.conf
+"""
+        amnezia_service_script = """
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl enable awg-quick@awg0
+  systemctl restart awg-quick@awg0
+else
+  echo "[autovpn] WARNING: awg-quick is unavailable; AmneziaWG service was not started."
+fi
+"""
+        amnezia_check_script = """
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl is-active --quiet awg-quick@awg0
+fi
+"""
+        amnezia_status_script = """
+if command -v awg-quick >/dev/null 2>&1; then
+  systemctl --no-pager --full status awg-quick@awg0 || true
+fi
+"""
+    else:
+        amnezia_config_script = """
+rm -f /etc/amnezia/amneziawg/awg0.conf
+systemctl disable --now awg-quick@awg0 >/dev/null 2>&1 || true
+"""
+        amnezia_service_script = ""
+        amnezia_check_script = ""
+        amnezia_status_script = ""
 
     return f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -224,86 +334,28 @@ cat >/usr/local/etc/xray/config.json <<'JSON'
 {json.dumps(xray_config, indent=2, ensure_ascii=False)}
 JSON
 
-HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
-if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ] || ! openssl x509 -in /etc/autovpn/hysteria.crt -noout -subject | grep -Eq "CN ?= ?${{HYSTERIA_SNI}}"; then
-  rm -f /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
-  openssl req -x509 -newkey rsa:2048 -nodes \\
-    -keyout /etc/autovpn/hysteria.key \\
-    -out /etc/autovpn/hysteria.crt \\
-    -days 3650 \\
-    -subj "/CN=${{HYSTERIA_SNI}}"
-fi
-chmod 644 /etc/autovpn/hysteria.crt
-if id hysteria >/dev/null 2>&1; then
-  chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
-  chmod 640 /etc/autovpn/hysteria.key
-else
-  chmod 644 /etc/autovpn/hysteria.key
-fi
-
-cat >/etc/hysteria/config.yaml <<'YAML'
-listen: :{current_hysteria_port}
-
-tls:
-  cert: /etc/autovpn/hysteria.crt
-  key: /etc/autovpn/hysteria.key
-
-auth:
-  type: password
-  password: {json.dumps(hysteria_password)}
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://example.com/
-    rewriteHost: true
-YAML
+{hysteria_config_script}
+{amnezia_config_script}
 
 echo "[autovpn] opening firewall ports"
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow {current_hysteria_port}/udp || true
-fi
-if command -v iptables >/dev/null 2>&1; then
-  iptables -C INPUT -p udp --dport {current_hysteria_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {current_hysteria_port} -j ACCEPT || true
-fi
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port={current_hysteria_port}/udp || true
-  firewall-cmd --reload || true
-fi
-if command -v nft >/dev/null 2>&1; then
-  nft list ruleset | grep -q "udp dport {current_hysteria_port} accept" || nft add rule inet filter input udp dport {current_hysteria_port} accept || true
-fi
-
-cat >/etc/amnezia/amneziawg/awg0.conf <<'AWG'
-{amnezia_config}
-AWG
-chmod 600 /etc/amnezia/amneziawg/awg0.conf
+{hysteria_firewall_script}
 
 echo "[autovpn] enabling services"
-systemctl enable xray hysteria-server
+systemctl enable xray
 systemctl restart xray
-systemctl restart hysteria-server
-if command -v awg-quick >/dev/null 2>&1; then
-  systemctl enable awg-quick@awg0
-  systemctl restart awg-quick@awg0
-else
-  echo "[autovpn] WARNING: awg-quick is unavailable; AmneziaWG service was not started."
-fi
+{hysteria_service_script}
+{amnezia_service_script}
 sleep 1
 
 echo "[autovpn] checking services"
 systemctl is-active --quiet xray
-systemctl is-active --quiet hysteria-server
-if command -v awg-quick >/dev/null 2>&1; then
-  systemctl is-active --quiet awg-quick@awg0
-fi
+{hysteria_check_script}
+{amnezia_check_script}
 
 echo "[autovpn] status"
 systemctl --no-pager --full status xray || true
-systemctl --no-pager --full status hysteria-server || true
-if command -v awg-quick >/dev/null 2>&1; then
-  systemctl --no-pager --full status awg-quick@awg0 || true
-fi
+{hysteria_status_script}
+{amnezia_status_script}
 
 echo "[autovpn] done"
 """

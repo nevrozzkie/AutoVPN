@@ -90,6 +90,19 @@ def format_msk(value: object) -> str:
         return str(value)
 
 
+def _optional_port_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if not value:
+        return ""
+    try:
+        port = int(value)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Protocol port must be a number")
+    if port < 1 or port > 65535:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Protocol port must be between 1 and 65535")
+    return str(port)
+
+
 STATUS_LABELS = {
     "OK": "Сетевой probe прошёл",
     "VERIFIED": "OK",
@@ -175,22 +188,28 @@ def get_amnezia_obfuscation() -> dict[str, int]:
 
 
 def get_amnezia_config(client: dict, current_ip: str) -> str:
+    port = amnezia_port()
+    if port is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AmneziaWG is disabled")
     return build_amnezia_client_config(
         client,
         current_ip=current_ip,
         server_public_key=get_setting("amnezia.server_public_key"),
         obfuscation=get_amnezia_obfuscation(),
-        endpoint_port=amnezia_port(),
+        endpoint_port=port,
     )
 
 
 def get_amnezia_vpn_key(client: dict, current_ip: str) -> str:
+    port = amnezia_port()
+    if port is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AmneziaWG is disabled")
     return build_amnezia_vpn_key(
         client,
         current_ip=current_ip,
         server_public_key=get_setting("amnezia.server_public_key"),
         obfuscation=get_amnezia_obfuscation(),
-        endpoint_port=amnezia_port(),
+        endpoint_port=port,
     )
 
 
@@ -310,9 +329,9 @@ def setup_submit(
     eu_ssh_port_value: int = Form(22),
     eu_ssh_password_value: str = Form(""),
     eu_ssh_key_path_value: str = Form(""),
-    vless_port_value: int = Form(8443),
-    hysteria_port_value: int = Form(443),
-    amnezia_port_value: int = Form(51820),
+    vless_port_value: str = Form(""),
+    hysteria_port_value: str = Form(""),
+    amnezia_port_value: str = Form(""),
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
@@ -337,9 +356,9 @@ def setup_submit(
     set_setting("config.eu_ssh_host", ssh_host_value)
     set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
     set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
-    set_setting("config.vless_port", str(vless_port_value or 8443))
-    set_setting("config.hysteria_port", str(hysteria_port_value or 443))
-    set_setting("config.amnezia_port", str(amnezia_port_value or 51820))
+    set_setting("config.vless_port", _optional_port_value(vless_port_value))
+    set_setting("config.hysteria_port", _optional_port_value(hysteria_port_value))
+    set_setting("config.amnezia_port", _optional_port_value(amnezia_port_value))
     if eu_ssh_password_value:
         set_setting("config.eu_ssh_password", eu_ssh_password_value)
         set_setting("config.eu_ssh_key_path", "")
@@ -705,6 +724,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     if not current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     base_url = str(request.base_url).rstrip("/")
+    current_amnezia_port = amnezia_port()
     return templates.TemplateResponse(
         request,
         "client_page.html",
@@ -717,8 +737,9 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
+            "amnezia_enabled": current_amnezia_port is not None,
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
-            "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip),
+            "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip) if current_amnezia_port is not None else "",
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
         },
     )
