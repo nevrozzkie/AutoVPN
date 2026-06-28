@@ -216,7 +216,10 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     origin = request.headers.get("origin", "")
     if origin:
         if origin == "null":
-            return any(_is_loopback_host(_hostname_port(expected_host)[0]) for expected_host in expected_hosts)
+            # Some browsers/webviews send Origin: null for same-page form submits.
+            # Allow it only when Fetch Metadata says the request is not cross-site.
+            fetch_site = request.headers.get("sec-fetch-site", "").lower()
+            return fetch_site in {"same-origin", "none", ""}
         return any(_same_host_or_loopback_alias(_host_of(origin), expected_host) for expected_host in expected_hosts)
     referer = request.headers.get("referer", "")
     if referer:
