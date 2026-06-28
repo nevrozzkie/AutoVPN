@@ -46,7 +46,7 @@ def build_subscription(client: dict, current_ip: str) -> str:
             hysteria_query["obfs"] = "salamander"
             hysteria_query["obfs-password"] = hysteria_obfs_password
         links.append(
-            f"hysteria2://{hysteria_password}@{current_ip}:{current_hysteria_port}/"
+            f"hy2://{hysteria_password}@{current_ip}:{current_hysteria_port}/"
             f"?{urlencode(hysteria_query)}#{hysteria_name}"
         )
     return "\n".join(links) + ("\n" if links else "")

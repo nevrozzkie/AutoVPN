@@ -21,6 +21,7 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "flow=xtls-rprx-vision" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
     assert "hy2://" not in subscription
+    assert "hysteria2://" not in subscription
 
 
 def test_sing_box_subscription_contains_enabled_protocols() -> None:
@@ -52,7 +53,8 @@ def test_subscriptions_include_hysteria_when_enabled() -> None:
         sing_box_subscription = build_sing_box_subscription(client, "203.0.113.10")
         outbounds = {outbound["tag"]: outbound for outbound in sing_box_subscription["outbounds"]}
 
-        assert f"hysteria2://{get_setting('hysteria.password')}@" in text_subscription
+        assert f"hy2://{get_setting('hysteria.password')}@" in text_subscription
+        assert "hysteria2://" not in text_subscription
         assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in text_subscription
         assert "obfs=salamander" in text_subscription
         assert f"obfs-password={get_setting('hysteria.obfs_password')}" in text_subscription
