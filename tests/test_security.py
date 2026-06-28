@@ -104,6 +104,37 @@ def test_csrf_allows_zero_bind_loopback_alias() -> None:
     assert response.status_code in (200, 303)
 
 
+def test_csrf_allows_null_origin_for_loopback_host() -> None:
+    client = _client()
+    response = client.post(
+        "/admin/clients",
+        data={"name": "x"},
+        auth=("admin", "pw12345"),
+        headers={
+            "Host": "localhost:8000",
+            "Origin": "null",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (200, 303)
+
+
+def test_csrf_blocks_null_origin_for_non_loopback_host() -> None:
+    client = _client()
+    response = client.post(
+        "/admin/clients",
+        data={"name": "x"},
+        auth=("admin", "pw12345"),
+        headers={
+            "Host": "vpn.example.com",
+            "Origin": "null",
+        },
+    )
+
+    assert response.status_code == 403
+
+
 def test_login_rate_limiter_blocks_after_threshold() -> None:
     limiter = LoginRateLimiter(max_failures=3, window_seconds=60, block_seconds=60)
     key = "1.2.3.4"
