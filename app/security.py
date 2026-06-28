@@ -178,7 +178,7 @@ def _hostname_port(value: str) -> tuple[str, str]:
 
 
 def _is_loopback_host(hostname: str) -> bool:
-    return hostname in {"localhost", "127.0.0.1", "::1", "[::1]"}
+    return hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "::", "[::1]", "[::]"}
 
 
 def _same_host_or_loopback_alias(left: str, right: str) -> bool:
@@ -220,6 +220,20 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     if referer:
         return any(_same_host_or_loopback_alias(_host_of(referer), expected_host) for expected_host in expected_hosts)
     return True
+
+
+def csrf_failure_detail(request) -> str:  # type: ignore[no-untyped-def]
+    host = request.headers.get("host", "")
+    forwarded_host = request.headers.get("x-forwarded-host", "")
+    origin = request.headers.get("origin", "")
+    referer = request.headers.get("referer", "")
+    return (
+        "Cross-origin request blocked (CSRF protection). "
+        f"host={host or '-'}; "
+        f"x-forwarded-host={forwarded_host or '-'}; "
+        f"origin={origin or '-'}; "
+        f"referer={referer or '-'}"
+    )
 
 
 SECURITY_HEADERS = {

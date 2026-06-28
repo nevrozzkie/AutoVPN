@@ -76,6 +76,7 @@ from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_sing_box_subscription, build_subscription
 from app.security import (
     SECURITY_HEADERS,
+    csrf_failure_detail,
     client_key,
     hash_password,
     is_same_origin_request,
@@ -94,7 +95,7 @@ async def security_middleware(request: Request, call_next):
     # CSRF: state-changing requests must come from the panel's own origin.
     if not is_same_origin_request(request):
         return PlainTextResponse(
-            "Cross-origin request blocked (CSRF protection).",
+            csrf_failure_detail(request),
             status_code=status.HTTP_403_FORBIDDEN,
         )
     response = await call_next(request)

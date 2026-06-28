@@ -88,6 +88,22 @@ def test_csrf_allows_loopback_host_aliases() -> None:
     assert response.status_code in (200, 303)
 
 
+def test_csrf_allows_zero_bind_loopback_alias() -> None:
+    client = _client()
+    response = client.post(
+        "/admin/clients",
+        data={"name": "x"},
+        auth=("admin", "pw12345"),
+        headers={
+            "Host": "0.0.0.0:8000",
+            "Origin": "http://127.0.0.1:8000",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (200, 303)
+
+
 def test_login_rate_limiter_blocks_after_threshold() -> None:
     limiter = LoginRateLimiter(max_failures=3, window_seconds=60, block_seconds=60)
     key = "1.2.3.4"
