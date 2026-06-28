@@ -20,12 +20,15 @@
 
 <section class="panel danger">
   Aeza спишет деньги за новый IPv4. После покупки IP может появиться в списке не сразу.
+  {% if not aeza_ipv4_domain %}
+    <p>Для покупки IPv4 Aeza требует <code>AEZA_IPV4_DOMAIN</code>. Заполните его в Setup.</p>
+  {% endif %}
 </section>
 
 <div class="actions action-bar">
   <a class="button" href="/admin/ip">Назад</a>
   <form method="post" action="/admin/ip/buy" class="inline">
-    <button type="submit">Подтвердить покупку IPv4</button>
+    <button type="submit" {% if not aeza_ipv4_domain %}disabled{% endif %}>Подтвердить покупку IPv4</button>
   </form>
 </div>
 {% endblock %}

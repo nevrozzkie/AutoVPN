@@ -191,85 +191,32 @@ prepare_source() {
 
 write_env_file() {
   echo
-  echo "[autovpn] configuration"
+  echo "[autovpn] writing configuration. Open Setup in the browser to finish configuration."
   local admin_username admin_password current_ip
   local aeza_token aeza_service_id aeza_domain
   local eu_ssh_host eu_ssh_user eu_ssh_port eu_ssh_key_path eu_ssh_password
 
-  admin_username="${ADMIN_USERNAME:-}"
-  if [ -z "$admin_username" ]; then
-    admin_username="$(ask "Admin username" "admin")"
-  fi
-
+  admin_username="${ADMIN_USERNAME:-admin}"
   admin_password="${ADMIN_PASSWORD:-}"
-  if [ -z "$admin_password" ]; then
-    admin_password="$(ask_secret "Admin password (empty = configure later in /setup)")"
-  fi
-
   current_ip="${CURRENT_IP:-}"
   if [ -z "$current_ip" ]; then
     current_ip="${EU_SSH_HOST:-}"
   fi
-  if [ -z "$current_ip" ]; then
-    current_ip="$(ask "Current VPN server IP (can be empty for now)" "")"
-  fi
-
-  echo
-  echo "Aeza IP rotation is optional. Leave empty for generic VPS."
   aeza_token="${AEZA_TOKEN:-}"
-  if [ -z "$aeza_token" ]; then
-    aeza_token="$(ask_secret "AEZA_TOKEN (optional)")"
-  fi
-  if [ -n "$aeza_token" ]; then
-    aeza_service_id="${AEZA_SERVICE_ID:-}"
-    if [ -z "$aeza_service_id" ]; then
-      aeza_service_id="$(ask "AEZA_SERVICE_ID" "")"
-    fi
-    aeza_domain="${AEZA_IPV4_DOMAIN:-}"
-    if [ -z "$aeza_domain" ]; then
-      aeza_domain="$(ask "AEZA_IPV4_DOMAIN / service name (optional)" "")"
-    fi
-  else
-    aeza_service_id=""
-    aeza_domain=""
-  fi
-
-  echo
-  echo "SSH settings for installing/syncing VPN on the target VPS."
+  aeza_service_id="${AEZA_SERVICE_ID:-}"
+  aeza_domain="${AEZA_IPV4_DOMAIN:-}"
   eu_ssh_host="${EU_SSH_HOST:-}"
-  if [ -z "$eu_ssh_host" ]; then
-    eu_ssh_host="$(ask "EU/VPN VPS SSH host (empty = use current_ip)" "$current_ip")"
-  fi
-
-  eu_ssh_user="${EU_SSH_USER:-}"
-  if [ -z "$eu_ssh_user" ] && [ -n "$eu_ssh_host" ]; then
-    eu_ssh_user="$(ask "EU/VPN VPS SSH user" "root")"
-  fi
+  eu_ssh_user="${EU_SSH_USER:-root}"
   eu_ssh_user="${eu_ssh_user:-root}"
-
-  eu_ssh_port="${EU_SSH_PORT:-}"
-  if [ -z "$eu_ssh_port" ] && [ -n "$eu_ssh_host" ]; then
-    eu_ssh_port="$(ask "EU/VPN VPS SSH port" "22")"
-  fi
+  eu_ssh_port="${EU_SSH_PORT:-22}"
   eu_ssh_port="${eu_ssh_port:-22}"
-
   eu_ssh_password="${EU_SSH_PASSWORD:-}"
   eu_ssh_key_path="${EU_SSH_KEY_PATH:-}"
   if [ -z "$eu_ssh_host" ]; then
     eu_ssh_password=""
     eu_ssh_key_path=""
-    echo "Skipping SSH settings. You can configure them later in /setup."
   elif [ -n "$eu_ssh_password" ]; then
     eu_ssh_key_path=""
-    echo "Using SSH password auth from EU_SSH_PASSWORD."
-  elif [ -n "$eu_ssh_key_path" ]; then
-    echo "Using SSH key auth from EU_SSH_KEY_PATH."
-  elif yes_no "Use SSH password auth? If no, SSH key auth is used" "y"; then
-    eu_ssh_password="$(ask_secret "EU/VPN VPS SSH password")"
-    eu_ssh_key_path=""
-  else
-    eu_ssh_password=""
-    eu_ssh_key_path="$(ask "SSH private key path on this computer" "$HOME/.ssh/id_ed25519")"
   fi
 
   mkdir -p "$APP_DIR/data"
@@ -354,7 +301,7 @@ PY
 if [ "\$RUN_PORT" != "\${APP_PORT:-8000}" ]; then
   echo "Port \${APP_PORT:-8000} is busy, using \$RUN_PORT."
 fi
-echo "Open: http://\$RUN_HOST:\$RUN_PORT/setup"
+echo "Open: http://\$RUN_HOST:\$RUN_PORT/admin/setup"
 exec "\$PYTHON_BIN" -m uvicorn app.main:app --host "\$RUN_HOST" --port "\$RUN_PORT"
 EOF
   chmod +x "$APP_DIR/run-local.sh"

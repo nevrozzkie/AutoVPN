@@ -137,7 +137,7 @@ while (`$true) {
 if (`$RunPort -ne [int]"$PortValue") {
     Write-Host "Port $PortValue is busy, using `$RunPort."
 }
-Write-Host "Open: http://`$RunHost`:`$RunPort/setup"
+Write-Host "Open: http://`$RunHost`:`$RunPort/admin/setup"
 & "$Path\.venv\Scripts\python.exe" -m uvicorn app.main:app --host `$RunHost --port `$RunPort
 "@
     Set-Content -Path (Join-Path $Path "run-local.ps1") -Value $Content -Encoding UTF8
@@ -173,65 +173,12 @@ else {
 
 Set-Location $AppDir
 
-if (-not $AdminPassword) {
-    $AdminPassword = Ask-SecretText "Admin password (empty = configure later in /setup)"
-}
-
 if (-not $CurrentIp) {
     $CurrentIp = $EuHost
-}
-if (-not $CurrentIp) {
-    $CurrentIp = Ask "Current VPN server IP (can be empty for now)"
-}
-
-Write-Host ""
-Write-Host "Aeza IP rotation is optional. Leave empty for generic VPS."
-if (-not $AezaToken) {
-    $AezaToken = Ask-SecretText "AEZA_TOKEN (optional)"
-}
-if ($AezaToken) {
-    if (-not $AezaServiceId) {
-        $AezaServiceId = Ask "AEZA_SERVICE_ID"
-    }
-    if (-not $AezaDomain) {
-        $AezaDomain = Ask "AEZA_IPV4_DOMAIN / service name (optional)"
-    }
-}
-
-Write-Host ""
-Write-Host "SSH settings for installing/syncing VPN on the target VPS."
-if (-not $EuHost) {
-    $EuHost = Ask "EU/VPN VPS SSH host (empty = use current_ip)" $CurrentIp
-}
-if (-not $EuUser) {
-    if ($EuHost) {
-        $EuUser = Ask "EU/VPN VPS SSH user" "root"
-    }
-    else {
-        $EuUser = "root"
-    }
-}
-if (-not $EuPort) {
-    if ($EuHost) {
-        $EuPort = [int](Ask "EU/VPN VPS SSH port" "22")
-    }
-    else {
-        $EuPort = 22
-    }
 }
 if (-not $EuHost) {
     $EuPassword = ""
     $EuKeyPath = ""
-    Write-Host "Skipping SSH settings. You can configure them later in /setup."
-}
-elseif (-not $EuPassword -and -not $EuKeyPath) {
-    $UsePassword = Ask "Use SSH password auth? y/n" "y"
-    if ($UsePassword -match "^(y|yes)$") {
-        $EuPassword = Ask-SecretText "EU/VPN VPS SSH password"
-    }
-    else {
-        $EuKeyPath = Ask "SSH private key path on this computer" "$env:USERPROFILE\.ssh\id_ed25519"
-    }
 }
 if ($EuPassword) {
     $EuKeyPath = ""
@@ -274,4 +221,4 @@ Write-Host "AutoVPN local install is ready."
 Write-Host "App dir: $AppDir"
 Write-Host "Config: $EnvPath"
 Write-Host "Run: powershell -ExecutionPolicy Bypass -File `"$AppDir\run-local.ps1`""
-Write-Host "Open: http://$AppHost`:$AppPort/admin"
+Write-Host "Open: http://$AppHost`:$AppPort/admin/setup"

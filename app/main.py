@@ -191,6 +191,10 @@ def get_aeza_client() -> AezaClient:
     return AezaClient(aeza_api_base(), aeza_token())
 
 
+def redirect_with_error(path: str, error: str) -> RedirectResponse:
+    return RedirectResponse(f"{path}?error={quote(error)}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 def get_amnezia_obfuscation() -> dict[str, int]:
     return {
         "jc": int(get_setting("amnezia.jc", "5")),
@@ -497,12 +501,12 @@ def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin
 async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    error = ""
+    error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
     try:
         ipv4_list = await get_aeza_client().get_ipv4_list(aeza_service_id())
     except Exception as exc:
-        error = str(exc)
+        error = error or str(exc)
     return templates.TemplateResponse(
         request,
         "ip_manager.html",
@@ -520,11 +524,13 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
 async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
+    domain = aeza_ipv4_domain()
     return templates.TemplateResponse(
         request,
         "ip_buy_confirm.html",
         {
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
+            "aeza_ipv4_domain": domain,
             "error": request.query_params.get("error", ""),
             "format_eur_minor_units": format_eur_minor_units,
         },
@@ -535,17 +541,20 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
 async def admin_ip_buy(_: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
+    domain = aeza_ipv4_domain()
+    if not domain:
+        return redirect_with_error(
+            "/admin/ip/buy/confirm",
+            "AEZA_IPV4_DOMAIN is required for buying IPv4 in Aeza",
+        )
     try:
         await get_aeza_client().add_ipv4(
             aeza_service_id(),
             payment_method=aeza_ipv4_payment_method(),
-            domain=aeza_ipv4_domain(),
+            domain=domain,
         )
     except Exception as exc:
-        return RedirectResponse(
-            f"/admin/ip/buy/confirm?error={quote(str(exc))}",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+        return redirect_with_error("/admin/ip/buy/confirm", str(exc))
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -557,7 +566,10 @@ async def admin_ip_make_main(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    await get_aeza_client().make_main_ipv4(aeza_service_id(), ipv4_id)
+    try:
+        await get_aeza_client().make_main_ipv4(aeza_service_id(), ipv4_id)
+    except Exception as exc:
+        return redirect_with_error("/admin/ip", str(exc))
     await apply_manual_main_ip(ip)
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -573,7 +585,10 @@ async def admin_ip_delete(
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
     if is_main == "1" or ip == get_setting("current_ip"):
         return RedirectResponse("/admin/ip?cannot_delete_main=1", status_code=status.HTTP_303_SEE_OTHER)
-    await get_aeza_client().delete_ipv4(aeza_service_id(), ipv4_id)
+    try:
+        await get_aeza_client().delete_ipv4(aeza_service_id(), ipv4_id)
+    except Exception as exc:
+        return redirect_with_error("/admin/ip", str(exc))
     return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
 
 

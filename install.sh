@@ -10,8 +10,8 @@ NGINX_SITE="/etc/nginx/sites-available/autovpn"
 NGINX_LINK="/etc/nginx/sites-enabled/autovpn"
 DEFAULT_REPO_URL="https://github.com/nevrozzkie/AutoVPN.git"
 REPO_URL="${AUTOVPN_REPO_URL:-$DEFAULT_REPO_URL}"
-APP_HOST="127.0.0.1"
-APP_PORT="8000"
+APP_HOST="${APP_HOST:-0.0.0.0}"
+APP_PORT="${APP_PORT:-8000}"
 
 usage() {
   cat <<EOF
@@ -206,85 +206,32 @@ prepare_source() {
 
 write_env_file() {
   echo
-  echo "[autovpn] configuration"
+  echo "[autovpn] writing configuration. Open Setup in the browser to finish configuration."
   local admin_username admin_password current_ip
   local aeza_token aeza_service_id aeza_domain
   local eu_ssh_host eu_ssh_user eu_ssh_port eu_ssh_key_path eu_ssh_password
 
-  admin_username="${ADMIN_USERNAME:-}"
-  if [ -z "$admin_username" ]; then
-    admin_username="$(ask "Admin username" "admin")"
-  fi
-
+  admin_username="${ADMIN_USERNAME:-admin}"
   admin_password="${ADMIN_PASSWORD:-}"
-  if [ -z "$admin_password" ]; then
-    admin_password="$(ask_secret "Admin password (empty = configure later in /setup)")"
-  fi
-
   current_ip="${CURRENT_IP:-}"
   if [ -z "$current_ip" ]; then
     current_ip="${EU_SSH_HOST:-}"
   fi
-  if [ -z "$current_ip" ]; then
-    current_ip="$(ask "Current VPN server IP (can be empty for now)" "")"
-  fi
-
-  echo
-  echo "Aeza IP rotation is optional. Leave empty for generic VPS."
   aeza_token="${AEZA_TOKEN:-}"
-  if [ -z "$aeza_token" ]; then
-    aeza_token="$(ask_secret "AEZA_TOKEN (optional)")"
-  fi
-  if [ -n "$aeza_token" ]; then
-    aeza_service_id="${AEZA_SERVICE_ID:-}"
-    if [ -z "$aeza_service_id" ]; then
-      aeza_service_id="$(ask "AEZA_SERVICE_ID" "")"
-    fi
-    aeza_domain="${AEZA_IPV4_DOMAIN:-}"
-    if [ -z "$aeza_domain" ]; then
-      aeza_domain="$(ask "AEZA_IPV4_DOMAIN / service name (optional)" "")"
-    fi
-  else
-    aeza_service_id=""
-    aeza_domain=""
-  fi
-
-  echo
-  echo "SSH settings for installing/syncing VPN on the target VPS."
+  aeza_service_id="${AEZA_SERVICE_ID:-}"
+  aeza_domain="${AEZA_IPV4_DOMAIN:-}"
   eu_ssh_host="${EU_SSH_HOST:-}"
-  if [ -z "$eu_ssh_host" ]; then
-    eu_ssh_host="$(ask "EU/VPN VPS SSH host (empty = use current_ip)" "$current_ip")"
-  fi
-
-  eu_ssh_user="${EU_SSH_USER:-}"
-  if [ -z "$eu_ssh_user" ] && [ -n "$eu_ssh_host" ]; then
-    eu_ssh_user="$(ask "EU/VPN VPS SSH user" "root")"
-  fi
+  eu_ssh_user="${EU_SSH_USER:-root}"
   eu_ssh_user="${eu_ssh_user:-root}"
-
-  eu_ssh_port="${EU_SSH_PORT:-}"
-  if [ -z "$eu_ssh_port" ] && [ -n "$eu_ssh_host" ]; then
-    eu_ssh_port="$(ask "EU/VPN VPS SSH port" "22")"
-  fi
+  eu_ssh_port="${EU_SSH_PORT:-22}"
   eu_ssh_port="${eu_ssh_port:-22}"
-
   eu_ssh_password="${EU_SSH_PASSWORD:-}"
   eu_ssh_key_path="${EU_SSH_KEY_PATH:-}"
   if [ -z "$eu_ssh_host" ]; then
     eu_ssh_password=""
     eu_ssh_key_path=""
-    echo "Skipping SSH settings. You can configure them later in /setup."
   elif [ -n "$eu_ssh_password" ]; then
     eu_ssh_key_path=""
-    echo "Using SSH password auth from EU_SSH_PASSWORD."
-  elif [ -n "$eu_ssh_key_path" ]; then
-    echo "Using SSH key auth from EU_SSH_KEY_PATH."
-  elif yes_no "Use SSH password auth? If no, SSH key auth is used" "y"; then
-    eu_ssh_password="$(ask_secret "EU/VPN VPS SSH password")"
-    eu_ssh_key_path=""
-  else
-    eu_ssh_password=""
-    eu_ssh_key_path="$(ask "SSH private key path on this RU server" "/home/$APP_USER/.ssh/id_ed25519")"
   fi
 
   install -d -m 0755 "$(dirname "$ENV_FILE")"
@@ -376,12 +323,12 @@ EOF
 }
 
 configure_nginx() {
-  if ! yes_no "Configure nginx reverse proxy?" "y"; then
+  if [ "${CONFIGURE_NGINX:-0}" != "1" ]; then
     return
   fi
 
   local domain
-  domain="$(ask "Domain or public IP for admin/client pages" "_")"
+  domain="${AUTOVPN_DOMAIN:-_}"
   cat >"$NGINX_SITE" <<EOF
 server {
     listen 80;
@@ -414,7 +361,7 @@ main() {
   echo "AutoVPN installed."
   echo "Service status: systemctl status autovpn"
   echo "Config file: $ENV_FILE"
-  echo "Open: http://SERVER/admin"
+  echo "Open: http://SERVER:$APP_PORT/admin/setup"
 }
 
 main "$@"
