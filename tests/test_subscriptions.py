@@ -60,6 +60,7 @@ def test_subscriptions_include_hysteria_when_enabled() -> None:
         assert f"obfs-password={get_setting('hysteria.obfs_password')}" in text_subscription
         assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in text_subscription
         assert outbounds["proxy"]["outbounds"] == ["vless-reality", "hysteria2"]
+        assert outbounds["proxy"]["default"] == "vless-reality"
         assert outbounds["hysteria2"]["type"] == "hysteria2"
         assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
         assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
