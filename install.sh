@@ -12,10 +12,7 @@ DEFAULT_REPO_URL="https://github.com/nevrozzkie/AutoVPN.git"
 REPO_URL="${AUTOVPN_REPO_URL:-$DEFAULT_REPO_URL}"
 APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-8000}"
-WEBROOT_DIR="${WEBROOT_DIR:-/var/www/autovpn}"
-IP_CERT_RENEW_SCRIPT="/usr/local/sbin/autovpn-renew-ip-cert"
-IP_CERT_RENEW_SERVICE="/etc/systemd/system/autovpn-renew-ip-cert.service"
-IP_CERT_RENEW_TIMER="/etc/systemd/system/autovpn-renew-ip-cert.timer"
+
 WEBROOT_DIR="${WEBROOT_DIR:-/var/www/autovpn}"
 IP_CERT_RENEW_SCRIPT="/usr/local/sbin/autovpn-renew-ip-cert"
 IP_CERT_RENEW_SERVICE="/etc/systemd/system/autovpn-renew-ip-cert.service"
@@ -39,19 +36,20 @@ Options:
   --aeza-service-id VALUE           Optional Aeza service id.
   --aeza-domain VALUE               Optional Aeza IPv4 domain/service name.
   --panel-domain VALUE              Public domain for HTTPS panel.
-  --tls-mode VALUE                  TLS mode: domain, ip, none.
+  --tls-mode VALUE                  TLS mode: domain, ip, none. Default: domain.
   --public-ip VALUE                 Public IP for Let's Encrypt IP certificate.
   -h, --help                        Show this help.
 
 Values can also be provided through matching environment variables, for example:
-EU_SSH_HOST, EU_SSH_USER, EU_SSH_PASSWORD, EU_SSH_KEY_PATH, CURRENT_IP.
+EU_SSH_HOST, EU_SSH_USER, EU_SSH_PASSWORD, EU_SSH_KEY_PATH, CURRENT_IP,
+AUTOVPN_TLS_MODE, AUTOVPN_PUBLIC_IP, AUTOVPN_DOMAIN.
 EOF
 }
 
 require_arg() {
   local option="$1"
   if [ "$#" -lt 2 ]; then
-    echo "Missing value for $option"
+    echo "Missing value for $option" >&2
     exit 1
   fi
 }
@@ -129,27 +127,12 @@ parse_args() {
         AUTOVPN_PUBLIC_IP="$2"
         shift 2
         ;;
-      --panel-domain)
-        require_arg "$@"
-        AUTOVPN_DOMAIN="$2"
-        shift 2
-        ;;
-      --tls-mode)
-        require_arg "$@"
-        AUTOVPN_TLS_MODE="$2"
-        shift 2
-        ;;
-      --public-ip)
-        require_arg "$@"
-        AUTOVPN_PUBLIC_IP="$2"
-        shift 2
-        ;;
       -h|--help)
         usage
         exit 0
         ;;
       *)
-        echo "Unknown option: $1"
+        echo "Unknown option: $1" >&2
         usage
         exit 1
         ;;
@@ -160,49 +143,9 @@ parse_args() {
 parse_args "$@"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Run as root: sudo bash install.sh"
+  echo "Run as root: sudo bash install.sh" >&2
   exit 1
 fi
-
-ask() {
-  local prompt="$1"
-  local default="${2:-}"
-  local value
-  if [ -n "$default" ]; then
-    read -r -p "$prompt [$default]: " value
-    echo "${value:-$default}"
-  else
-    read -r -p "$prompt: " value
-    echo "$value"
-  fi
-}
-
-ask_secret() {
-  local prompt="$1"
-  local value
-  read -r -s -p "$prompt: " value
-  echo
-  echo "$value"
-}
-
-yes_no() {
-  local prompt="$1"
-  local default="${2:-n}"
-  local value
-  read -r -p "$prompt [$default]: " value
-  value="${value:-$default}"
-  case "$value" in
-    y|Y|yes|YES|Yes) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-random_secret() {
-  python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(32))
-PY
-}
 
 read_value() {
   local _prompt="$1" _default="${2:-}" _v=""
@@ -227,16 +170,53 @@ read_secret() {
   printf '%s' "$_v"
 }
 
+sanitize_env_value() {
+  printf "%s" "$1" | LC_ALL=C tr -d '[:cntrl:]'
+}
+
+env_line() {
+  local key="$1"
+  local value="${2:-}"
+  printf "%s=%s\n" "$key" "$(sanitize_env_value "$value")"
+}
+
+cleanup_existing_install() {
+  echo "[autovpn] cleaning previous install"
+
+  systemctl stop "$APP_NAME" 2>/dev/null || true
+  systemctl disable "$APP_NAME" 2>/dev/null || true
+
+  systemctl stop autovpn-renew-ip-cert.timer 2>/dev/null || true
+  systemctl disable autovpn-renew-ip-cert.timer 2>/dev/null || true
+
+  rm -f "$SERVICE_FILE"
+  rm -f "$IP_CERT_RENEW_SERVICE"
+  rm -f "$IP_CERT_RENEW_TIMER"
+  rm -f "$IP_CERT_RENEW_SCRIPT"
+
+  rm -f "$NGINX_LINK"
+  rm -f "$NGINX_SITE"
+  rm -f /etc/nginx/sites-enabled/default
+  rm -f /etc/nginx/conf.d/default.conf
+
+  systemctl daemon-reload
+  systemctl reload nginx 2>/dev/null || true
+
+  git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+}
+
 collect_admin_credentials() {
   if [ -z "${ADMIN_USERNAME:-}" ]; then
     ADMIN_USERNAME="$(read_value "Admin username" "admin")"
   fi
   ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+
   if [ -z "${ADMIN_PASSWORD:-}" ]; then
     if [ ! -e /dev/tty ]; then
-      echo "ERROR: admin password is required. Pass --admin-password or set ADMIN_PASSWORD (no interactive terminal)." >&2
+      echo "ERROR: admin password is required. Pass --admin-password or set ADMIN_PASSWORD." >&2
       exit 1
     fi
+
     local _p1 _p2
     while true; do
       _p1="$(read_secret "Admin password")"
@@ -253,23 +233,14 @@ collect_admin_credentials() {
       break
     done
   fi
+
   export ADMIN_USERNAME ADMIN_PASSWORD
-}
-
-sanitize_env_value() {
-  printf "%s" "$1" | LC_ALL=C tr -d '[:cntrl:]'
-}
-
-env_line() {
-  local key="$1"
-  local value="${2:-}"
-  printf "%s=%s\n" "$key" "$(sanitize_env_value "$value")"
 }
 
 install_packages() {
   echo "[autovpn] installing system packages"
   apt-get update
-  apt-get install -y git nginx python3 python3-venv python3-pip rsync sqlite3 curl curl
+  apt-get install -y git nginx python3 python3-venv python3-pip rsync sqlite3 curl
 }
 
 prepare_source() {
@@ -289,17 +260,14 @@ prepare_source() {
   fi
 
   echo "[autovpn] cloning $REPO_URL to $APP_DIR"
-  if [ -d "$APP_DIR/.git" ]; then
-    git -C "$APP_DIR" pull --ff-only
-  else
-    rm -rf "$APP_DIR"
-    git clone "$REPO_URL" "$APP_DIR"
-  fi
+  rm -rf "$APP_DIR"
+  git clone "$REPO_URL" "$APP_DIR"
 }
 
 write_env_file() {
   echo
   echo "[autovpn] writing configuration. Open Setup in the browser to finish configuration."
+
   local admin_username admin_password current_ip
   local aeza_token aeza_service_id aeza_domain
   local eu_ssh_host eu_ssh_user eu_ssh_port eu_ssh_key_path eu_ssh_password
@@ -310,9 +278,11 @@ write_env_file() {
   if [ -z "$current_ip" ]; then
     current_ip="${EU_SSH_HOST:-}"
   fi
+
   aeza_token="${AEZA_TOKEN:-}"
   aeza_service_id="${AEZA_SERVICE_ID:-}"
   aeza_domain="${AEZA_IPV4_DOMAIN:-}"
+
   eu_ssh_host="${EU_SSH_HOST:-}"
   eu_ssh_user="${EU_SSH_USER:-root}"
   eu_ssh_user="${eu_ssh_user:-root}"
@@ -320,6 +290,7 @@ write_env_file() {
   eu_ssh_port="${eu_ssh_port:-22}"
   eu_ssh_password="${EU_SSH_PASSWORD:-}"
   eu_ssh_key_path="${EU_SSH_KEY_PATH:-}"
+
   if [ -z "$eu_ssh_host" ]; then
     eu_ssh_password=""
     eu_ssh_key_path=""
@@ -333,8 +304,6 @@ write_env_file() {
     env_line APP_PORT "$APP_PORT"
     env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
     env_line ADMIN_USERNAME "$admin_username"
-    # ADMIN_PASSWORD is intentionally NOT written here. It is stored as a
-    # salted scrypt hash in the database by bootstrap_admin().
     echo
     env_line AEZA_API_BASE "https://my.aeza.net"
     env_line AEZA_TOKEN "$aeza_token"
@@ -384,6 +353,7 @@ install_python_app() {
   if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --system --gid "$APP_USER" --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
   fi
+
   mkdir -p "$APP_DIR/data"
   python3 -m venv "$APP_DIR/.venv"
   "$APP_DIR/.venv/bin/pip" install --upgrade pip
@@ -446,6 +416,12 @@ PY
   chown -R "$APP_USER:$APP_USER" "$APP_DIR/data"
 }
 
+install_certbot_for_domain() {
+  if command -v certbot >/dev/null 2>&1; then
+    return
+  fi
+  apt-get install -y certbot python3-certbot-nginx || true
+}
 
 install_certbot_for_ip() {
   if command -v certbot >/dev/null 2>&1; then
@@ -469,208 +445,11 @@ detect_public_ip() {
   curl -fsS4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'
 }
 
-write_nginx_https_ip_block() {
-  local public_ip="$1"
-  cat >"$NGINX_SITE" <<EOF
-server {
-    listen 80;
-    server_name _;
-
-    location /.well-known/acme-challenge/ {
-        root $WEBROOT_DIR;
-    }
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name _;
-
-    ssl_certificate /etc/letsencrypt/live/$public_ip/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$public_ip/privkey.pem;
-
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer" always;
-
-    location / {
-        proxy_pass http://127.0.0.1:$APP_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
-EOF
-}
-
-setup_ip_cert_renewal() {
-  local public_ip="$1"
-  cat >"$IP_CERT_RENEW_SCRIPT" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-
-certbot certonly \\
-  --preferred-profile shortlived \\
-  --webroot \\
-  --webroot-path "$WEBROOT_DIR" \\
-  --ip-address "$public_ip" \\
-  --non-interactive \\
-  --agree-tos \\
-  --register-unsafely-without-email \\
-  --keep-until-expiring
-
-systemctl reload nginx
-EOF
-  chmod 700 "$IP_CERT_RENEW_SCRIPT"
-
-  cat >"$IP_CERT_RENEW_SERVICE" <<EOF
-[Unit]
-Description=Renew AutoVPN Let's Encrypt IP certificate
-After=network-online.target nginx.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$IP_CERT_RENEW_SCRIPT
-EOF
-
-  cat >"$IP_CERT_RENEW_TIMER" <<EOF
-[Unit]
-Description=Renew AutoVPN Let's Encrypt IP certificate every 12 hours
-
-[Timer]
-OnBootSec=10min
-OnUnitActiveSec=12h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable --now autovpn-renew-ip-cert.timer
-}
-
-
-install_certbot_for_ip() {
-  if command -v certbot >/dev/null 2>&1; then
-    return
-  fi
-
-  apt-get install -y snapd || true
-  if command -v snap >/dev/null 2>&1; then
-    snap install core || true
-    snap refresh core || true
-    snap install --classic certbot || true
-    ln -sf /snap/bin/certbot /usr/bin/certbot || true
-  fi
-
-  if ! command -v certbot >/dev/null 2>&1; then
-    apt-get install -y certbot python3-certbot-nginx || true
-  fi
-}
-
-detect_public_ip() {
-  curl -fsS4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'
-}
-
-write_nginx_https_ip_block() {
-  local public_ip="$1"
-  cat >"$NGINX_SITE" <<EOF
-server {
-    listen 80;
-    server_name _;
-
-    location /.well-known/acme-challenge/ {
-        root $WEBROOT_DIR;
-    }
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name _;
-
-    ssl_certificate /etc/letsencrypt/live/$public_ip/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$public_ip/privkey.pem;
-
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer" always;
-
-    location / {
-        proxy_pass http://127.0.0.1:$APP_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
-EOF
-}
-
-setup_ip_cert_renewal() {
-  local public_ip="$1"
-  cat >"$IP_CERT_RENEW_SCRIPT" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-
-certbot certonly \\
-  --preferred-profile shortlived \\
-  --webroot \\
-  --webroot-path "$WEBROOT_DIR" \\
-  --ip-address "$public_ip" \\
-  --non-interactive \\
-  --agree-tos \\
-  --register-unsafely-without-email \\
-  --keep-until-expiring
-
-systemctl reload nginx
-EOF
-  chmod 700 "$IP_CERT_RENEW_SCRIPT"
-
-  cat >"$IP_CERT_RENEW_SERVICE" <<EOF
-[Unit]
-Description=Renew AutoVPN Let's Encrypt IP certificate
-After=network-online.target nginx.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$IP_CERT_RENEW_SCRIPT
-EOF
-
-  cat >"$IP_CERT_RENEW_TIMER" <<EOF
-[Unit]
-Description=Renew AutoVPN Let's Encrypt IP certificate every 12 hours
-
-[Timer]
-OnBootSec=10min
-OnUnitActiveSec=12h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable --now autovpn-renew-ip-cert.timer
-}
-
-write_nginx_proxy_block() {
+write_nginx_plain_proxy_block() {
   local server_name="$1"
   cat >"$NGINX_SITE" <<EOF
 server {
-    listen 80;
+    listen 80 default_server;
     server_name $server_name;
 
     add_header X-Frame-Options "DENY" always;
@@ -692,10 +471,130 @@ EOF
   systemctl reload nginx
 }
 
+write_nginx_ip_acme_bootstrap_block() {
+  mkdir -p "$WEBROOT_DIR/.well-known/acme-challenge"
+  cat >"$NGINX_SITE" <<EOF
+server {
+    listen 80 default_server;
+    server_name _;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT_DIR;
+        try_files \$uri =404;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+  ln -sf "$NGINX_SITE" "$NGINX_LINK"
+  nginx -t
+  systemctl reload nginx
+}
+
+write_nginx_https_ip_block() {
+  local public_ip="$1"
+  cat >"$NGINX_SITE" <<EOF
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT_DIR;
+        try_files \$uri =404;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name _;
+
+    ssl_certificate /etc/letsencrypt/live/$public_ip/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$public_ip/privkey.pem;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+  ln -sf "$NGINX_SITE" "$NGINX_LINK"
+  nginx -t
+  systemctl reload nginx
+}
+
+setup_ip_cert_renewal() {
+  local public_ip="$1"
+
+  cat >"$IP_CERT_RENEW_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+certbot certonly \\
+  --preferred-profile shortlived \\
+  --webroot \\
+  --webroot-path "$WEBROOT_DIR" \\
+  --ip-address "$public_ip" \\
+  --non-interactive \\
+  --agree-tos \\
+  --register-unsafely-without-email \\
+  --keep-until-expiring
+
+systemctl reload nginx
+EOF
+  chmod 700 "$IP_CERT_RENEW_SCRIPT"
+
+  cat >"$IP_CERT_RENEW_SERVICE" <<EOF
+[Unit]
+Description=Renew AutoVPN Let's Encrypt IP certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$IP_CERT_RENEW_SCRIPT
+EOF
+
+  cat >"$IP_CERT_RENEW_TIMER" <<EOF
+[Unit]
+Description=Renew AutoVPN Let's Encrypt IP certificate every 12 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now autovpn-renew-ip-cert.timer
+}
+
 configure_nginx() {
-  # The app binds to 127.0.0.1, so a reverse proxy is required to reach it.
-  # nginx is configured by default; set CONFIGURE_NGINX=0 only if you put your
-  # own TLS-terminating proxy or SSH tunnel in front of 127.0.0.1:$APP_PORT.
   if [ "${CONFIGURE_NGINX:-1}" != "1" ]; then
     echo "[autovpn] WARNING: nginx not configured. The panel is only reachable on"
     echo "[autovpn] 127.0.0.1:$APP_PORT. Put a TLS reverse proxy or SSH tunnel in front of it."
@@ -715,8 +614,8 @@ configure_nginx() {
         public_ip="$(detect_public_ip)"
       fi
 
-      mkdir -p "$WEBROOT_DIR/.well-known/acme-challenge"
-      write_nginx_proxy_block "_"
+      echo "[autovpn] configuring nginx ACME webroot for IP certificate: $public_ip"
+      write_nginx_ip_acme_bootstrap_block
       install_certbot_for_ip
 
       if certbot certonly \
@@ -728,75 +627,27 @@ configure_nginx() {
           --agree-tos \
           --register-unsafely-without-email; then
         write_nginx_https_ip_block "$public_ip"
-        nginx -t
-        systemctl reload nginx
         setup_ip_cert_renewal "$public_ip"
         NGINX_TLS="yes"
         AUTOVPN_PANEL_URL="https://$public_ip/admin/setup"
       else
         NGINX_TLS="failed"
-        echo "[autovpn] IP certificate failed. Check certbot version and port 80 availability."
+        echo "[autovpn] IP certificate failed. Check:"
+        echo "[autovpn] - port 80 is open from the internet"
+        echo "[autovpn] - curl http://$public_ip/.well-known/acme-challenge/test returns a file from $WEBROOT_DIR"
+        echo "[autovpn] - certbot version supports --ip-address and --preferred-profile shortlived"
       fi
       return
       ;;
     none)
-      write_nginx_proxy_block "_"
+      write_nginx_plain_proxy_block "_"
       NGINX_TLS="no"
       return
       ;;
     domain|"")
       ;;
     *)
-      echo "[autovpn] unknown TLS mode: $tls_mode"
-      exit 1
-      ;;
-  esac
-
-  local tls_mode="${AUTOVPN_TLS_MODE:-}"
-  if [ -z "$tls_mode" ]; then
-    tls_mode="$(read_value "TLS mode: domain, ip, none" "domain")"
-  fi
-
-  case "$tls_mode" in
-    ip)
-      local public_ip="${AUTOVPN_PUBLIC_IP:-}"
-      if [ -z "$public_ip" ]; then
-        public_ip="$(detect_public_ip)"
-      fi
-
-      mkdir -p "$WEBROOT_DIR/.well-known/acme-challenge"
-      write_nginx_proxy_block "_"
-      install_certbot_for_ip
-
-      if certbot certonly \
-          --preferred-profile shortlived \
-          --webroot \
-          --webroot-path "$WEBROOT_DIR" \
-          --ip-address "$public_ip" \
-          --non-interactive \
-          --agree-tos \
-          --register-unsafely-without-email; then
-        write_nginx_https_ip_block "$public_ip"
-        nginx -t
-        systemctl reload nginx
-        setup_ip_cert_renewal "$public_ip"
-        NGINX_TLS="yes"
-        AUTOVPN_PANEL_URL="https://$public_ip/admin/setup"
-      else
-        NGINX_TLS="failed"
-        echo "[autovpn] IP certificate failed. Check certbot version and port 80 availability."
-      fi
-      return
-      ;;
-    none)
-      write_nginx_proxy_block "_"
-      NGINX_TLS="no"
-      return
-      ;;
-    domain|"")
-      ;;
-    *)
-      echo "[autovpn] unknown TLS mode: $tls_mode"
+      echo "[autovpn] unknown TLS mode: $tls_mode" >&2
       exit 1
       ;;
   esac
@@ -807,19 +658,16 @@ configure_nginx() {
   fi
 
   if [ -z "$domain" ] || [ "$domain" = "_" ]; then
-    write_nginx_proxy_block "_"
+    write_nginx_plain_proxy_block "_"
     NGINX_TLS="no"
     echo "[autovpn] WARNING: no domain provided, the panel is served over PLAIN HTTP."
     echo "[autovpn] Admin password, SSH and Aeza secrets would travel UNENCRYPTED over the network."
-    echo "[autovpn] Provide a domain and run: certbot --nginx -d <domain> --redirect"
-    echo "[autovpn] or access the panel only through an SSH tunnel."
     return
   fi
 
-  write_nginx_proxy_block "$domain"
-  if ! command -v certbot >/dev/null 2>&1; then
-    apt-get install -y certbot python3-certbot-nginx || true
-  fi
+  write_nginx_plain_proxy_block "$domain"
+  install_certbot_for_domain
+
   if command -v certbot >/dev/null 2>&1; then
     if certbot --nginx -d "$domain" --non-interactive --agree-tos \
         --register-unsafely-without-email --redirect; then
@@ -836,6 +684,7 @@ configure_nginx() {
 }
 
 main() {
+  cleanup_existing_install
   install_packages
   collect_admin_credentials
   prepare_source
@@ -852,7 +701,7 @@ main() {
   echo "Admin login was set during install (stored hashed in the database)."
   case "${NGINX_TLS:-}" in
     yes)
-      echo "Open: ${AUTOVPN_PANEL_URL:-https://YOUR_DOMAIN/admin/setup}"
+      echo "Open: ${AUTOVPN_PANEL_URL:-https://SERVER/admin/setup}"
       ;;
     no|failed|skipped)
       echo "Open: http://SERVER/admin/setup  (NOT encrypted — set up TLS before real use)"
