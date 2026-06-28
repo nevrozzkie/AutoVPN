@@ -92,10 +92,6 @@ async def run_ip_change(operation_id: int) -> None:
         await _step(operation_id, "make_new_ipv4_main")
         await client.make_main_ipv4(service_id, new_ip_id)
 
-        await _step(operation_id, "reboot_service")
-        await client.reboot_service(service_id)
-        await asyncio.sleep(settings.reboot_wait_seconds)
-
         await _step(operation_id, "wait_vps_health")
         health_result = await _wait_for_health(new_ip_address)
         update_operation(

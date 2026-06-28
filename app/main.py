@@ -449,7 +449,7 @@ def setup_submit(
     set_setting("config.aeza_service_id", aeza_service_id_value.strip())
     set_setting("config.aeza_ipv4_payment_method", "balance")
     set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
-    set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "300")
+    set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "120")
     mark_vpn_config_updated()
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -78,7 +78,7 @@ function Write-EnvFile([string]$Path, [hashtable]$Values) {
         "AEZA_SERVICE_ID=$($Values.AEZA_SERVICE_ID)",
         "AEZA_IPV4_PAYMENT_METHOD=balance",
         "AEZA_IPV4_DOMAIN=$($Values.AEZA_IPV4_DOMAIN)",
-        "AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS=300",
+        "AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS=120",
         "",
         "EU_SSH_HOST=$($Values.EU_SSH_HOST)",
         "EU_SSH_USER=$($Values.EU_SSH_USER)",

@@ -300,7 +300,7 @@ write_env_file() {
     env_line AEZA_SERVICE_ID "$aeza_service_id"
     env_line AEZA_IPV4_PAYMENT_METHOD "balance"
     env_line AEZA_IPV4_DOMAIN "$aeza_domain"
-    env_line AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS "300"
+    env_line AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS "120"
     echo
     env_line EU_SSH_HOST "$eu_ssh_host"
     env_line EU_SSH_USER "$eu_ssh_user"

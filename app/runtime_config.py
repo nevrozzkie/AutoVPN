@@ -96,7 +96,7 @@ def aeza_ipv4_domain() -> str:
 
 
 def aeza_ipv4_after_purchase_delay_seconds() -> int:
-    return config_int("aeza_ipv4_after_purchase_delay_seconds", 300)
+    return config_int("aeza_ipv4_after_purchase_delay_seconds", 120)
 
 
 def eu_ssh_host() -> str:

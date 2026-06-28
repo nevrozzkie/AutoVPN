@@ -30,7 +30,7 @@ class Settings:
     aeza_ipv4_domain: str = os.getenv("AEZA_IPV4_DOMAIN", "")
     aeza_ipv4_after_purchase_delay_seconds: int = _get_int(
         "AEZA_IPV4_AFTER_PURCHASE_DELAY_SECONDS",
-        300,
+        120,
     )
 
     eu_ssh_host: str = os.getenv("EU_SSH_HOST", "")
