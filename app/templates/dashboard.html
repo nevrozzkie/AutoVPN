@@ -92,17 +92,16 @@
 
 <h2>Действия</h2>
 <div class="actions action-bar">
-  <a class="button" href="/admin/clients">Клиенты</a>
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  <a href="/admin/install/script">Скачать скрипт установки</a>
   {% if operation_running or not aeza_ip_rotation_available %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">Обновить IP</a>
     <a class="button" href="/admin/ip">Ручной режим IP</a>
   {% endif %}
+  <a class="action-bar-end" href="/admin/install/script">Скачать скрипт установки</a>
 </div>
 
 {% if install_running %}
