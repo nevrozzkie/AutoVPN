@@ -9,8 +9,11 @@ from app.eu_install import build_eu_install_script, describe_ssh_command, forget
 
 def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     init_db()
-    set_setting("config.vless_port", "8443")
-    set_setting("config.hysteria_port", "443")
+    set_setting("config.vless_enabled", "1")
+    set_setting("config.vless_port", "443")
+    set_setting("config.hysteria_enabled", "1")
+    set_setting("config.hysteria_port", "8443")
+    set_setting("config.amnezia_enabled", "1")
     set_setting("config.amnezia_port", "51820")
     client = create_client("Alice")
 
@@ -32,32 +35,35 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert "chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt" in script
     assert "chmod 640 /etc/autovpn/hysteria.key" in script
     assert "HYSTERIA_SNI=ok.ru" in script
-    assert "ufw allow 443/udp" in script
-    assert "iptables -C INPUT -p udp --dport 443 -j ACCEPT" in script
-    assert "firewall-cmd --permanent --add-port=443/udp" in script
+    assert "ufw allow 8443/udp" in script
+    assert "iptables -C INPUT -p udp --dport 8443 -j ACCEPT" in script
+    assert "firewall-cmd --permanent --add-port=8443/udp" in script
     assert "systemctl is-active --quiet hysteria-server" in script
 
 
 def test_build_eu_install_script_disables_protocols_with_empty_ports() -> None:
     init_db()
     create_client("Alice")
-    set_setting("config.vless_port", "")
-    set_setting("config.hysteria_port", "")
-    set_setting("config.amnezia_port", "")
+    set_setting("config.vless_enabled", "0")
+    set_setting("config.hysteria_enabled", "0")
+    set_setting("config.amnezia_enabled", "0")
     try:
         script = build_eu_install_script()
 
         assert '"tag": "vless-in"' not in script
         assert "systemctl disable --now hysteria-server" in script
-        assert "listen: :443" not in script
-        assert "ufw allow 443/udp" not in script
+        assert "listen: :8443" not in script
+        assert "ufw allow 8443/udp" not in script
         assert "systemctl restart hysteria-server" not in script
         assert "systemctl disable --now awg-quick@awg0" in script
         assert "ListenPort = 51820" not in script
         assert "systemctl restart awg-quick@awg0" not in script
     finally:
-        set_setting("config.vless_port", "8443")
-        set_setting("config.hysteria_port", "443")
+        set_setting("config.vless_enabled", "1")
+        set_setting("config.vless_port", "443")
+        set_setting("config.hysteria_enabled", "0")
+        set_setting("config.hysteria_port", "8443")
+        set_setting("config.amnezia_enabled", "1")
         set_setting("config.amnezia_port", "51820")
 
 

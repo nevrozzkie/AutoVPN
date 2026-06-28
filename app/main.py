@@ -61,9 +61,15 @@ from app.runtime_config import (
     eu_ssh_password,
     eu_ssh_port,
     eu_ssh_user,
+    vless_enabled,
     vless_port,
+    vless_port_value,
+    hysteria_enabled,
     hysteria_port,
+    hysteria_port_value,
+    amnezia_enabled as runtime_amnezia_enabled,
     amnezia_port,
+    amnezia_port_value,
 )
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import build_sing_box_subscription, build_subscription
@@ -90,17 +96,28 @@ def format_msk(value: object) -> str:
         return str(value)
 
 
-def _optional_port_value(raw_value: str) -> str:
+def _required_port_value(raw_value: str, label: str) -> int:
     value = raw_value.strip()
     if not value:
-        return ""
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{label} port is required")
     try:
         port = int(value)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Protocol port must be a number")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{label} port must be a number")
     if port < 1 or port > 65535:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Protocol port must be between 1 and 65535")
-    return str(port)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{label} port must be between 1 and 65535")
+    return port
+
+
+def _ensure_unique_enabled_protocol_ports(protocol_settings: dict[str, tuple[bool, int]]) -> None:
+    seen: dict[int, str] = {}
+    for protocol, (_, port) in protocol_settings.items():
+        if port in seen:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Protocol ports must be unique: {seen[port]} and {protocol} both use {port}",
+            )
+        seen[port] = protocol
 
 
 STATUS_LABELS = {
@@ -304,9 +321,12 @@ def setup_page(
             "eu_ssh_port": eu_ssh_port(),
             "eu_ssh_key_path": eu_ssh_key_path(),
             "eu_ssh_password_configured": bool(eu_ssh_password()),
-            "vless_port": vless_port(),
-            "hysteria_port": hysteria_port(),
-            "amnezia_port": amnezia_port(),
+            "vless_enabled": vless_enabled(),
+            "vless_port": vless_port_value(),
+            "hysteria_enabled": hysteria_enabled(),
+            "hysteria_port": hysteria_port_value(),
+            "amnezia_enabled": runtime_amnezia_enabled(),
+            "amnezia_port": amnezia_port_value(),
             "aeza_token_configured": bool(aeza_token()),
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
@@ -329,8 +349,11 @@ def setup_submit(
     eu_ssh_port_value: int = Form(22),
     eu_ssh_password_value: str = Form(""),
     eu_ssh_key_path_value: str = Form(""),
+    vless_enabled_value: str | None = Form(None),
     vless_port_value: str = Form(""),
+    hysteria_enabled_value: str | None = Form(None),
     hysteria_port_value: str = Form(""),
+    amnezia_enabled_value: str | None = Form(None),
     amnezia_port_value: str = Form(""),
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
@@ -356,9 +379,15 @@ def setup_submit(
     set_setting("config.eu_ssh_host", ssh_host_value)
     set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
     set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
-    set_setting("config.vless_port", _optional_port_value(vless_port_value))
-    set_setting("config.hysteria_port", _optional_port_value(hysteria_port_value))
-    set_setting("config.amnezia_port", _optional_port_value(amnezia_port_value))
+    protocol_settings = {
+        "vless": (vless_enabled_value == "on", _required_port_value(vless_port_value, "VLESS")),
+        "hysteria": (hysteria_enabled_value == "on", _required_port_value(hysteria_port_value, "Hysteria")),
+        "amnezia": (amnezia_enabled_value == "on", _required_port_value(amnezia_port_value, "AmneziaWG")),
+    }
+    _ensure_unique_enabled_protocol_ports(protocol_settings)
+    for protocol, (enabled, port) in protocol_settings.items():
+        set_setting(f"config.{protocol}_enabled", "1" if enabled else "0")
+        set_setting(f"config.{protocol}_port", str(port))
     if eu_ssh_password_value:
         set_setting("config.eu_ssh_password", eu_ssh_password_value)
         set_setting("config.eu_ssh_key_path", "")
@@ -725,6 +754,8 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     base_url = str(request.base_url).rstrip("/")
     current_amnezia_port = amnezia_port()
+    current_vless_port = vless_port()
+    current_hysteria_port = hysteria_port()
     return templates.TemplateResponse(
         request,
         "client_page.html",
@@ -737,6 +768,9 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
+            "vless_enabled": current_vless_port is not None,
+            "hysteria_enabled": current_hysteria_port is not None,
+            "sing_box_enabled": current_vless_port is not None or current_hysteria_port is not None,
             "amnezia_enabled": current_amnezia_port is not None,
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
             "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip) if current_amnezia_port is not None else "",

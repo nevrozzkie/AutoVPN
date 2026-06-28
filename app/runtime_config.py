@@ -30,6 +30,36 @@ def optional_config_int(key: str, default: int) -> int | None:
     return int(value)
 
 
+def config_bool(key: str, default: bool) -> bool:
+    value = get_setting(f"config.{key}", None)  # type: ignore[arg-type]
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def protocol_port_value(key: str, default: int) -> int:
+    value = get_setting(f"config.{key}_port", None)  # type: ignore[arg-type]
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
+def protocol_enabled(key: str, default: bool) -> bool:
+    configured = get_setting(f"config.{key}_enabled", None)  # type: ignore[arg-type]
+    if configured is not None:
+        return configured.strip().lower() in {"1", "true", "yes", "on"}
+    legacy_port = get_setting(f"config.{key}_port", None)  # type: ignore[arg-type]
+    if legacy_port == "":
+        return False
+    return default
+
+
+def protocol_port(key: str, default_port: int, default_enabled: bool) -> int | None:
+    if not protocol_enabled(key, default_enabled):
+        return None
+    return protocol_port_value(key, default_port)
+
+
 def config_csv(key: str, default: list[str]) -> list[str]:
     value = config_value(key, "")
     if not value:
@@ -94,15 +124,39 @@ def ssh_connect_timeout_seconds() -> int:
 
 
 def vless_port() -> int | None:
-    return optional_config_int("vless_port", settings.vless_port)
+    return protocol_port("vless", settings.vless_port, True)
 
 
 def hysteria_port() -> int | None:
-    return optional_config_int("hysteria_port", settings.hysteria_port)
+    return protocol_port("hysteria", settings.hysteria_port, False)
 
 
 def amnezia_port() -> int | None:
-    return optional_config_int("amnezia_port", settings.amnezia_port)
+    return protocol_port("amnezia", settings.amnezia_port, True)
+
+
+def vless_port_value() -> int:
+    return protocol_port_value("vless", settings.vless_port)
+
+
+def hysteria_port_value() -> int:
+    return protocol_port_value("hysteria", settings.hysteria_port)
+
+
+def amnezia_port_value() -> int:
+    return protocol_port_value("amnezia", settings.amnezia_port)
+
+
+def vless_enabled() -> bool:
+    return protocol_enabled("vless", True)
+
+
+def hysteria_enabled() -> bool:
+    return protocol_enabled("hysteria", False)
+
+
+def amnezia_enabled() -> bool:
+    return protocol_enabled("amnezia", True)
 
 
 def setup_complete() -> bool:

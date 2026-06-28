@@ -238,22 +238,23 @@
         </section>
       {% endif %}
 
-      <section>
-        <h2>Подписка VLESS</h2>
-        <p><code>{{ subscription_url }}</code></p>
-        <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
-        <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
-        <p class="muted">Hysteria: не получилось пока завести, увы.</p>
-        <div id="subscription-qr" class="qr">
-          <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
-        </div>
-        <details class="technical-details">
-          <summary>sing-box <span class="muted">не тестировалось</span></summary>
-          <p><code>{{ sing_box_subscription_url }}</code></p>
-          <a class="button" href="{{ sing_box_subscription_url }}">Открыть конфиг</a>
-          <button type="button" onclick="navigator.clipboard.writeText('{{ sing_box_subscription_url }}')">Скопировать ссылку</button>
-        </details>
-      </section>
+      {% if sing_box_enabled %}
+        <section>
+          <h2>{% if vless_enabled and not hysteria_enabled %}Подписка VLESS{% else %}Подписка VPN{% endif %}</h2>
+          <p><code>{{ subscription_url }}</code></p>
+          <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
+          <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
+          <div id="subscription-qr" class="qr">
+            <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
+          </div>
+          <details class="technical-details">
+            <summary>sing-box <span class="muted">не тестировалось</span></summary>
+            <p><code>{{ sing_box_subscription_url }}</code></p>
+            <a class="button" href="{{ sing_box_subscription_url }}">Открыть конфиг</a>
+            <button type="button" onclick="navigator.clipboard.writeText('{{ sing_box_subscription_url }}')">Скопировать ссылку</button>
+          </details>
+        </section>
+      {% endif %}
 
       <section>
         <h2>AmneziaVPN</h2>

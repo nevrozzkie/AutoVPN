@@ -40,13 +40,13 @@ class Settings:
     eu_ssh_password: str = os.getenv("EU_SSH_PASSWORD", "")
     ssh_connect_timeout_seconds: int = _get_int("SSH_CONNECT_TIMEOUT_SECONDS", 15)
 
-    vless_port: int = _get_int("VLESS_PORT", 8443)
+    vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")
     vless_reality_server_names: list[str] = None  # type: ignore[assignment]
     vless_reality_server_name: str = os.getenv("VLESS_REALITY_SERVER_NAME", "ok.ru")
     vless_reality_fingerprint: str = os.getenv("VLESS_REALITY_FINGERPRINT", "firefox")
     vless_reality_spider_x: str = os.getenv("VLESS_REALITY_SPIDER_X", "/")
-    hysteria_port: int = _get_int("HYSTERIA_PORT", 443)
+    hysteria_port: int = _get_int("HYSTERIA_PORT", 8443)
     amnezia_port: int = _get_int("AMNEZIA_PORT", 51820)
     amnezia_network_prefix: str = os.getenv("AMNEZIA_NETWORK_PREFIX", "10.66.66")
     amnezia_dns: str = os.getenv("AMNEZIA_DNS", "1.1.1.1, 8.8.8.8")

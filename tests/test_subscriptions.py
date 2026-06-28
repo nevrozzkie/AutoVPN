@@ -19,14 +19,11 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "sni=ok.ru" in subscription
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
-    assert "hy2://" in subscription
-    assert f"hy2://{get_setting('hysteria.password')}@" in subscription
-    assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
-    assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in subscription
+    assert "hy2://" not in subscription
 
 
-def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
+def test_sing_box_subscription_contains_enabled_protocols() -> None:
     init_db()
     client = create_client("Alice")
 
@@ -35,23 +32,61 @@ def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
 
     assert subscription["inbounds"][0]["type"] == "tun"
     assert outbounds["proxy"]["type"] == "selector"
-    assert outbounds["proxy"]["outbounds"] == ["vless-reality", "hysteria2"]
+    assert outbounds["proxy"]["outbounds"] == ["vless-reality"]
     assert outbounds["vless-reality"]["type"] == "vless"
     assert outbounds["vless-reality"]["server"] == "203.0.113.10"
     assert outbounds["vless-reality"]["server_port"] == settings.vless_port
     assert outbounds["vless-reality"]["uuid"] == client["vless_uuid"]
     assert outbounds["vless-reality"]["flow"] == "xtls-rprx-vision"
     assert outbounds["vless-reality"]["tls"]["reality"]["enabled"] is True
-    assert outbounds["hysteria2"]["type"] == "hysteria2"
-    assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
-    assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
-    assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
-    assert outbounds["hysteria2"]["tls"]["insecure"] is True
+    assert "hysteria2" not in outbounds
+
+
+def test_subscriptions_include_hysteria_when_enabled() -> None:
+    init_db()
+    set_setting("config.hysteria_enabled", "1")
+    try:
+        client = create_client("Alice")
+
+        text_subscription = build_subscription(client, "203.0.113.10")
+        sing_box_subscription = build_sing_box_subscription(client, "203.0.113.10")
+        outbounds = {outbound["tag"]: outbound for outbound in sing_box_subscription["outbounds"]}
+
+        assert f"hy2://{get_setting('hysteria.password')}@" in text_subscription
+        assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in text_subscription
+        assert "%5BAutoVPN%5D%20Alice%20-%20hysteria" in text_subscription
+        assert outbounds["proxy"]["outbounds"] == ["vless-reality", "hysteria2"]
+        assert outbounds["hysteria2"]["type"] == "hysteria2"
+        assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
+        assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
+        assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
+        assert outbounds["hysteria2"]["tls"]["insecure"] is True
+    finally:
+        set_setting("config.hysteria_enabled", "0")
+
+
+def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
+    init_db()
+    set_setting("config.hysteria_enabled", "1")
+    try:
+        client = create_client("Alice")
+
+        subscription = build_sing_box_subscription(client, "203.0.113.10")
+        outbounds = {outbound["tag"]: outbound for outbound in subscription["outbounds"]}
+
+        assert outbounds["hysteria2"]["type"] == "hysteria2"
+        assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
+        assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
+        assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
+        assert outbounds["hysteria2"]["tls"]["insecure"] is True
+    finally:
+        set_setting("config.hysteria_enabled", "0")
 
 
 def test_subscriptions_use_runtime_protocol_ports() -> None:
     init_db()
     set_setting("config.vless_port", "9443")
+    set_setting("config.hysteria_enabled", "1")
     set_setting("config.hysteria_port", "9444")
     try:
         client = create_client("Alice")
@@ -65,14 +100,15 @@ def test_subscriptions_use_runtime_protocol_ports() -> None:
         assert outbounds["vless-reality"]["server_port"] == 9443
         assert outbounds["hysteria2"]["server_port"] == 9444
     finally:
+        set_setting("config.hysteria_enabled", "0")
         set_setting("config.vless_port", str(settings.vless_port))
         set_setting("config.hysteria_port", str(settings.hysteria_port))
 
 
 def test_subscriptions_skip_protocols_with_empty_ports() -> None:
     init_db()
-    set_setting("config.vless_port", "")
-    set_setting("config.hysteria_port", "")
+    set_setting("config.vless_enabled", "0")
+    set_setting("config.hysteria_enabled", "0")
     try:
         client = create_client("Alice")
 
@@ -85,5 +121,7 @@ def test_subscriptions_skip_protocols_with_empty_ports() -> None:
         assert "vless-reality" not in outbounds
         assert "hysteria2" not in outbounds
     finally:
+        set_setting("config.vless_enabled", "1")
+        set_setting("config.hysteria_enabled", "0")
         set_setting("config.vless_port", str(settings.vless_port))
         set_setting("config.hysteria_port", str(settings.hysteria_port))

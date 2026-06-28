@@ -10,7 +10,7 @@ from app.runtime_config import amnezia_port, hysteria_port, vless_port
 
 PROTOCOLS = [
     {"key": "vless", "name": "VLESS", "port": vless_port, "enabled": True},
-    {"key": "hysteria", "name": "Hysteria", "port": hysteria_port, "enabled": False, "placeholder": True},
+    {"key": "hysteria", "name": "Hysteria", "port": hysteria_port, "enabled": True, "placeholder": True},
     {"key": "amnezia", "name": "AmneziaWG", "port": amnezia_port, "enabled": True, "udp": True},
 ]
 
@@ -20,13 +20,18 @@ def get_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
     for protocol in PROTOCOLS:
         key = protocol["key"]
         port = protocol["port"]()
+        if port is None:
+            continue
         enabled = bool(protocol["enabled"]) and port is not None
+        status = get_setting(f"protocol.{key}.status", "UNKNOWN")
+        if protocol.get("placeholder"):
+            status = "PLACEHOLDER"
         statuses.append(
             {
                 **protocol,
                 "port": port,
                 "enabled": enabled,
-                "status": get_setting(f"protocol.{key}.status", "UNKNOWN"),
+                "status": status,
                 "last_checked_at": get_setting(f"protocol.{key}.last_checked_at"),
                 "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
                 "failed_since": get_setting(f"protocol.{key}.failed_since"),
@@ -42,7 +47,14 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     check_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:
         port = protocol["port"]()
-        if current_ip and protocol["enabled"] and port is not None:
+        if port is None:
+            set_setting(f"protocol.{protocol['key']}.status", "NOT_CONFIGURED")
+            set_setting(f"protocol.{protocol['key']}.failed_since", "")
+            set_setting(f"protocol.{protocol['key']}.ping_ms", "")
+            check_tasks.append(None)
+        elif protocol.get("placeholder"):
+            check_tasks.append(None)
+        elif current_ip and protocol["enabled"]:
             if protocol.get("udp"):
                 check_tasks.append(asyncio.create_task(udp_probe(current_ip, int(port))))
             else:
@@ -59,6 +71,8 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     for index, protocol in enumerate(PROTOCOLS):
         key = protocol["key"]
         port = protocol["port"]()
+        if port is None:
+            continue
         if check_tasks[index] is None:
             status = "PLACEHOLDER" if protocol.get("placeholder") and port is not None else "NOT_CONFIGURED"
             set_setting(f"protocol.{key}.failed_since", "")

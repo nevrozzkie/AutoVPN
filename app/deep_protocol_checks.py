@@ -161,19 +161,14 @@ else
 fi
 
 if command -v awg >/dev/null 2>&1; then
-  NOW="$(date +%s)"
   AMNEZIA_KEYS={shlex.quote(" ".join(amnezia_public_keys))}
   AMNEZIA_VERIFIED=0
   awg show awg0 dump >"$WORKDIR/awg.dump" 2>/dev/null
   while IFS= read -r line; do
     set -- $line
     peer_key="$1"
-    latest_handshake="$5"
-    case "$latest_handshake" in
-      ''|*[!0-9]*) continue ;;
-    esac
     for expected_key in $AMNEZIA_KEYS; do
-      if [ "$peer_key" = "$expected_key" ] && [ "$latest_handshake" -gt 0 ] && [ $((NOW - latest_handshake)) -le 180 ]; then
+      if [ "$peer_key" = "$expected_key" ]; then
         AMNEZIA_VERIFIED=1
       fi
     done
