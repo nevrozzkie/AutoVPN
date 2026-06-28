@@ -37,6 +37,9 @@ def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     assert "chown root:hysteria /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt" in script
     assert "chmod 640 /etc/autovpn/hysteria.key" in script
     assert "HYSTERIA_SNI=ok.ru" in script
+    assert "ufw allow 443/tcp" in script
+    assert "iptables -C INPUT -p tcp --dport 443 -j ACCEPT" in script
+    assert "firewall-cmd --permanent --add-port=443/tcp" in script
     assert "ufw allow 8443/udp" in script
     assert "iptables -C INPUT -p udp --dport 8443 -j ACCEPT" in script
     assert "firewall-cmd --permanent --add-port=8443/udp" in script

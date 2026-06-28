@@ -163,6 +163,23 @@ def build_eu_install_script() -> str:
                 },
             }
         )
+        vless_firewall_script = f"""
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow {current_vless_port}/tcp || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C INPUT -p tcp --dport {current_vless_port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport {current_vless_port} -j ACCEPT || true
+fi
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port={current_vless_port}/tcp || true
+  firewall-cmd --reload || true
+fi
+if command -v nft >/dev/null 2>&1; then
+  nft list ruleset | grep -q "tcp dport {current_vless_port} accept" || nft add rule inet filter input tcp dport {current_vless_port} accept || true
+fi
+"""
+    else:
+        vless_firewall_script = ""
     if current_hysteria_port is not None:
         hysteria_config_script = f"""
 HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
@@ -344,6 +361,7 @@ JSON
 {amnezia_config_script}
 
 echo "[autovpn] opening firewall ports"
+{vless_firewall_script}
 {hysteria_firewall_script}
 
 echo "[autovpn] enabling services"
