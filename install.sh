@@ -16,6 +16,10 @@ WEBROOT_DIR="${WEBROOT_DIR:-/var/www/autovpn}"
 IP_CERT_RENEW_SCRIPT="/usr/local/sbin/autovpn-renew-ip-cert"
 IP_CERT_RENEW_SERVICE="/etc/systemd/system/autovpn-renew-ip-cert.service"
 IP_CERT_RENEW_TIMER="/etc/systemd/system/autovpn-renew-ip-cert.timer"
+WEBROOT_DIR="${WEBROOT_DIR:-/var/www/autovpn}"
+IP_CERT_RENEW_SCRIPT="/usr/local/sbin/autovpn-renew-ip-cert"
+IP_CERT_RENEW_SERVICE="/etc/systemd/system/autovpn-renew-ip-cert.service"
+IP_CERT_RENEW_TIMER="/etc/systemd/system/autovpn-renew-ip-cert.timer"
 
 usage() {
   cat <<EOF
@@ -108,6 +112,21 @@ parse_args() {
       --aeza-domain)
         require_arg "$@"
         AEZA_IPV4_DOMAIN="$2"
+        shift 2
+        ;;
+      --panel-domain)
+        require_arg "$@"
+        AUTOVPN_DOMAIN="$2"
+        shift 2
+        ;;
+      --tls-mode)
+        require_arg "$@"
+        AUTOVPN_TLS_MODE="$2"
+        shift 2
+        ;;
+      --public-ip)
+        require_arg "$@"
+        AUTOVPN_PUBLIC_IP="$2"
         shift 2
         ;;
       --panel-domain)
@@ -250,7 +269,7 @@ env_line() {
 install_packages() {
   echo "[autovpn] installing system packages"
   apt-get update
-  apt-get install -y git nginx python3 python3-venv python3-pip rsync sqlite3 curl
+  apt-get install -y git nginx python3 python3-venv python3-pip rsync sqlite3 curl curl
 }
 
 prepare_source() {
@@ -537,6 +556,116 @@ EOF
   systemctl enable --now autovpn-renew-ip-cert.timer
 }
 
+
+install_certbot_for_ip() {
+  if command -v certbot >/dev/null 2>&1; then
+    return
+  fi
+
+  apt-get install -y snapd || true
+  if command -v snap >/dev/null 2>&1; then
+    snap install core || true
+    snap refresh core || true
+    snap install --classic certbot || true
+    ln -sf /snap/bin/certbot /usr/bin/certbot || true
+  fi
+
+  if ! command -v certbot >/dev/null 2>&1; then
+    apt-get install -y certbot python3-certbot-nginx || true
+  fi
+}
+
+detect_public_ip() {
+  curl -fsS4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'
+}
+
+write_nginx_https_ip_block() {
+  local public_ip="$1"
+  cat >"$NGINX_SITE" <<EOF
+server {
+    listen 80;
+    server_name _;
+
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT_DIR;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name _;
+
+    ssl_certificate /etc/letsencrypt/live/$public_ip/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$public_ip/privkey.pem;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+}
+
+setup_ip_cert_renewal() {
+  local public_ip="$1"
+  cat >"$IP_CERT_RENEW_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+certbot certonly \\
+  --preferred-profile shortlived \\
+  --webroot \\
+  --webroot-path "$WEBROOT_DIR" \\
+  --ip-address "$public_ip" \\
+  --non-interactive \\
+  --agree-tos \\
+  --register-unsafely-without-email \\
+  --keep-until-expiring
+
+systemctl reload nginx
+EOF
+  chmod 700 "$IP_CERT_RENEW_SCRIPT"
+
+  cat >"$IP_CERT_RENEW_SERVICE" <<EOF
+[Unit]
+Description=Renew AutoVPN Let's Encrypt IP certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$IP_CERT_RENEW_SCRIPT
+EOF
+
+  cat >"$IP_CERT_RENEW_TIMER" <<EOF
+[Unit]
+Description=Renew AutoVPN Let's Encrypt IP certificate every 12 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now autovpn-renew-ip-cert.timer
+}
+
 write_nginx_proxy_block() {
   local server_name="$1"
   cat >"$NGINX_SITE" <<EOF
@@ -573,6 +702,55 @@ configure_nginx() {
     NGINX_TLS="skipped"
     return
   fi
+
+  local tls_mode="${AUTOVPN_TLS_MODE:-}"
+  if [ -z "$tls_mode" ]; then
+    tls_mode="$(read_value "TLS mode: domain, ip, none" "domain")"
+  fi
+
+  case "$tls_mode" in
+    ip)
+      local public_ip="${AUTOVPN_PUBLIC_IP:-}"
+      if [ -z "$public_ip" ]; then
+        public_ip="$(detect_public_ip)"
+      fi
+
+      mkdir -p "$WEBROOT_DIR/.well-known/acme-challenge"
+      write_nginx_proxy_block "_"
+      install_certbot_for_ip
+
+      if certbot certonly \
+          --preferred-profile shortlived \
+          --webroot \
+          --webroot-path "$WEBROOT_DIR" \
+          --ip-address "$public_ip" \
+          --non-interactive \
+          --agree-tos \
+          --register-unsafely-without-email; then
+        write_nginx_https_ip_block "$public_ip"
+        nginx -t
+        systemctl reload nginx
+        setup_ip_cert_renewal "$public_ip"
+        NGINX_TLS="yes"
+        AUTOVPN_PANEL_URL="https://$public_ip/admin/setup"
+      else
+        NGINX_TLS="failed"
+        echo "[autovpn] IP certificate failed. Check certbot version and port 80 availability."
+      fi
+      return
+      ;;
+    none)
+      write_nginx_proxy_block "_"
+      NGINX_TLS="no"
+      return
+      ;;
+    domain|"")
+      ;;
+    *)
+      echo "[autovpn] unknown TLS mode: $tls_mode"
+      exit 1
+      ;;
+  esac
 
   local tls_mode="${AUTOVPN_TLS_MODE:-}"
   if [ -z "$tls_mode" ]; then
