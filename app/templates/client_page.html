@@ -135,19 +135,25 @@
         gap: 10px;
         margin-bottom: 14px;
       }
+      .guide-intro p {
+        margin: 0;
+      }
       .guide-tabs {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
         margin: 14px 0;
       }
-      .guide-tabs a {
+      .guide-tabs a,
+      .guide-tabs button {
         border: 1px solid var(--border);
         border-radius: 6px;
         color: var(--text);
         padding: 7px 10px;
         text-decoration: none;
         background: var(--panel-soft);
+        font: inherit;
+        cursor: pointer;
       }
       .guide-block {
         border-top: 1px solid var(--border);
@@ -157,38 +163,129 @@
       .guide-block h3 {
         margin: 0 0 10px;
       }
-      .guide-steps {
-        display: grid;
-        gap: 14px;
-        margin-top: 12px;
-      }
-      .guide-step {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-        gap: 16px;
-        align-items: start;
+      .guide-app {
         border: 1px solid var(--border);
         border-radius: 8px;
-        padding: 14px;
         background: var(--panel-soft);
+        margin-top: 18px;
+        overflow: hidden;
+      }
+      .guide-app summary {
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px;
+        list-style: none;
+      }
+      .guide-app summary::-webkit-details-marker {
+        display: none;
+      }
+      .guide-app summary::after {
+        content: "⌄";
+        color: var(--muted);
+        font-size: 20px;
+        line-height: 1;
+        transform: rotate(-90deg);
+        transition: transform .15s ease;
+      }
+      .guide-app[open] summary::after {
+        transform: rotate(0);
+      }
+      .guide-app-body {
+        border-top: 1px solid var(--border);
+        padding: 14px;
+      }
+      .guide-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin: 12px 0 6px;
+      }
+      .guide-stage {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel-soft);
+        margin-top: 10px;
+        overflow: hidden;
+      }
+      .guide-stage summary {
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 13px 14px;
+        list-style: none;
+      }
+      .guide-stage summary::-webkit-details-marker {
+        display: none;
+      }
+      .guide-stage summary::after {
+        content: "⌄";
+        color: var(--muted);
+        font-size: 20px;
+        line-height: 1;
+        transform: rotate(-90deg);
+        transition: transform .15s ease;
+      }
+      .guide-stage[open] summary::after {
+        transform: rotate(0);
+      }
+      .stage-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .stage-title strong {
+        font-size: 17px;
+      }
+      .stage-title span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .stage-body {
+        border-top: 1px solid var(--border);
+        padding: 12px 14px 14px;
+      }
+      .guide-steps {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        overflow-x: auto;
+        padding: 2px 2px 10px;
+        scroll-snap-type: x mandatory;
+        scrollbar-width: thin;
+      }
+      .guide-step {
+        flex: 0 0 min(280px, 82vw);
+        scroll-snap-align: start;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+        overflow: hidden;
       }
       .guide-step-text {
         min-width: 0;
+        padding: 12px;
       }
       .guide-step-text strong {
         display: block;
-        margin-bottom: 6px;
+        margin-bottom: 5px;
       }
       .guide-step-text p {
         margin: 0;
+        font-size: 14px;
       }
       .phone-shot {
         position: relative;
         overflow: hidden;
-        border: 1px solid var(--border);
-        border-radius: 8px;
+        border-top: 1px solid var(--border);
         background: #0b0d10;
-        aspect-ratio: 9 / 16;
+        height: 390px;
       }
       .phone-shot img {
         width: 100%;
@@ -197,49 +294,15 @@
         object-fit: cover;
         object-position: var(--shot-position, center);
       }
-      .phone-shot.is-top img {
+      .shot-top {
         --shot-position: top;
       }
-      .phone-shot.is-bottom img {
+      .shot-bottom {
         --shot-position: bottom;
       }
-      .phone-shot.is-lower img {
-        --shot-position: center 78%;
+      .shot-lower {
+        --shot-position: center 72%;
       }
-      .marker {
-        position: absolute;
-        width: 42px;
-        height: 42px;
-        border: 3px solid var(--warn);
-        border-radius: 999px;
-        box-shadow: 0 0 0 999px rgb(0 0 0 / 0.08);
-      }
-      .marker::after {
-        content: "";
-        position: absolute;
-        width: 58px;
-        height: 3px;
-        background: var(--warn);
-        transform-origin: left center;
-      }
-      .marker-right::after {
-        left: -52px;
-        top: 30px;
-        transform: rotate(-28deg);
-      }
-      .marker-left::after {
-        right: -54px;
-        top: 30px;
-        transform: rotate(28deg);
-      }
-      .mark-paste { right: 8%; top: 25%; }
-      .mark-connect { left: 41%; top: 31%; }
-      .mark-server-arrow { right: 8%; bottom: 17%; }
-      .mark-server-gear { right: 6%; top: 43%; }
-      .mark-routing { right: 12%; bottom: 27%; }
-      .mark-sites { right: 6%; top: 30%; }
-      .mark-import { right: 5%; top: 38%; }
-      .mark-toggle { right: 4%; top: 10%; }
       .download-row {
         display: flex;
         flex-wrap: wrap;
@@ -250,20 +313,36 @@
       .platform-note {
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: var(--panel-soft);
+        background: var(--panel);
         padding: 12px;
+        margin: 0 0 12px;
+      }
+      .client-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+      }
+      .client-badge {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1;
+        padding: 5px 7px;
       }
       @media (max-width: 720px) {
         main {
           padding: 18px;
         }
-        .guide-step {
-          grid-template-columns: 1fr;
+        .guide-stage summary {
+          padding: 12px;
+        }
+        .stage-body {
+          padding: 12px;
         }
         .phone-shot {
-          max-width: 300px;
-          width: 100%;
-          justify-self: center;
+          height: 360px;
         }
       }
       textarea {
@@ -379,7 +458,17 @@
 
       {% if sing_box_enabled %}
         <section>
-          <h2>{% if vless_enabled and not hysteria_enabled %}Подписка VLESS{% else %}Подписка VPN{% endif %}</h2>
+          <h2>
+            {% if vless_enabled and hysteria_enabled %}
+              Подписка VLESS + Hysteria
+            {% elif vless_enabled %}
+              Подписка VLESS
+            {% elif hysteria_enabled %}
+              Подписка Hysteria
+            {% else %}
+              Подписка
+            {% endif %}
+          </h2>
           <p><code>{{ subscription_url }}</code></p>
           <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
           <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
@@ -414,197 +503,325 @@
       <section>
         <h2>Гайды</h2>
         <div class="guide-intro">
-          <p>Если один протокол перестал подключаться, попробуйте следующий доступный вариант. VLESS и Hysteria обновляются через подписку: когда сверху страницы время конфига стало новее, достаточно обновить подписку в приложении.</p>
-          <p class="muted">AmneziaWG работает через отдельный ключ. Для неё нужно сверяться со временем обновления конфига в начале страницы и при необходимости удалить старый сервер в приложении, затем вставить новый ключ вручную.</p>
+          <p>Советую использовать протоколы в таком порядке: VLESS → AmneziaVPN → Hysteria. Меняйте протокол, если текущий сломался.</p>
+          <p>VLESS и Hysteria обновляются через подписку: когда сверху страницы время конфига стало новее, достаточно обновить подписку в приложении.</p>
+          <p>Для AmneziaVPN смотрите время обновления конфига в начале страницы. Если ключ устарел, откройте ниже пункт «Обновление ключа». После установки стоит настроить маршрутизацию — инструкции тоже ниже.</p>
+          <p class="muted">Гайды ниже написаны для Android: скриншоты и названия кнопок будут из Android-приложений. На других устройствах логика похожая, но интерфейс может отличаться.</p>
         </div>
         <div class="guide-tabs">
-          <a href="#guide-amnezia">AmneziaVPN</a>
-          <a href="#guide-platforms">Другие платформы</a>
+          {% if sing_box_enabled %}
+            <button type="button" data-open-guide="guide-vless-hysteria">VLESS + Hysteria</button>
+          {% endif %}
+          <button type="button" data-open-guide="guide-amnezia">AmneziaVPN</button>
         </div>
 
-        <div id="guide-amnezia" class="guide-block">
-          <h3>AmneziaVPN</h3>
+        {% if sing_box_enabled %}
+        <details id="guide-vless-hysteria" class="guide-app">
+          <summary>
+            <span class="stage-title"><strong>VLESS + Hysteria</strong><span>подписка и Android-клиенты</span></span>
+          </summary>
+          <div class="guide-app-body">
+            <p class="muted">Для VLESS и Hysteria используйте ссылку из блока подписки выше. Ниже будут отдельные Android-гайды для каждого приложения: скачивание, добавление подписки и выбор нужного профиля.</p>
+
+            <details class="guide-stage">
+              <summary>
+                <span class="stage-title"><strong>NekoBox</strong><span>Android</span></span>
+              </summary>
+              <div class="stage-body">
+                <p class="platform-note">Android-клиент. Хороший вариант, если нужен простой импорт подписки и ручной выбор профиля.</p>
+                <div class="client-badges">
+                  <span class="client-badge">Android</span>
+                </div>
+                <div class="guide-steps" aria-label="Шаги подключения подписки в NekoBox">
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>1. Скачайте NekoBox</strong>
+                      <p>Установите приложение на Android.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>2. Скопируйте подписку</strong>
+                      <p>В блоке подписки выше нажмите «Скопировать подписку».</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>3. Добавьте подписку</strong>
+                      <p>В NekoBox добавьте подписку из буфера обмена или по URL.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>4. Выберите профиль</strong>
+                      <p>Сначала попробуйте VLESS. Если он не работает, переключитесь на Hysteria.</p>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+
+            <details class="guide-stage">
+              <summary>
+                <span class="stage-title"><strong>V2Box</strong><span>Android, iOS</span></span>
+              </summary>
+              <div class="stage-body">
+                <p class="platform-note">Мультиплатформенный клиент: можно использовать на Android, а также на iPhone и iPad, если приложение доступно в магазине.</p>
+                <div class="client-badges">
+                  <span class="client-badge">Android</span>
+                  <span class="client-badge">iOS</span>
+                  <span class="client-badge">мультиплатформенный</span>
+                </div>
+                <div class="guide-steps" aria-label="Шаги подключения подписки в V2Box">
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>1. Скачайте V2Box</strong>
+                      <p>Установите приложение на Android.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>2. Скопируйте подписку</strong>
+                      <p>В блоке подписки выше нажмите «Скопировать подписку».</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>3. Добавьте подписку</strong>
+                      <p>В V2Box добавьте подписку из буфера обмена или по URL.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>4. Выберите профиль</strong>
+                      <p>Сначала попробуйте VLESS. Если он не работает, переключитесь на Hysteria.</p>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+
+            <details class="guide-stage">
+              <summary>
+                <span class="stage-title"><strong>V2RayTun</strong><span>Android, iOS</span></span>
+              </summary>
+              <div class="stage-body">
+                <p class="platform-note">Мультиплатформенный клиент для Android и iOS. Подойдёт как запасной вариант, если другой клиент неудобен.</p>
+                <div class="client-badges">
+                  <span class="client-badge">Android</span>
+                  <span class="client-badge">iOS</span>
+                  <span class="client-badge">мультиплатформенный</span>
+                </div>
+                <div class="guide-steps" aria-label="Шаги подключения подписки в V2RayTun">
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>1. Скачайте V2RayTun</strong>
+                      <p>Установите приложение на Android.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>2. Скопируйте подписку</strong>
+                      <p>В блоке подписки выше нажмите «Скопировать подписку».</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>3. Добавьте подписку</strong>
+                      <p>В V2RayTun добавьте подписку из буфера обмена или по URL.</p>
+                    </div>
+                  </article>
+                  <article class="guide-step">
+                    <div class="guide-step-text">
+                      <strong>4. Выберите профиль</strong>
+                      <p>Сначала попробуйте VLESS. Если он не работает, переключитесь на Hysteria.</p>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+          </div>
+        </details>
+        {% endif %}
+
+        <details id="guide-amnezia" class="guide-app">
+          <summary>
+            <span class="stage-title"><strong>AmneziaVPN</strong><span>установка, обновление ключа и маршрутизация</span></span>
+          </summary>
+          <div class="guide-app-body">
           <p class="muted">Интерфейс AmneziaVPN одинаковый на телефоне и компьютере, поэтому этот гайд подходит для всех устройств. Скриншоты сделаны в мобильной версии приложения.</p>
 
-          <div class="download-row">
-            <a class="button" href="https://amnezia.org/ru/downloads" rel="noreferrer">Скачать AmneziaVPN</a>
+          <div class="guide-actions">
+            <a class="button" href="https://storage.googleapis.com/amnezia/amnezia.org" rel="noreferrer">Скачать AmneziaVPN</a>
             <a class="button" href="/static/downloads/amnezia-ru-sites.json" download>Скачать список российских сайтов</a>
           </div>
 
-          <div class="guide-block">
-            <h3>Установка</h3>
-            <div class="guide-steps">
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>1. Скопируйте ключ на этой странице</strong>
-                  <p>В блоке AmneziaVPN нажмите «Скопировать ключ». При первом запуске приложения нажмите «Приступим».</p>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>2. Вставьте ключ</strong>
-                  <p>Нажмите «Вставить», затем «Продолжить».</p>
-                </div>
-                <div class="phone-shot is-top">
-                  <img src="/static/guides/amnezia/install-paste-key.jpg" alt="Вставка ключа в AmneziaVPN">
-                  <span class="marker marker-right mark-paste"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>3. Подтвердите подключение</strong>
-                  <p>На экране нового соединения нажмите «Подключиться».</p>
-                </div>
-                <div class="phone-shot is-top">
-                  <img src="/static/guides/amnezia/install-connect-confirm.jpg" alt="Кнопка подключения нового соединения">
-                  <span class="marker marker-left mark-connect"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>4. Готово</strong>
-                  <p>Сервер добавлен. Теперь можно включать VPN большой кнопкой «Подключиться».</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/install-ready.jpg" alt="Главный экран AmneziaVPN с добавленным сервером">
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="guide-block">
-            <h3>Обновление ключа</h3>
-            <div class="guide-steps">
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>1. Откройте список серверов</strong>
-                  <p>На главном экране нажмите стрелочку справа от названия VPN в нижней части экрана.</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/routing-enabled.jpg" alt="Стрелка рядом с названием VPN">
-                  <span class="marker marker-right mark-server-arrow"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>2. Откройте настройки сервера</strong>
-                  <p>В меню серверов нажмите шестерёнку рядом с нужным сервером.</p>
-                </div>
-                <div class="phone-shot is-lower">
-                  <img src="/static/guides/amnezia/update-server-settings.jpg" alt="Шестерёнка сервера в AmneziaVPN">
-                  <span class="marker marker-right mark-server-gear"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>3. Удалите старый сервер</strong>
-                  <p>Нажмите «Управление», затем «Удалить сервер из приложения» и подтвердите действие кнопкой «Продолжить». После этого повторите установку с новым ключом.</p>
-                </div>
+          <details class="guide-stage">
+            <summary>
+              <span class="stage-title"><strong>Установка</strong><span>4 шага</span></span>
+            </summary>
+            <div class="stage-body">
+              <div class="guide-steps" aria-label="Шаги установки AmneziaVPN">
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>1. Скопируйте ключ</strong>
+                    <p>На этой странице в блоке AmneziaVPN нажмите «Скопировать ключ». При первом запуске приложения нажмите «Приступим».</p>
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>2. Вставьте ключ</strong>
+                    <p>Нажмите «Вставить», затем «Продолжить».</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/install-paste-key-marked.jpg" alt="Вставка ключа в AmneziaVPN">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>3. Подключитесь</strong>
+                    <p>На экране нового соединения нажмите «Подключиться».</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/install-connect-confirm-marked.jpg" alt="Кнопка подключения нового соединения">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>4. Готово</strong>
+                    <p>Сервер добавлен. Включайте VPN большой кнопкой «Подключиться».</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/install-ready-marked.jpg" alt="Главный экран AmneziaVPN с добавленным сервером">
+                  </div>
+                </article>
               </div>
             </div>
-          </div>
+          </details>
 
-          <div class="guide-block">
-            <h3>Маршрутизация сайтов</h3>
-            <div class="guide-steps">
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>1. Откройте раздельное туннелирование</strong>
-                  <p>На главном экране нажмите строку «Раздельное туннелирование ...».</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/routing-enabled.jpg" alt="Вход в раздельное туннелирование">
-                  <span class="marker marker-right mark-routing"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>2. Выберите сайты</strong>
-                  <p>Откройте «Раздельное туннелирование сайтов».</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/routing-select-kind.jpg" alt="Выбор туннелирования сайтов">
-                  <span class="marker marker-right mark-sites"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>3. Импортируйте список</strong>
-                  <p>Нажмите три точки, выберите «Импорт», затем «Заменить список с сайтами». В файловом окне выберите скачанный <code>amnezia-ru-sites.json</code>.</p>
-                </div>
-                <div class="phone-shot is-bottom">
-                  <img src="/static/guides/amnezia/routing-sites-import.jpg" alt="Меню импорта списка сайтов">
-                  <span class="marker marker-right mark-import"></span>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>4. Замените список</strong>
-                  <p>В окне импорта нажмите «Заменить список с сайтами».</p>
-                </div>
-                <div class="phone-shot is-bottom">
-                  <img src="/static/guides/amnezia/routing-sites-replace.jpg" alt="Выбор замены списка сайтов">
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>5. Проверьте режим</strong>
-                  <p>Убедитесь, что тумблер сверху включён, а режим стоит «Адреса из списка не должны открываться через VPN». Готово.</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/routing-sites-ready.jpg" alt="Готовая маршрутизация сайтов">
-                  <span class="marker marker-right mark-toggle"></span>
-                </div>
+          <details class="guide-stage">
+            <summary>
+              <span class="stage-title"><strong>Обновление ключа</strong><span>3 шага</span></span>
+            </summary>
+            <div class="stage-body">
+              <div class="guide-steps" aria-label="Шаги обновления ключа AmneziaVPN">
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>1. Откройте серверы</strong>
+                    <p>На главном экране нажмите стрелочку справа от названия VPN в нижней части экрана.</p>
+                  </div>
+                  <div class="phone-shot shot-bottom">
+                    <img src="/static/guides/amnezia/update-open-servers-marked.jpg" alt="Стрелка рядом с названием VPN">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>2. Откройте настройки</strong>
+                    <p>В меню серверов нажмите шестерёнку рядом с нужным сервером.</p>
+                  </div>
+                  <div class="phone-shot shot-lower">
+                    <img src="/static/guides/amnezia/update-server-settings-marked.jpg" alt="Шестерёнка сервера в AmneziaVPN">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>3. Удалите старый сервер</strong>
+                    <p>Нажмите «Управление», затем «Удалить сервер из приложения» и «Продолжить». После этого повторите установку с новым ключом.</p>
+                  </div>
+                </article>
               </div>
             </div>
-          </div>
+          </details>
 
-          <div class="guide-block">
-            <h3>Маршрутизация приложений</h3>
-            <p class="platform-note">Этот раздел нужен только на телефоне.</p>
-            <div class="guide-steps">
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>1. Откройте раздельное туннелирование приложений</strong>
-                  <p>Нажмите «Раздельное туннелирование ...», затем выберите «Раздельное туннелирование приложений».</p>
-                </div>
-                <div class="phone-shot">
-                  <img src="/static/guides/amnezia/routing-select-kind.jpg" alt="Выбор туннелирования приложений">
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>2. Добавьте российские приложения</strong>
-                  <p>Нажмите плюсик и выберите нужные приложения: Max, VK, Госуслуги, Культура, 2ГИС, Burger King, Mir Pay, Ozon, Rostic's, Wildberries, приложения банков, сервисы Яндекса и похожие российские сервисы.</p>
-                </div>
-              </div>
-              <div class="guide-step">
-                <div class="guide-step-text">
-                  <strong>3. Сохраните и проверьте режим</strong>
-                  <p>Нажмите «Добавить выбранные». Убедитесь, что выбран режим «Приложения из списка не должны работать через VPN», и включите тумблер сверху.</p>
-                </div>
+          <details class="guide-stage">
+            <summary>
+              <span class="stage-title"><strong>Маршрутизация сайтов</strong><span>5 шагов</span></span>
+            </summary>
+            <div class="stage-body">
+              <div class="guide-steps" aria-label="Шаги настройки маршрутизации сайтов">
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>1. Откройте меню</strong>
+                    <p>На главном экране нажмите строку «Раздельное туннелирование ...».</p>
+                  </div>
+                  <div class="phone-shot shot-bottom">
+                    <img src="/static/guides/amnezia/routing-open-menu-marked.jpg" alt="Вход в раздельное туннелирование">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>2. Выберите сайты</strong>
+                    <p>Откройте «Раздельное туннелирование сайтов».</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/routing-select-sites-marked.jpg" alt="Выбор туннелирования сайтов">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>3. Импортируйте список</strong>
+                    <p>Сначала нажмите выше кнопку «Скачать список российских сайтов». В AmneziaVPN нажмите три точки, выберите «Импорт» и выберите скачанный файл <code>amnezia-ru-sites.json</code>.</p>
+                  </div>
+                  <div class="phone-shot shot-bottom">
+                    <img src="/static/guides/amnezia/routing-sites-import-marked.jpg" alt="Меню импорта списка сайтов">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>4. Замените список</strong>
+                    <p>В окне импорта нажмите «Заменить список с сайтами».</p>
+                  </div>
+                  <div class="phone-shot shot-bottom">
+                    <img src="/static/guides/amnezia/routing-sites-replace-marked.jpg" alt="Выбор замены списка сайтов">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>5. Проверьте режим</strong>
+                    <p>Тумблер сверху включён, режим: «Адреса из списка не должны открываться через VPN». Готово.</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/routing-sites-ready-marked.jpg" alt="Готовая маршрутизация сайтов">
+                  </div>
+                </article>
               </div>
             </div>
-          </div>
-        </div>
+          </details>
 
-        <div id="guide-platforms" class="guide-block">
-          <h3>Другие платформы</h3>
-        <div class="guides">
-          <div class="guide">
-            <strong>iOS</strong>
-            <p class="muted">Место под инструкцию со скриншотами.</p>
+          <details class="guide-stage">
+            <summary>
+              <span class="stage-title"><strong>Маршрутизация приложений</strong><span>только телефон</span></span>
+            </summary>
+            <div class="stage-body">
+              <p class="platform-note">Добавьте российские приложения, чтобы они работали без VPN, пока остальной трафик идёт через VPN.</p>
+              <div class="guide-steps" aria-label="Шаги настройки маршрутизации приложений">
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>1. Выберите приложения</strong>
+                    <p>Нажмите «Раздельное туннелирование ...», затем «Раздельное туннелирование приложений».</p>
+                  </div>
+                  <div class="phone-shot shot-top">
+                    <img src="/static/guides/amnezia/routing-select-apps-marked.jpg" alt="Выбор туннелирования приложений">
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>2. Добавьте нужные</strong>
+                    <p>Нажмите плюсик и выберите Max, VK, Госуслуги, 2ГИС, Mir Pay, Ozon, Wildberries, банки, Яндекс и похожие сервисы.</p>
+                  </div>
+                </article>
+                <article class="guide-step">
+                  <div class="guide-step-text">
+                    <strong>3. Проверьте режим</strong>
+                    <p>Нажмите «Добавить выбранные». Должно быть: «Приложения из списка не должны работать через VPN», тумблер включён.</p>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </details>
           </div>
-          <div class="guide">
-            <strong>Android</strong>
-            <p class="muted">Место под инструкцию со скриншотами.</p>
-          </div>
-          <div class="guide">
-            <strong>Windows / macOS</strong>
-            <p class="muted">Место под инструкцию со скриншотами.</p>
-          </div>
-        </div>
-        </div>
+        </details>
+
       </section>
     </main>
     <script>
@@ -614,6 +831,34 @@
         document.documentElement.dataset.theme = next;
         localStorage.setItem("autovpn-theme", next);
       }
+      document.querySelectorAll(".guide-stage").forEach((stage) => {
+        stage.addEventListener("toggle", () => {
+          if (!stage.open) return;
+          stage.closest(".guide-app")?.querySelectorAll(".guide-stage").forEach((otherStage) => {
+            if (otherStage !== stage) {
+              otherStage.removeAttribute("open");
+            }
+          });
+        });
+      });
+      document.querySelectorAll(".guide-app").forEach((guide) => {
+        guide.addEventListener("toggle", () => {
+          if (!guide.open) return;
+          document.querySelectorAll(".guide-app").forEach((otherGuide) => {
+            if (otherGuide !== guide) {
+              otherGuide.removeAttribute("open");
+            }
+          });
+        });
+      });
+      document.querySelectorAll("[data-open-guide]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const guide = document.getElementById(button.dataset.openGuide);
+          if (!guide) return;
+          guide.setAttribute("open", "");
+          guide.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
     </script>
   </body>
 </html>
