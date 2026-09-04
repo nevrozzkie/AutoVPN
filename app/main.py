@@ -120,6 +120,18 @@ from app.server_operations import (
     run_protocol_refresh,
 )
 from app.router_api import RouterApiError, router, router_api_error_response
+from app.router_credentials import (
+    IssuedRouterCredential,
+    RouterCredentialError,
+    delete_router,
+    get_router,
+    issue_router_credential,
+    list_routers,
+    revoke_router_credential,
+    rotate_router_credential,
+    set_router_enabled,
+    update_router_label,
+)
 
 
 @asynccontextmanager
@@ -883,6 +895,235 @@ def admin_disable_client(client_id: int, _: str = Depends(require_admin)) -> Red
 def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
     delete_client(client_id)
     return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _router_token_response(
+    request: Request,
+    *,
+    token: str,
+    credential_id: str,
+    router_id: str,
+    router_label: str,
+) -> HTMLResponse:
+    response = templates.TemplateResponse(
+        request,
+        "router_token_once.html",
+        {
+            "token": token,
+            "credential_id": credential_id,
+            "router_id": router_id,
+            "router_label": router_label,
+        },
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _issued_router_token_response(
+    request: Request,
+    issued: IssuedRouterCredential,
+    router_label: str,
+) -> HTMLResponse:
+    return _router_token_response(
+        request,
+        token=issued.token,
+        credential_id=issued.credential_id,
+        router_id=issued.router_id,
+        router_label=router_label,
+    )
+
+
+def _require_router_entry(router_id: str) -> dict:
+    try:
+        router_entry = get_router(router_id)
+    except RouterCredentialError:
+        router_entry = None
+    if router_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Router does not exist",
+        )
+    return router_entry
+
+
+def _router_for_credential(credential_id: str) -> dict:
+    for router_entry in list_routers():
+        if any(
+            credential["credential_id"] == credential_id
+            for credential in router_entry["credentials"]
+        ):
+            return router_entry
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Router credential does not exist",
+    )
+
+
+@app.get("/admin/routers", response_class=HTMLResponse)
+def admin_routers(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    clients = list_clients()
+    routers = list_routers()
+    assigned_client_ids = {int(router["client_id"]) for router in routers}
+    return templates.TemplateResponse(
+        request,
+        "routers.html",
+        {
+            "routers": routers,
+            "clients": clients,
+            "available_clients": [
+                client
+                for client in clients
+                if int(client["id"]) not in assigned_client_ids
+            ],
+            "clients_by_id": {int(client["id"]): client for client in clients},
+        },
+    )
+
+
+@app.post("/admin/routers", response_class=HTMLResponse)
+def admin_create_router(
+    request: Request,
+    name: str = Form(...),
+    client_id: int = Form(...),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    router_label = name.strip()
+    if not router_label:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Router name is required",
+        )
+    try:
+        issued = issue_router_credential(
+            client_id,
+            ("snapshot:read", "apply:write"),
+            label=router_label,
+        )
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    return _issued_router_token_response(request, issued, router_label)
+
+
+@app.post("/admin/routers/{router_id}/rename")
+def admin_rename_router(
+    router_id: str,
+    name: str = Form(...),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    if not name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Router name is required",
+        )
+    try:
+        update_router_label(router_id, name)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/enable")
+def admin_enable_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    set_router_enabled(router_id, True)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/disable")
+def admin_disable_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    set_router_enabled(router_id, False)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/delete")
+def admin_delete_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    delete_router(router_id)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/credentials", response_class=HTMLResponse)
+def admin_issue_router_credential(
+    request: Request,
+    router_id: str,
+    label: str = Form("replacement"),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    try:
+        router_entry = _require_router_entry(router_id)
+        issued = issue_router_credential(
+            int(router_entry["client_id"]),
+            ("snapshot:read", "apply:write"),
+            label=label.strip(),
+            router_id=router_id,
+        )
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return _issued_router_token_response(
+        request,
+        issued,
+        str(router_entry["label"]),
+    )
+
+
+@app.post("/admin/router-credentials/{credential_id}/rotate", response_class=HTMLResponse)
+def admin_rotate_router_credential(
+    request: Request,
+    credential_id: str,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    router_entry = _router_for_credential(credential_id)
+    try:
+        token = rotate_router_credential(credential_id)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return _router_token_response(
+        request,
+        token=token,
+        credential_id=credential_id,
+        router_id=str(router_entry["router_id"]),
+        router_label=str(router_entry["label"]),
+    )
+
+
+@app.post("/admin/router-credentials/{credential_id}/revoke")
+def admin_revoke_router_credential(
+    credential_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    try:
+        revoke_router_credential(credential_id)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/admin/operations", response_class=HTMLResponse)

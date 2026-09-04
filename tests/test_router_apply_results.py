@@ -16,7 +16,7 @@ from app.router_apply_results import (
     record_router_apply_result,
     validate_router_apply_result,
 )
-from app.router_credentials import issue_router_credential
+from app.router_credentials import issue_router_credential, list_routers
 from app.router_credentials_cli import main as router_cli_main
 from app.vpn_state import complete_install_operation, prepare_install_operation
 
@@ -94,6 +94,10 @@ def test_apply_result_replay_is_idempotent_and_conflicting_body_is_409(
         headers=_headers(token, etag),
         json=body,
     )
+    latest = list_routers()[0]["latest_apply_result"]
+    assert latest["outcome"] == "APPLIED"
+    assert latest["revision"] == snapshot["revision"]
+    assert latest["active_profile"] == "vless-reality"
     replay = http.put(
         "/api/v2/router/apply-results/boot-001",
         headers=_headers(token, etag),
@@ -160,7 +164,10 @@ def test_apply_result_feature_flag_and_scope_boundary(
     router_api_enabled: None,
 ) -> None:
     http, client, token, etag, snapshot = _applied_router()
-    read_only = issue_router_credential(int(client["id"]), ["snapshot:read"])
+    router_id = list_routers()[0]["router_id"]
+    read_only = issue_router_credential(
+        int(client["id"]), ["snapshot:read"], router_id=router_id
+    )
 
     forbidden = http.put(
         "/api/v2/router/apply-results/write-scope-required",
@@ -257,7 +264,11 @@ def test_apply_result_concurrent_replay_creates_one_row(
     router_api_enabled: None,
 ) -> None:
     _, client, _, _, snapshot = _applied_router()
-    credential = issue_router_credential(int(client["id"]), ["apply:write"])
+    credential = issue_router_credential(
+        int(client["id"]),
+        ["apply:write"],
+        router_id=list_routers()[0]["router_id"],
+    )
     validated = validate_router_apply_result(_result_body(snapshot))
     barrier = threading.Barrier(2)
 

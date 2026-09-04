@@ -20,10 +20,15 @@ from app.db import (
 )
 from app.router_credentials import (
     authenticate_router_credential,
+    create_router,
+    get_router,
     issue_router_credential,
+    list_routers,
     list_router_credentials,
     revoke_router_credential,
     rotate_router_credential,
+    set_router_enabled,
+    update_router_label,
 )
 from app.router_credentials_cli import main as credentials_cli_main
 from app.vpn_state import complete_install_operation, prepare_install_operation
@@ -109,6 +114,7 @@ def test_router_credentials_migration_constraints_and_no_vpn_revision_change() -
     assert listed == [
         {
             "credential_id": issued.credential_id,
+            "router_id": issued.router_id,
             "client_id": client["id"],
             "label": "",
             "scopes": ["snapshot:read"],
@@ -133,6 +139,85 @@ def test_router_credentials_migration_constraints_and_no_vpn_revision_change() -
     assert len(row["secret_digest"]) == 64
 
 
+def test_router_has_stable_identity_multiple_credentials_and_last_seen() -> None:
+    init_db()
+    client = _fixture_client()
+    foreign_client = _fixture_client("Foreign client")
+    primary = issue_router_credential(
+        int(client["id"]), ["snapshot:read"], label="Dorm router"
+    )
+    second = issue_router_credential(
+        int(client["id"]), ["apply:write"], router_id=primary.router_id
+    )
+
+    assert primary.router_id == second.router_id
+    assert rotate_router_credential(primary.credential_id).startswith(
+        f"avrt_{primary.credential_id}."
+    )
+    with pytest.raises(ValueError, match="does not belong"):
+        issue_router_credential(
+            int(foreign_client["id"]), ["snapshot:read"], router_id=primary.router_id
+        )
+
+    router = get_router(primary.router_id)
+    assert router is not None
+    assert router["client_id"] == client["id"]
+    assert router["label"] == "Dorm router"
+    assert router["last_seen_at"] is None
+    listed = list_routers()
+    assert len(listed) == 1
+    assert {credential["credential_id"] for credential in listed[0]["credentials"]} == {
+        primary.credential_id,
+        second.credential_id,
+    }
+    assert listed[0]["latest_apply_result"] is None
+
+    authenticated = authenticate_router_credential(second.token, "apply:write")
+    assert authenticated.router_id == primary.router_id  # type: ignore[union-attr]
+    assert authenticated.client_id == client["id"]  # type: ignore[union-attr]
+    assert get_router(primary.router_id)["last_seen_at"] is not None  # type: ignore[index]
+
+    set_router_enabled(primary.router_id, False)
+    assert authenticate_router_credential(second.token, "apply:write").code == "router_forbidden"  # type: ignore[union-attr]
+    set_router_enabled(primary.router_id, True)
+    assert authenticate_router_credential(second.token, "apply:write").router_id == primary.router_id  # type: ignore[union-attr]
+
+
+def test_create_router_is_client_bound() -> None:
+    init_db()
+    client = _fixture_client()
+    created = create_router("Parents", int(client["id"]))
+
+    assert created["label"] == "Parents"
+    assert created["client_id"] == client["id"]
+    assert list_routers()[0]["credentials"] == []
+    with pytest.raises(ValueError, match="already belongs"):
+        create_router("Duplicate", int(client["id"]))
+    with pytest.raises(ValueError, match="already belongs"):
+        issue_router_credential(int(client["id"]), ["snapshot:read"])
+
+
+def test_router_label_update_preserves_identity_and_validates_name() -> None:
+    init_db()
+    client = _fixture_client()
+    issued = issue_router_credential(
+        int(client["id"]), ["snapshot:read"], label="Before"
+    )
+    before = get_router(issued.router_id)
+    assert before is not None
+
+    update_router_label(issued.router_id, "After")
+
+    after = get_router(issued.router_id)
+    assert after is not None
+    assert after["router_id"] == issued.router_id
+    assert after["label"] == "After"
+    assert after["updated_at"] >= before["updated_at"]
+    assert list_routers()[0]["credentials"][0]["credential_id"] == issued.credential_id
+    with pytest.raises(ValueError, match="label is invalid"):
+        update_router_label(issued.router_id, "invalid\x00name")
+
+
 def test_router_credential_auth_rotate_revoke_expiry_and_scope() -> None:
     init_db()
     client = _fixture_client()
@@ -153,12 +238,14 @@ def test_router_credential_auth_rotate_revoke_expiry_and_scope() -> None:
             int(client["id"]),
             ["snapshot:read"],
             expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            router_id=issued.router_id,
         )
 
     expires_later = issue_router_credential(
         int(client["id"]),
         ["snapshot:read"],
         expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        router_id=issued.router_id,
     )
     with get_db() as db:
         db.execute(
@@ -186,7 +273,9 @@ def test_router_credential_cli_prints_secret_once_and_list_is_sanitized(
         ]
     ) == 0
     issue_output = capsys.readouterr().out
+    issue_metadata = json.loads(issue_output.splitlines()[0])
     token = next(line.removeprefix("token=") for line in issue_output.splitlines() if line.startswith("token="))
+    assert issue_metadata["router_id"]
     assert issue_output.count(token) == 1
 
     assert credentials_cli_main(["list"]) == 0
@@ -229,13 +318,17 @@ def test_router_snapshot_scope_revoked_and_disabled_client_are_403(
     init_db()
     client = _fixture_client()
     read = issue_router_credential(int(client["id"]), ["snapshot:read"])
-    write_only = issue_router_credential(int(client["id"]), ["apply:write"])
+    write_only = issue_router_credential(
+        int(client["id"]), ["apply:write"], router_id=read.router_id
+    )
     http = TestClient(main.app)
 
     assert http.get("/api/v2/router/snapshot", headers=_authorization(write_only.token)).status_code == 403
     revoke_router_credential(read.credential_id)
     assert http.get("/api/v2/router/snapshot", headers=_authorization(read.token)).status_code == 403
-    replacement = issue_router_credential(int(client["id"]), ["snapshot:read"])
+    replacement = issue_router_credential(
+        int(client["id"]), ["snapshot:read"], router_id=read.router_id
+    )
     set_client_enabled(int(client["id"]), False)
     assert http.get("/api/v2/router/snapshot", headers=_authorization(replacement.token)).status_code == 403
 
@@ -293,6 +386,7 @@ def test_router_snapshot_is_exact_client_only_applied_schema_and_supports_304(
     payload = response.json()
     assert set(payload) == {
         "schema_version",
+        "router_id",
         "revision",
         "snapshot_sha256",
         "applied_at",
@@ -301,7 +395,8 @@ def test_router_snapshot_is_exact_client_only_applied_schema_and_supports_304(
         "server",
         "protocols",
     }
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert payload["router_id"] == list_routers()[0]["router_id"]
     assert payload["revision"] == revision
     assert payload["client"] == {"id": client["id"], "name": "Router One"}
     assert payload["server"] == {"endpoint": "203.0.113.10"}
@@ -330,6 +425,32 @@ def test_router_snapshot_is_exact_client_only_applied_schema_and_supports_304(
     assert cached.status_code == 304
     assert cached.content == b""
     assert cached.headers["etag"] == response.headers["etag"]
+
+
+def test_snapshot_identity_and_etag_are_distinct_for_multiple_routers(
+    router_api_enabled: None,
+) -> None:
+    init_db()
+    set_setting("current_ip", "203.0.113.10")
+    first_client = _fixture_client("First router")
+    second_client = _fixture_client("Second router")
+    _apply_current_snapshot()
+    first = issue_router_credential(int(first_client["id"]), ["snapshot:read"])
+    second = issue_router_credential(int(second_client["id"]), ["snapshot:read"])
+    http = TestClient(main.app)
+
+    first_snapshot = http.get(
+        "/api/v2/router/snapshot", headers=_authorization(first.token)
+    )
+    second_snapshot = http.get(
+        "/api/v2/router/snapshot", headers=_authorization(second.token)
+    )
+
+    assert first_snapshot.status_code == 200
+    assert second_snapshot.status_code == 200
+    assert first_snapshot.json()["router_id"] == first.router_id
+    assert second_snapshot.json()["router_id"] == second.router_id
+    assert first_snapshot.headers["etag"] != second_snapshot.headers["etag"]
 
 
 def test_client_enabled_now_but_absent_from_applied_snapshot_is_409(

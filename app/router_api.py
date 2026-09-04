@@ -100,6 +100,7 @@ def authorize_router(request: Request, required_scope: str) -> AuthenticatedRout
         messages = {
             "credential_forbidden": "Router credential is disabled or revoked",
             "client_forbidden": "Router credential client is disabled",
+            "router_forbidden": "Router is disabled",
             "insufficient_scope": "Router credential lacks the required scope",
         }
         raise RouterApiError(403, result.code, messages[result.code])
@@ -268,9 +269,11 @@ def build_router_snapshot_response(
     config: CapturedVpnConfig,
     client: VpnClient,
     published_at: str | None,
+    router_id: str,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
+        "router_id": router_id,
         "revision": int(snapshot["revision"]),
         "snapshot_sha256": snapshot["payload_sha256"],
         "applied_at": snapshot["applied_at"],
@@ -405,7 +408,9 @@ def router_snapshot(request: Request) -> Response:
             "Applied VPN snapshot has no server endpoint",
             {"Retry-After": "30"},
         )
-    payload = build_router_snapshot_response(snapshot, config, client, published_at)
+    payload = build_router_snapshot_response(
+        snapshot, config, client, published_at, credential.router_id
+    )
     etag = response_etag(payload)
     if_none_match = request.headers.get("if-none-match", "")
     if len(if_none_match) > MAX_CONDITIONAL_HEADER:
@@ -473,7 +478,7 @@ async def router_apply_result(request: Request, idempotency_key: str) -> Respons
     snapshot, config, published_at = _load_applied_snapshot()
     client = _client_from_applied_snapshot(credential, config)
     snapshot_payload = build_router_snapshot_response(
-        snapshot, config, client, published_at
+        snapshot, config, client, published_at, credential.router_id
     )
     current_etag = response_etag(snapshot_payload)
     if not hmac.compare_digest(if_match, current_etag):

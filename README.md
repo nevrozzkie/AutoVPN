@@ -328,15 +328,45 @@ Versioned API предназначен для будущего OpenWrt-конт�
 Переключатель находится в `/admin/setup`; при выключении все `/api/v2/router/*` отвечают `404`.
 API не обращается к Aeza и не запускает SSH-команды.
 
+Маршрут API остаётся `/api/v2/router`, а текущий snapshot имеет `schema_version: 3`: в него
+добавлен стабильный `router_id`. Он входит в ETag и позволяет OpenWrt сверить локально
+закреплённую identity с устройством, которому сервер выдал snapshot.
+
 Router credential не связан с legacy token из `/client/{token}` и `/sub/{token}`. Он имеет
-свои scopes и привязан к одному client id. В SQLite хранится только SHA-256 digest случайного
-секрета; полный Bearer token печатается ровно при issue или успешном rotate. Пример выдачи:
+свои scopes и принадлежит стабильной сущности Router, которая привязана к одному client id.
+Один физический роутер должен использовать отдельного VPN-клиента: это исключает конфликт
+одинаковых AmneziaWG key/address на нескольких одновременно работающих устройствах.
+
+Роутеры создаются и управляются на `/admin/routers`: там видны `last_seen`, credentials и
+последний apply result каждого устройства. Новый или заменённый Bearer token показывается
+только в непосредственном ответе на действие с `Cache-Control: private, no-store`; в SQLite
+хранится только SHA-256 digest. Выпуск дополнительного credential не меняет `router_id`, а
+отключение одного Router не влияет на остальные.
+
+Существующие credentials при migration получают отдельные Router identity без попытки угадать
+и склеить физические устройства. URL Router API остаётся прежним; snapshot schema намеренно
+обновлена до v3.
+
+CLI также остаётся доступен. Без `--router-id` команда атомарно создаёт Router и его первый
+credential, но откажется переиспользовать VPN-клиента уже назначенного другому Router.
+С `--router-id` она добавляет credential существующему устройству:
 
 ```bash
 export DATABASE_PATH=/var/lib/autovpn/autovpn.sqlite3
 python -m app.router_credentials_cli issue \
   --client-id 7 \
   --label 'Cudy WR3000S' \
+  --scope snapshot:read \
+  --scope apply:write
+```
+
+В JSON перед токеном печатаются и `router_id`, и `credential_id`. Для дополнительного токена:
+
+```bash
+python -m app.router_credentials_cli issue \
+  --router-id '<router_id>' \
+  --client-id 7 \
+  --label 'replacement' \
   --scope snapshot:read \
   --scope apply:write
 ```

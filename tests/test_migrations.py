@@ -9,7 +9,13 @@ import pytest
 
 import app.migrations as migrations
 from app.config import settings
-from app.db import DATABASE_BUSY_TIMEOUT_MS, get_client_by_token, get_db, init_db
+from app.db import (
+    DATABASE_BUSY_TIMEOUT_MS,
+    create_client,
+    get_client_by_token,
+    get_db,
+    init_db,
+)
 
 
 @pytest.fixture
@@ -150,8 +156,9 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "server_operations",
         "router_credentials",
         "router_apply_results",
+        "routers",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
@@ -159,6 +166,7 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "safe_aeza_ip_rotation",
         "router_credentials",
         "router_apply_results",
+        "routers",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS
@@ -166,6 +174,76 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
     assert not (database_path.parent / "backups").exists()
     assert _mode(database_path.parent) == 0o700
     assert _mode(database_path) == 0o600
+
+
+def test_router_migration_backfills_one_stable_router_per_legacy_credential(
+    database_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_migrations = migrations.MIGRATIONS
+    monkeypatch.setattr(migrations, "MIGRATIONS", current_migrations[:6])
+    init_db()
+    client = create_client("Legacy router client")
+    with get_db() as connection:
+        connection.execute(
+            """
+            INSERT INTO router_credentials(
+                credential_id, client_id, label, secret_digest, scopes, enabled,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                "legacy-credential-a",
+                client["id"],
+                "Old primary",
+                "a" * 64,
+                "snapshot:read",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO router_credentials(
+                credential_id, client_id, label, secret_digest, scopes, enabled,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                "legacy-credential-b",
+                client["id"],
+                "Old spare",
+                "b" * 64,
+                "apply:write",
+                "2026-01-03T00:00:00+00:00",
+                "2026-01-04T00:00:00+00:00",
+            ),
+        )
+    monkeypatch.setattr(migrations, "MIGRATIONS", current_migrations)
+
+    init_db()
+
+    with get_db() as connection:
+        credentials = connection.execute(
+            """
+            SELECT credential_id, router_id, client_id FROM router_credentials
+            ORDER BY credential_id
+            """
+        ).fetchall()
+        routers = connection.execute(
+            """
+            SELECT router_id, client_id, label, created_at, updated_at
+            FROM routers ORDER BY label
+            """
+        ).fetchall()
+    assert len(routers) == 2
+    assert all(row["router_id"] for row in credentials)
+    assert len({row["router_id"] for row in credentials}) == 2
+    assert {row["client_id"] for row in routers} == {client["id"]}
+    assert [row["label"] for row in routers] == ["Old primary", "Old spare"]
+    assert [row["created_at"] for row in routers] == [
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-03T00:00:00+00:00",
+    ]
 
 
 def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(

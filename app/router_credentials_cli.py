@@ -33,6 +33,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     issue.add_argument("--expires-at")
     issue.add_argument("--label", default="")
+    issue.add_argument("--router-id")
     commands.add_parser("list", help="list credential metadata without token digests")
     revoke = commands.add_parser("revoke", help="revoke a credential")
     revoke.add_argument("credential_id")
@@ -57,11 +58,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.scopes,
                 expires_at=args.expires_at,
                 label=args.label,
+                router_id=args.router_id,
             )
             print(
                 json.dumps(
                     {
                         "credential_id": issued.credential_id,
+                        "router_id": issued.router_id,
                         "client_id": issued.client_id,
                         "scopes": issued.scopes,
                         "label": issued.label,

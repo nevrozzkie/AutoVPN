@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -329,6 +330,76 @@ def _apply_router_apply_results(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_routers(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS routers (
+            router_id TEXT PRIMARY KEY
+                CHECK (length(router_id) BETWEEN 8 AND 64),
+            client_id INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT ''
+                CHECK (length(label) <= 100),
+            enabled INTEGER NOT NULL DEFAULT 1
+                CHECK (enabled IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_seen_at TEXT,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS routers_client_id
+        ON routers(client_id)
+        """
+    )
+    _add_column_if_missing(
+        connection,
+        "router_credentials",
+        "router_id",
+        "TEXT REFERENCES routers(router_id) ON DELETE CASCADE",
+    )
+
+    # Before routers existed, every credential independently represented a router.
+    # Preserve that meaning rather than guessing which old credentials belong to one
+    # physical device. Operators can explicitly consolidate credentials later.
+    credentials = connection.execute(
+        """
+        SELECT credential_id, client_id, label, created_at, updated_at
+        FROM router_credentials
+        WHERE router_id IS NULL
+        ORDER BY created_at, credential_id
+        """
+    ).fetchall()
+    for credential in credentials:
+        router_id = secrets.token_urlsafe(12)
+        connection.execute(
+            """
+            INSERT INTO routers(
+                router_id, client_id, label, enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?)
+            """,
+            (
+                router_id,
+                _row_value(credential, 1, "client_id"),
+                _row_value(credential, 2, "label"),
+                _row_value(credential, 3, "created_at"),
+                _row_value(credential, 4, "updated_at"),
+            ),
+        )
+        connection.execute(
+            "UPDATE router_credentials SET router_id = ? WHERE credential_id = ?",
+            (router_id, _row_value(credential, 0, "credential_id")),
+        )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS router_credentials_router_id
+        ON router_credentials(router_id)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -384,6 +455,15 @@ MIGRATIONS = (
             "body hash, bounded capability and diagnostic payloads"
         ),
         apply=_apply_router_apply_results,
+    ),
+    Migration(
+        version=7,
+        name="routers",
+        signature=(
+            "create stable independently enabled routers; migrate each legacy router "
+            "credential to a router identity and bind credentials to routers"
+        ),
+        apply=_apply_routers,
     ),
 )
 
