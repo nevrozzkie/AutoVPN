@@ -22,6 +22,10 @@ from app.reality import (
     generate_reality_public_key,
     generate_reality_short_id,
 )
+from app.migrations import migrate_database
+
+
+DATABASE_BUSY_TIMEOUT_MS = 5_000
 
 
 def now_iso() -> str:
@@ -32,81 +36,58 @@ def dict_factory(cursor: sqlite3.Cursor, row: sqlite3.Row) -> dict[str, Any]:
     return {column[0]: row[index] for index, column in enumerate(cursor.description)}
 
 
+def _is_memory_database(database_path: str) -> bool:
+    return database_path == ":memory:" or (
+        database_path.startswith("file:") and "mode=memory" in database_path
+    )
+
+
+def _secure_database_files(database_path: str) -> None:
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(f"{database_path}{suffix}")
+        if path.exists():
+            os.chmod(path, 0o600)
+
+
 @contextmanager
-def get_db() -> Iterator[sqlite3.Connection]:
-    db_path = Path(settings.database_path)
-    if db_path.parent != Path("."):
-        os.makedirs(db_path.parent, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+def get_db(*, enable_wal: bool = True) -> Iterator[sqlite3.Connection]:
+    database_path = settings.database_path
+    is_memory = _is_memory_database(database_path)
+    if not is_memory:
+        db_path = Path(database_path)
+        if db_path.parent != Path("."):
+            os.makedirs(db_path.parent, mode=0o700, exist_ok=True)
+            os.chmod(db_path.parent, 0o700)
+    conn = sqlite3.connect(
+        database_path,
+        timeout=DATABASE_BUSY_TIMEOUT_MS / 1_000,
+        uri=database_path.startswith("file:"),
+    )
     conn.row_factory = dict_factory
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {DATABASE_BUSY_TIMEOUT_MS}")
+    if not is_memory:
+        _secure_database_files(database_path)
+        if enable_wal:
+            conn.execute("PRAGMA journal_mode = WAL")
+            _secure_database_files(database_path)
     try:
         yield conn
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def init_db() -> None:
-    with get_db() as db:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                token TEXT NOT NULL UNIQUE,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                vless_uuid TEXT NOT NULL,
-                hysteria_password TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS ip_change_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT NOT NULL,
-                old_ip TEXT,
-                new_ip TEXT,
-                old_ip_id TEXT,
-                new_ip_id TEXT,
-                current_step TEXT NOT NULL,
-                error_message TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS vpn_install_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT NOT NULL,
-                target_host TEXT,
-                current_step TEXT NOT NULL,
-                output TEXT,
-                error_message TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS client_stats (
-                client_id INTEGER PRIMARY KEY,
-                vless_uplink INTEGER NOT NULL DEFAULT 0,
-                vless_downlink INTEGER NOT NULL DEFAULT 0,
-                amnezia_rx INTEGER NOT NULL DEFAULT 0,
-                amnezia_tx INTEGER NOT NULL DEFAULT 0,
-                amnezia_latest_handshake INTEGER NOT NULL DEFAULT 0,
-                last_seen_at TEXT,
-                updated_at TEXT NOT NULL,
-                raw TEXT,
-                FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
-            );
-            """
-        )
-        _ensure_client_columns(db)
-        _ensure_client_stats_columns(db)
-        _ensure_ip_operation_columns(db)
+    database_path = settings.database_path
+    with get_db(enable_wal=False) as db:
+        migrate_database(settings.database_path, db)
+        if not _is_memory_database(database_path):
+            db.execute("PRAGMA journal_mode = WAL")
+            _secure_database_files(database_path)
         db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             ("current_ip", ""),
@@ -119,44 +100,6 @@ def init_db() -> None:
         _ensure_reality_settings(db)
         _ensure_hysteria_settings(db)
         _ensure_client_amnezia_material(db)
-
-
-def _column_exists(db: sqlite3.Connection, table: str, column: str) -> bool:
-    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(row["name"] == column for row in rows)
-
-
-def _ensure_client_columns(db: sqlite3.Connection) -> None:
-    columns = {
-        "amnezia_private_key": "TEXT",
-        "amnezia_public_key": "TEXT",
-        "amnezia_preshared_key": "TEXT",
-        "amnezia_ipv4": "TEXT",
-    }
-    for column, column_type in columns.items():
-        if not _column_exists(db, "clients", column):
-            db.execute(f"ALTER TABLE clients ADD COLUMN {column} {column_type}")
-
-
-def _ensure_ip_operation_columns(db: sqlite3.Connection) -> None:
-    columns = {
-        "server_reachable_at": "TEXT",
-        "healthcheck_result": "TEXT",
-    }
-    for column, column_type in columns.items():
-        if not _column_exists(db, "ip_change_operations", column):
-            db.execute(f"ALTER TABLE ip_change_operations ADD COLUMN {column} {column_type}")
-
-
-def _ensure_client_stats_columns(db: sqlite3.Connection) -> None:
-    columns = {
-        "amnezia_rx": "INTEGER NOT NULL DEFAULT 0",
-        "amnezia_tx": "INTEGER NOT NULL DEFAULT 0",
-        "amnezia_latest_handshake": "INTEGER NOT NULL DEFAULT 0",
-    }
-    for column, column_type in columns.items():
-        if not _column_exists(db, "client_stats", column):
-            db.execute(f"ALTER TABLE client_stats ADD COLUMN {column} {column_type}")
 
 
 def _setting(db: sqlite3.Connection, key: str) -> str:
