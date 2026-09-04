@@ -122,7 +122,7 @@
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  {% if operation_running or active_vps_operation or not aeza_ip_rotation_available %}
+  {% if operation_running or active_vps_operation or not aeza_ip_rotation_available or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">Обновить IP</a>
@@ -143,6 +143,10 @@
   <p class="muted">Операция смены IP уже выполняется.</p>
 {% elif not aeza_ip_rotation_available %}
   <p class="muted">Смена IP доступна только для Aeza: настройте AEZA_TOKEN и AEZA_SERVICE_ID.</p>
+{% elif not safe_aeza_ip_rotation_enabled %}
+  <p class="muted">Безопасная ротация Aeza выключена. После интеграционной проверки включите <code>ENABLE_SAFE_AEZA_IP_ROTATION=1</code>; старый контур не запускается.</p>
+{% elif not transactional_vpn_apply_enabled %}
+  <p class="muted">Сначала включите и проверьте <code>ENABLE_TRANSACTIONAL_VPN_APPLY=1</code>; safe rotation не обходит этот gate.</p>
 {% endif %}
 
 <p class="danger">
@@ -162,6 +166,11 @@
     <h2>Последняя ошибка смены IP</h2>
     <section class="panel danger">{{ latest_operation.error_message }}</section>
   {% endif %}
+{% endif %}
+
+{% if latest_operation and latest_operation.cleanup_warning %}
+  <h2>Предупреждение cleanup Aeza IP</h2>
+  <section class="panel warning">{{ latest_operation.cleanup_warning }}</section>
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.error_message %}

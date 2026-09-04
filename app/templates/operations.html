@@ -2,7 +2,7 @@
 {% block content %}
 <h1>Журнал операций</h1>
 
-<h2>Смена IP</h2>
+<h2 id="ip-operations">Смена IP</h2>
 <table>
   <thead>
     <tr>
@@ -11,6 +11,8 @@
       <th>Шаг</th>
       <th>Старый IP</th>
       <th>Новый IP</th>
+      <th>Ревизия</th>
+      <th>Внешнее действие</th>
       <th>Сервер поднялся</th>
       <th>Ошибка</th>
       <th>Создано</th>
@@ -25,6 +27,18 @@
         <td>{{ operation.current_step|step_label }}</td>
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
+        <td>{{ operation.revision if operation.revision is not none else "" }}{% if operation.published_revision is not none %} → {{ operation.published_revision }}{% endif %}</td>
+        <td>
+          {{ operation.action_state or "" }}
+          {% if operation.rollback_outcome %}<br><span class="warning">{{ operation.rollback_outcome }}</span>{% endif %}
+          {% if operation.cleanup_warning %}<br><span class="warning">{{ operation.cleanup_warning }}</span>{% endif %}
+          {% if operation.action_state in ["AMBIGUOUS", "CLEANUP_AMBIGUOUS", "PUBLISHED_AWAITING_AWG_CHECK"] %}
+            <br><a href="/admin/ip/operations/{{ operation.id }}/reconcile/confirm">Ручная сверка</a>
+          {% elif operation.action_state == "RECONCILED" %}
+            <br><span class="ok">Сверено {{ operation.reconciled_at|msk }}</span>
+            {% if operation.reconciliation_note %}<br><span class="muted">{{ operation.reconciliation_note }}</span>{% endif %}
+          {% endif %}
+        </td>
         <td>
           {{ operation.server_reachable_at|msk }}
           {% if operation.healthcheck_result %}
@@ -36,7 +50,7 @@
         <td>{{ operation.updated_at|msk }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">Операций пока нет</td></tr>
+      <tr><td colspan="11" class="muted">Операций пока нет</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -2,6 +2,11 @@
 {% block content %}
 <h1>Подтверждение покупки IPv4</h1>
 
+<section class="panel warning">
+  Отдельная покупка IPv4 отключена: она не связывает платное действие с
+  durable operation, immutable VPN snapshot и безопасным rollback.
+</section>
+
 {% if error %}
   <section class="panel danger">{{ error }}</section>
 {% endif %}
@@ -28,7 +33,7 @@
 <div class="actions action-bar">
   <a class="button" href="/admin/ip">Назад</a>
   <form method="post" action="/admin/ip/buy" class="inline">
-    <button type="submit" {% if not aeza_ipv4_domain %}disabled{% endif %}>Подтвердить покупку IPv4</button>
+    <button type="submit" disabled>Покупка доступна только внутри безопасной ротации</button>
   </form>
 </div>
 {% endblock %}

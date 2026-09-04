@@ -29,6 +29,7 @@ from app.db import (
     get_client_by_token,
     get_latest_install_operation,
     get_latest_operation,
+    get_operation,
     get_setting,
     get_vpn_state,
     has_running_install_operation,
@@ -39,6 +40,7 @@ from app.db import (
     list_install_operations,
     list_operations,
     reset_server_and_aeza_state,
+    reconcile_ip_operation,
     set_setting,
     set_settings,
     set_client_enabled,
@@ -51,7 +53,7 @@ from app.eu_install import (
     resolve_eu_host,
     run_eu_install,
 )
-from app.ip_change import apply_manual_main_ip, run_ip_change
+from app.ip_change import run_ip_change
 from app.operation_coordinator import OperationBusyError
 from app.protocol_status import get_client_protocol_statuses, get_protocol_statuses, refresh_protocol_statuses
 from app.runtime_config import (
@@ -60,10 +62,11 @@ from app.runtime_config import (
     aeza_api_base,
     aeza_ipv4_after_purchase_delay_seconds,
     aeza_ipv4_domain,
-    aeza_ipv4_payment_method,
     aeza_service_id,
     aeza_token,
     setup_complete,
+    safe_aeza_ip_rotation_enabled,
+    transactional_vpn_apply_enabled,
     eu_ssh_host,
     eu_ssh_key_path,
     eu_ssh_password,
@@ -85,7 +88,7 @@ from app.subscriptions import (
     render_subscription,
 )
 from app.vpn_config import capture_vpn_config
-from app.vpn_state import prepare_install_operation
+from app.vpn_state import IpChangeSafetyHoldError, prepare_install_operation
 from app.security import (
     SECURITY_HEADERS,
     csrf_failure_detail,
@@ -199,6 +202,7 @@ STEP_LABELS = {
     "wait_after_ipv4_purchase": "ожидание после покупки IPv4",
     "wait_new_ipv4": "ожидание появления нового IPv4",
     "make_new_ipv4_main": "назначение нового IP главным",
+    "confirm_new_ipv4_main": "подтверждение нового главного IP в Aeza",
     "reboot_service": "перезагрузка VPS",
     "wait_vps_health": "ожидание доступности VPS",
     "server_reachable": "сервер доступен",
@@ -562,6 +566,8 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             or has_running_install_operation()
             or active_vps_operation is not None,
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
+            "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
+            "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
         },
@@ -572,13 +578,18 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
 async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    price = await fetch_aeza_ipv4_price()
+    safe_rotation_enabled = safe_aeza_ip_rotation_enabled()
+    transactional_apply_enabled = transactional_vpn_apply_enabled()
+    price = await fetch_aeza_ipv4_price() if safe_rotation_enabled else None
     return templates.TemplateResponse(
         request,
         "ip_confirm.html",
         {
             "current_ip": get_setting("current_ip"),
             "operation_running": has_running_operation(),
+            "safe_rotation_enabled": safe_rotation_enabled,
+            "transactional_apply_enabled": transactional_apply_enabled,
+            "safety_hold": request.query_params.get("safety_hold") == "1",
             "aeza_ipv4_price": price,
             "after_purchase_delay_seconds": aeza_ipv4_after_purchase_delay_seconds(),
             "format_eur_minor_units": format_eur_minor_units,
@@ -590,8 +601,23 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
 def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
+    if not safe_aeza_ip_rotation_enabled():
+        return RedirectResponse(
+            "/admin/ip/confirm?safe_rotation_required=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not transactional_vpn_apply_enabled():
+        return RedirectResponse(
+            "/admin/ip/confirm?transactional_apply_required=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     try:
         operation_id = create_operation()
+    except IpChangeSafetyHoldError:
+        return RedirectResponse(
+            "/admin/ip/confirm?safety_hold=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     except OperationBusyError:
         return RedirectResponse("/admin/ip/confirm?already_running=1", status_code=status.HTTP_303_SEE_OTHER)
     background_tasks.add_task(_run_operation_background, operation_id)
@@ -626,6 +652,7 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             "synced_main_ip": "",
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
+            "safe_rotation_enabled": safe_aeza_ip_rotation_enabled(),
         },
     )
 
@@ -643,6 +670,7 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
             "aeza_ipv4_domain": domain,
             "error": request.query_params.get("error", ""),
             "format_eur_minor_units": format_eur_minor_units,
+            "safe_rotation_enabled": safe_aeza_ip_rotation_enabled(),
         },
     )
 
@@ -651,21 +679,10 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
 async def admin_ip_buy(_: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    domain = aeza_ipv4_domain()
-    if not domain:
-        return redirect_with_error(
-            "/admin/ip/buy/confirm",
-            "AEZA_IPV4_DOMAIN is required for buying IPv4 in Aeza",
-        )
-    try:
-        await get_aeza_client().add_ipv4(
-            aeza_service_id(),
-            payment_method=aeza_ipv4_payment_method(),
-            domain=domain,
-        )
-    except Exception as exc:
-        return redirect_with_error("/admin/ip/buy/confirm", str(exc))
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/admin/ip/{ipv4_id}/make-main")
@@ -676,12 +693,11 @@ async def admin_ip_make_main(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    try:
-        await get_aeza_client().make_main_ipv4(aeza_service_id(), ipv4_id)
-    except Exception as exc:
-        return redirect_with_error("/admin/ip", str(exc))
-    await apply_manual_main_ip(ip)
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    del ipv4_id, ip
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/admin/ip/{ipv4_id}/delete")
@@ -693,13 +709,11 @@ async def admin_ip_delete(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    if is_main == "1" or ip == get_setting("current_ip"):
-        return RedirectResponse("/admin/ip?cannot_delete_main=1", status_code=status.HTTP_303_SEE_OTHER)
-    try:
-        await get_aeza_client().delete_ipv4(aeza_service_id(), ipv4_id)
-    except Exception as exc:
-        return redirect_with_error("/admin/ip", str(exc))
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    del ipv4_id, ip, is_main
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 async def _run_operation_background(operation_id: int) -> None:
@@ -708,6 +722,66 @@ async def _run_operation_background(operation_id: int) -> None:
     except Exception:
         # The operation runner has already persisted the failure details.
         return
+
+
+@app.get(
+    "/admin/ip/operations/{operation_id}/reconcile/confirm",
+    response_class=HTMLResponse,
+)
+def admin_ip_reconcile_confirm(
+    request: Request,
+    operation_id: int,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    operation = get_operation(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    is_hold = operation["action_state"] != "RECONCILED" and (
+        operation["status"] == "AMBIGUOUS"
+        or operation["action_state"]
+        in {"CLEANUP_AMBIGUOUS", "PUBLISHED_AWAITING_AWG_CHECK"}
+    )
+    if operation["status"] in {"PENDING", "RUNNING"} or not is_hold:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This IP operation does not have a terminal safety hold",
+        )
+    return templates.TemplateResponse(
+        request,
+        "ip_reconcile_confirm.html",
+        {"operation": operation},
+    )
+
+
+@app.post("/admin/ip/operations/{operation_id}/reconcile")
+def admin_ip_reconcile(
+    operation_id: int,
+    confirm: str = Form(""),
+    note: str = Form(""),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if confirm.strip() != "RECONCILE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type RECONCILE after manually checking the IPv4 state in Aeza",
+        )
+    if not note.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A short reconciliation note is required",
+        )
+    try:
+        reconcile_ip_operation(operation_id, note)
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from None
+    return RedirectResponse(
+        "/admin/operations#ip-operations",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.get("/admin/clients", response_class=HTMLResponse)

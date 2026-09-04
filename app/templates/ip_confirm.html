@@ -2,6 +2,36 @@
 {% block content %}
 <h1>Подтверждение смены IP</h1>
 
+{% if not safe_rotation_enabled %}
+  <section class="panel warning">
+    Безопасная ротация Aeza выключена по умолчанию. Старый небезопасный контур не запускается.
+    Для поэтапного включения после проверки интеграции задайте
+    <code>ENABLE_SAFE_AEZA_IP_ROTATION=1</code>.
+  </section>
+{% endif %}
+
+{% if safe_rotation_enabled and not transactional_apply_enabled %}
+  <section class="panel warning">
+    Ротация остаётся заблокированной, пока не включён и не проверен transactional
+    config apply: <code>ENABLE_TRANSACTIONAL_VPN_APPLY=1</code>.
+  </section>
+{% endif %}
+
+{% if safety_hold %}
+  <section class="panel danger">
+    Предыдущая операция Aeza имеет ambiguous или ожидающий ручной проверки
+    результат. Новая покупка заблокирована: сначала сверьте IPv4 в Aeza и журнал
+    операций. <a href="/admin/operations#ip-operations">Открыть журнал и снять hold</a>.
+  </section>
+{% endif %}
+
+{% if request.query_params.get("manual_disabled") == "1" %}
+  <section class="panel warning">
+    Прямая покупка, make-main и удаление IPv4 отключены: они обходят durable
+    operation и safety checks. Используйте только эту gated-ротацию.
+  </section>
+{% endif %}
+
 <section class="panel">
   <div class="label">Текущий EU VPN IP</div>
   <div class="value">{{ current_ip or "не задан" }}</div>
@@ -29,7 +59,7 @@
 <div class="actions action-bar">
   <a class="button" href="/admin">Назад</a>
   <form method="post" action="/admin/ip/refresh" class="inline">
-    <button type="submit" {% if operation_running %}disabled{% endif %}>Подтвердить и обновить IP</button>
+    <button type="submit" {% if operation_running or not safe_rotation_enabled or not transactional_apply_enabled or safety_hold %}disabled{% endif %}>Подтвердить и обновить IP</button>
   </form>
 </div>
 

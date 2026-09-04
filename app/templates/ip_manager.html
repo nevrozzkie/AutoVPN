@@ -2,6 +2,16 @@
 {% block content %}
 <h1>Управление IP в Aeza</h1>
 
+<section class="panel warning">
+  Эта страница показывает IPv4 в режиме только для чтения. Отдельные покупка,
+  назначение главным и удаление заблокированы, потому что они обходят durable
+  safe-rotation workflow.
+  {% if not safe_rotation_enabled %}
+    Безопасная ротация также выключена; для staged rollout используется
+    <code>ENABLE_SAFE_AEZA_IP_ROTATION=1</code>.
+  {% endif %}
+</section>
+
 <div class="grid">
   <section class="panel">
     <div class="label">Текущий IP в AutoVPN</div>
@@ -29,7 +39,8 @@
 
 <div class="actions action-bar">
   <a class="button" href="/admin/ip">Обновить список IP</a>
-  <a class="button" href="/admin/ip/buy/confirm">Купить новый IPv4</a>
+  <a class="button" href="/admin/ip/confirm">Безопасно обновить IP</a>
+  <a class="button" href="/admin/operations#ip-operations">Журнал / ручная сверка</a>
   <a class="button" href="/admin">Назад</a>
 </div>
 
@@ -50,24 +61,7 @@
         <td><code>{{ item.ip }}</code></td>
         <td>{% if effective_main %}<span class="ok">да</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
         <td>
-          {% if not effective_main %}
-            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/make-main" data-confirm-message="Сделать {{ item.ip }} главным IP и синхронизировать VPN конфиги?">
-              <input type="hidden" name="ip" value="{{ item.ip }}">
-              <button type="submit">Сделать главным</button>
-            </form>
-            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/delete" data-confirm-message="Удалить IP {{ item.ip }}?">
-              <input type="hidden" name="ip" value="{{ item.ip }}">
-              <input type="hidden" name="is_main" value="0">
-              <button type="submit" class="danger-button">Удалить</button>
-            </form>
-          {% else %}
-            <button type="button" disabled>Главный</button>
-            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/delete">
-              <input type="hidden" name="ip" value="{{ item.ip }}">
-              <input type="hidden" name="is_main" value="1">
-              <button type="submit" disabled>Удалить</button>
-            </form>
-          {% endif %}
+          <button type="button" disabled>{{ "Главный" if effective_main else "Только просмотр" }}</button>
         </td>
       </tr>
     {% else %}
@@ -78,7 +72,7 @@
 
 <section class="panel">
   <strong>Важно</strong>
-  <p>Когда ты делаешь IP главным вручную, AutoVPN обновляет `current_ip` и синхронизирует VPN конфиги на выбранный IP.</p>
-  <p>Удаление главного IP запрещено. Удалять можно только не главный IP.</p>
+  <p>AutoVPN публикует новый <code>current_ip</code> только после назначения нового IP главным, SSH, transactional apply и проверок протоколов.</p>
+  <p>Старый IP удаляется только после публикации; ошибка cleanup сохраняется отдельным предупреждением.</p>
 </section>
 {% endblock %}

@@ -149,11 +149,12 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "operation_leases",
         "server_operations",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
         "shared_vps_operation_coordinator",
+        "safe_aeza_ip_rotation",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS
@@ -204,6 +205,26 @@ def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
             row["table"] == "vpn_snapshots" and row["from"] == "revision"
             for row in connection.execute("PRAGMA foreign_key_list(vpn_install_operations)")
         )
+        ip_operation_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(ip_change_operations)")
+        }
+        assert {
+            "revision",
+            "published_revision",
+            "action_state",
+            "purchase_state",
+            "make_main_state",
+            "apply_state",
+            "cleanup_warning",
+            "rollback_outcome",
+            "reconciled_at",
+            "reconciliation_note",
+        } <= ip_operation_columns
+        assert any(
+            row["table"] == "vpn_snapshots" and row["from"] == "revision"
+            for row in connection.execute("PRAGMA foreign_key_list(ip_change_operations)")
+        )
 
     backups = list((database_path.parent / "backups").glob("*.sqlite3"))
     assert len(backups) == 1
@@ -247,7 +268,7 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
         raise RuntimeError("simulated interrupted migration")
 
     failed = migrations.Migration(
-        version=4,
+        version=5,
         name="failure_probe",
         signature="create table then fail",
         apply=fail_after_ddl,
@@ -259,7 +280,7 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT 1 FROM schema_migrations WHERE version = 4"
+            "SELECT 1 FROM schema_migrations WHERE version = 5"
         ).fetchone() is None
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'must_be_rolled_back'"

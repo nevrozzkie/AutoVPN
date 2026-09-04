@@ -17,7 +17,12 @@ from app.operation_coordinator import (
     acquire_vps_lease,
     release_vps_lease,
 )
-from app.vpn_state import fail_install_operation, get_vpn_snapshot, prepare_install_operation
+from app.vpn_state import (
+    IpChangeSafetyHoldError,
+    fail_install_operation,
+    get_vpn_snapshot,
+    prepare_install_operation,
+)
 
 
 def test_two_competing_creates_persist_exactly_one_operation_and_lock() -> None:
@@ -115,6 +120,18 @@ def test_startup_recovery_closes_all_jobs_and_never_resends_reboot() -> None:
                 (timestamp, timestamp),
             ).lastrowid
         )
+        ambiguous_ip_id = int(
+            db.execute(
+                """
+                INSERT INTO ip_change_operations(
+                    status, current_step, action_state, purchase_state,
+                    created_at, updated_at
+                ) VALUES ('RUNNING', 'create_new_ipv4', 'PURCHASE_SENDING',
+                          'SENDING', ?, ?)
+                """,
+                (timestamp, timestamp),
+            ).lastrowid
+        )
         status_id = int(
             db.execute(
                 """
@@ -147,6 +164,14 @@ def test_startup_recovery_closes_all_jobs_and_never_resends_reboot() -> None:
         assert db.execute(
             "SELECT status FROM ip_change_operations WHERE id = ?", (ip_id,)
         ).fetchone()["status"] == "FAILED"
+        recovered_ip = db.execute(
+            "SELECT status, action_state FROM ip_change_operations WHERE id = ?",
+            (ambiguous_ip_id,),
+        ).fetchone()
+        assert recovered_ip == {
+            "status": "AMBIGUOUS",
+            "action_state": "AMBIGUOUS",
+        }
         assert db.execute(
             "SELECT status FROM server_operations WHERE id = ?", (status_id,)
         ).fetchone()["status"] == "FAILED"
@@ -167,3 +192,5 @@ def test_startup_recovery_closes_all_jobs_and_never_resends_reboot() -> None:
             ) WHERE status IN ('PENDING', 'RUNNING')
             """
         ).fetchone() is None
+    with pytest.raises(IpChangeSafetyHoldError):
+        create_operation()

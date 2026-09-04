@@ -8,6 +8,7 @@ from app.config import settings
 from app.db import get_setting, list_clients
 from app.runtime_config import hysteria_port, vless_port
 from app.subscriptions import hysteria_auth
+from app.vpn_config import CapturedVpnConfig
 
 
 @dataclass(frozen=True)
@@ -20,18 +21,30 @@ async def run_deep_protocol_checks(
     current_ip: str,
     *,
     command_timeout: float | None = None,
+    config: CapturedVpnConfig | None = None,
+    target_host: str | None = None,
 ) -> dict[str, DeepCheckResult]:
-    client = _first_enabled_client()
+    if config is not None:
+        client = (
+            config.enabled_clients[0].as_dict()
+            if config.enabled_clients
+            else None
+        )
+    else:
+        client = _first_enabled_client()
     if not client:
         return {}
 
     from app.eu_install import resolve_eu_host, run_remote_command
 
-    host = resolve_eu_host()
+    host = target_host or resolve_eu_host()
     if not host:
         return {}
 
-    script = build_deep_check_script(client, current_ip)
+    if config is None:
+        script = build_deep_check_script(client, current_ip)
+    else:
+        script = build_deep_check_script(client, current_ip, config=config)
     try:
         if command_timeout is None:
             exit_code, output = await run_remote_command(
@@ -55,14 +68,27 @@ async def run_deep_protocol_checks(
     return parse_deep_check_output(output)
 
 
-def build_deep_check_script(client: dict, current_ip: str) -> str:
-    enabled_clients = [item for item in list_clients() if item["enabled"]]
+def build_deep_check_script(
+    client: dict,
+    current_ip: str,
+    *,
+    config: CapturedVpnConfig | None = None,
+) -> str:
+    enabled_clients = (
+        [item.as_dict() for item in config.enabled_clients]
+        if config is not None
+        else [item for item in list_clients() if item["enabled"]]
+    )
     amnezia_public_keys = [
         item["amnezia_public_key"]
         for item in enabled_clients
         if item.get("amnezia_public_key")
     ]
-    current_vless_port = vless_port()
+    current_vless_port = (
+        config.vless.protocol.port
+        if config is not None and config.vless.protocol.enabled
+        else vless_port() if config is None else None
+    )
     xray_config = None
     if current_vless_port is not None:
         xray_config = {
@@ -97,18 +123,41 @@ def build_deep_check_script(client: dict, current_ip: str) -> str:
                         "network": "tcp",
                         "security": "reality",
                         "realitySettings": {
-                            "serverName": settings.vless_reality_server_name,
-                            "fingerprint": settings.vless_reality_fingerprint,
-                            "publicKey": get_setting("vless.reality_public_key"),
-                            "shortId": get_setting("vless.reality_short_id"),
-                            "spiderX": settings.vless_reality_spider_x,
+                            "serverName": config.vless.server_name
+                            if config is not None
+                            else settings.vless_reality_server_name,
+                            "fingerprint": config.vless.fingerprint
+                            if config is not None
+                            else settings.vless_reality_fingerprint,
+                            "publicKey": config.vless.public_key
+                            if config is not None
+                            else get_setting("vless.reality_public_key"),
+                            "shortId": config.vless.short_id
+                            if config is not None
+                            else get_setting("vless.reality_short_id"),
+                            "spiderX": config.vless.spider_x
+                            if config is not None
+                            else settings.vless_reality_spider_x,
                         },
                     },
                 }
             ],
         }
-    current_hysteria_port = hysteria_port()
-    hysteria_obfs_password = get_setting("hysteria.obfs_password")
+    current_hysteria_port = (
+        config.hysteria.protocol.port
+        if config is not None and config.hysteria.protocol.enabled
+        else hysteria_port() if config is None else None
+    )
+    hysteria_password = (
+        config.hysteria.password
+        if config is not None
+        else hysteria_auth(client)
+    )
+    hysteria_obfs_password = (
+        config.hysteria.obfs_password
+        if config is not None
+        else get_setting("hysteria.obfs_password")
+    )
     hysteria_obfs_yaml = ""
     if hysteria_obfs_password:
         hysteria_obfs_yaml = (
@@ -176,9 +225,9 @@ fi
 if [ {shlex.quote("1" if current_hysteria_port is not None else "0")} = "1" ] && command -v curl >/dev/null 2>&1 && command -v hysteria >/dev/null 2>&1; then
   cat >"$WORKDIR/hysteria.yaml" <<'YAML'
 server: {shlex.quote(f"{current_ip}:{current_hysteria_port}" if current_hysteria_port is not None else "")}
-auth: {shlex.quote(hysteria_auth(client))}
+auth: {shlex.quote(hysteria_password)}
 {hysteria_obfs_yaml}tls:
-  sni: {shlex.quote(settings.vless_reality_server_name)}
+  sni: {shlex.quote(config.vless.server_name if config is not None else settings.vless_reality_server_name)}
   insecure: true
 socks5:
   listen: 127.0.0.1:19081
@@ -196,21 +245,21 @@ fi
 
 if command -v awg >/dev/null 2>&1; then
   AMNEZIA_KEYS={shlex.quote(" ".join(amnezia_public_keys))}
-  AMNEZIA_VERIFIED=0
+  AMNEZIA_CONFIGURED=0
   awg show awg0 dump >"$WORKDIR/awg.dump" 2>/dev/null
   while IFS= read -r line; do
     set -- $line
     peer_key="$1"
     for expected_key in $AMNEZIA_KEYS; do
       if [ "$peer_key" = "$expected_key" ]; then
-        AMNEZIA_VERIFIED=1
+        AMNEZIA_CONFIGURED=1
       fi
     done
   done <"$WORKDIR/awg.dump"
-  if [ "$AMNEZIA_VERIFIED" = "1" ]; then
-    echo "AMNEZIA_DEEP=VERIFIED"
+  if [ "$AMNEZIA_CONFIGURED" = "1" ]; then
+    echo "AMNEZIA_CONFIGURED=1"
   else
-    echo "AMNEZIA_DEEP=FAILED"
+    echo "AMNEZIA_CONFIGURED=0"
   fi
 else
   echo "AMNEZIA_DEEP=UNAVAILABLE"
@@ -236,10 +285,9 @@ def parse_deep_check_output(output: str) -> dict[str, DeepCheckResult]:
             results["hysteria_salamander"] = DeepCheckResult(
                 False, "Hysteria tunnel handshake failed"
             )
-        elif line == "AMNEZIA_DEEP=VERIFIED":
-            results["amnezia"] = DeepCheckResult(True)
-        elif line == "AMNEZIA_DEEP=FAILED":
-            results["amnezia"] = DeepCheckResult(False, "recent AmneziaWG handshake not found")
+        # A configured server peer is not proof of a handshake or traffic
+        # through the public endpoint, so AMNEZIA_CONFIGURED is intentionally
+        # omitted. The status layer may still report its honest UDP fallback.
     return results
 
 

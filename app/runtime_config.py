@@ -149,6 +149,12 @@ def transactional_vpn_apply_enabled() -> bool:
     )
 
 
+def safe_aeza_ip_rotation_enabled() -> bool:
+    return config_bool(
+        "enable_safe_aeza_ip_rotation", settings.enable_safe_aeza_ip_rotation
+    )
+
+
 def vless_port() -> int | None:
     return protocol_port("vless", settings.vless_port, True)
 

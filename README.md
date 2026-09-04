@@ -2,7 +2,7 @@
 
 Полностью нейрокод: проект целиком написан и собран AI/Codex.
 
-AutoVPN — FastAPI-панель управления VPN-инфраструктурой: клиенты, подписки, установка VPN на VPS, ручная смена Aeza IPv4 и статистика.
+AutoVPN — FastAPI-панель управления VPN-инфраструктурой: клиенты, подписки, установка VPN на VPS, gated-ротация Aeza IPv4 и статистика.
 
 ## QuickStart
 
@@ -243,10 +243,9 @@ VPS скрипт строится из сохранённого snapshot, поэ
 исчезает из UI и публичных URL, но его token/keys и адрес остаются в БД до успешного применения
 ревизии с удалением; только после этого запись можно безопасно очистить.
 
-Удалённый shell-скрипт пока выполняет последовательные команды без атомарного rollback VPS.
-Кроме того, учёт applied snapshot в этой итерации относится к `/admin/install/run`: существующий
-контур синхронизации при смене Aeza IP не выдаёт ложного подтверждения applied revision, поэтому
-после него для подтверждения состояния следует запустить обычную установку/синхронизацию.
+Legacy shell-скрипт пока выполняет последовательные команды без атомарного rollback VPS.
+Transactional install и безопасная ротация IP используют immutable snapshot операции, но оба
+новых mutation-контура выключены по умолчанию до отдельной интеграционной проверки.
 
 ### Staged transactional apply (по feature flag)
 
@@ -262,6 +261,12 @@ VPS скрипт строится из сохранённого snapshot, поэ
 файлы через rename, перезапускает и проверяет сервисы. Ошибка после начала переключения запускает
 rollback файлов и предыдущих enabled/active состояний; staging удаляется. Вывод validation-команд
 подавляется, чтобы конфиги и секреты не попадали в журнал операции.
+
+Перед switch создаётся приватный versioned backup вне staging:
+`/var/lib/autovpn/config-backups/revision-...`. `manifest.ready` публикуется через rename только
+после записи manifest, успешный apply оставляет marker `APPLIED`, rollback — `ROLLED_BACK`.
+Текущий запуск восстанавливается именно из этого backup, а последние 10 каталогов сохраняются
+для ручного восстановления; содержимое конфигов в operation log не выводится.
 
 Этот механизм уменьшает риск частично применённой конфигурации, но до отдельной integration-
 проверки не считается доказанным атомарным rollback на всех целевых дистрибутивах. Firewall rules
@@ -395,26 +400,32 @@ Hysteria2-статистика не собирается: протокол по�
 
 Автоматический цикл смены IP:
 
-1. Проверить, что другая операция не идёт.
-2. Получить список IPv4.
-3. Найти текущий main IP.
-4. Купить новый IPv4.
-5. Подождать 2 минуты, потому Aeza может показать IP не сразу.
-6. Дождаться появления нового IP в списке.
-7. Сделать новый IP главным.
-8. Дождаться healthcheck SSH и включённых VPN-протоколов.
-9. Обновить `current_ip`.
-10. Синхронизировать VPN-конфиги на новом IP.
-11. Удалить старый IPv4.
+1. В одной SQLite-транзакции зафиксировать desired revision, immutable VPN snapshot, operation и общий VPS lease.
+2. Получить список IPv4 и найти текущий main IP из bound snapshot.
+3. Перед каждым потенциально платным/сетевым действием сохранить durable milestone, затем ровно один раз купить IPv4 и сделать его главным.
+4. Проверить SSH на настроенном `EU_SSH_PORT` и применить только bound snapshot через config-only transactional apply.
+5. Проверить VLESS/Hysteria через новый endpoint; одного UDP send недостаточно.
+6. В одной SQLite-транзакции опубликовать новый `current_ip` и applied revision.
+7. Только затем попытаться удалить старый IPv4. Потерянный ответ DELETE считается ambiguous и требует проверки в Aeza, а не доказательством сохранности или удаления IP.
 
-Старый IP не удаляется до успешного переключения и обновления `current_ip`.
+Контур включается только когда одновременно заданы `ENABLE_TRANSACTIONAL_VPN_APPLY=1` и
+`ENABLE_SAFE_AEZA_IP_ROTATION=1`; оба флага по умолчанию выключены.
+При выключенном флаге старый небезопасный rotation runner не запускается. Существующие URL
+`/admin/ip/buy`, `/admin/ip/{id}/make-main` и `/admin/ip/{id}/delete` сохранены для совместимости,
+но прямые POST-мутации перенаправляют на gated safe rotation и не могут обходить lease,
+snapshot или safety ordering.
+`/admin/ip` остаётся read-only inventory.
 
-Есть и ручной режим `/admin/ip`:
+Для AmneziaWG наличие peer key на сервере теперь честно считается только конфигурацией, а не
+handshake или end-to-end проверкой нового public IP. После публикации нового IP при включённом
+AmneziaWG операция сохраняет старый IPv4, завершает двухфазный переход с
+`manual_verification_required` и просит проверить клиентский handshake вручную. Автоматического
+cleanup старого IP до такого внешнего verifier нет.
 
-- обновить список IP;
-- купить новый IP; новокупленный IPv4 может появиться в списке с задержкой примерно 1-2 минуты;
-- выбрать IP главным;
-- удалить не главный IP.
+Ambiguous cleanup и ожидающая проверки AmneziaWG-операция ставят safety hold на новые ротации.
+После ручной сверки IP/main-state в кабинете Aeza администратор открывает ссылку
+`Ручная сверка` в `/admin/operations`, вводит точное подтверждение `RECONCILE` и короткую заметку.
+Этот POST только записывает `RECONCILED`, timestamp и note в SQLite; он не вызывает Aeza или SSH.
 
 ## Статус и перезагрузка VPS в Aeza
 
@@ -463,6 +474,9 @@ SERVER_COMMAND_TIMEOUT_SECONDS=30
 
 # Default OFF: staged transactional install/config apply
 ENABLE_TRANSACTIONAL_VPN_APPLY=0
+
+# Default OFF: durable Aeza IP rotation; requires transactional apply canary first
+ENABLE_SAFE_AEZA_IP_ROTATION=0
 ```
 
 Если значения заданы через `/admin/setup`, они хранятся в SQLite как `config.*` и имеют приоритет в runtime.

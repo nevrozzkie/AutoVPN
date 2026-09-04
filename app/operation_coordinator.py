@@ -70,14 +70,34 @@ def _fail_owner(
             (reason, timestamp, owner.owner_id),
         )
     elif owner.owner_type == "IP_CHANGE":
+        operation = connection.execute(
+            """
+            SELECT purchase_state, make_main_state, apply_state
+            FROM ip_change_operations WHERE id = ?
+            """,
+            (owner.owner_id,),
+        ).fetchone()
+        external_action_started = bool(
+            operation
+            and any(
+                operation[field] != "NOT_STARTED"
+                for field in ("purchase_state", "make_main_state", "apply_state")
+            )
+        )
         connection.execute(
             """
             UPDATE ip_change_operations
-            SET status = 'FAILED', current_step = 'interrupted',
-                error_message = ?, updated_at = ?
+            SET status = ?, current_step = 'interrupted',
+                action_state = ?, error_message = ?, updated_at = ?
             WHERE id = ? AND status IN ('PENDING', 'RUNNING')
             """,
-            (reason, timestamp, owner.owner_id),
+            (
+                "AMBIGUOUS" if external_action_started else "FAILED",
+                "AMBIGUOUS" if external_action_started else "NOT_STARTED",
+                reason,
+                timestamp,
+                owner.owner_id,
+            ),
         )
     elif owner.owner_type == "SERVER":
         operation = connection.execute(

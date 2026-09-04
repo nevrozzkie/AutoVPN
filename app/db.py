@@ -554,6 +554,41 @@ def get_latest_operation() -> dict[str, Any] | None:
         ).fetchone()
 
 
+def get_operation(operation_id: int) -> dict[str, Any] | None:
+    with get_db() as db:
+        return db.execute(
+            "SELECT * FROM ip_change_operations WHERE id = ?", (operation_id,)
+        ).fetchone()
+
+
+def reconcile_ip_operation(operation_id: int, note: str) -> None:
+    timestamp = now_iso()
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        operation = db.execute(
+            "SELECT status, action_state FROM ip_change_operations WHERE id = ?",
+            (operation_id,),
+        ).fetchone()
+        if operation is None:
+            raise LookupError("IP operation not found")
+        if operation["status"] not in TERMINAL_STATUSES:
+            raise ValueError("Only a terminal IP operation can be reconciled")
+        is_hold = operation["status"] == "AMBIGUOUS" or operation[
+            "action_state"
+        ] in {"CLEANUP_AMBIGUOUS", "PUBLISHED_AWAITING_AWG_CHECK"}
+        if not is_hold or operation["action_state"] == "RECONCILED":
+            raise ValueError("IP operation does not require reconciliation")
+        db.execute(
+            """
+            UPDATE ip_change_operations
+            SET action_state = 'RECONCILED', reconciled_at = ?,
+                reconciliation_note = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, note.strip()[:500], timestamp, operation_id),
+        )
+
+
 def has_running_operation() -> bool:
     with get_db() as db:
         row = db.execute(
@@ -567,19 +602,11 @@ def has_running_operation() -> bool:
 
 
 def create_operation() -> int:
-    timestamp = now_iso()
-    with get_db() as db:
-        db.execute("BEGIN IMMEDIATE")
-        cursor = db.execute(
-            """
-            INSERT INTO ip_change_operations(status, current_step, created_at, updated_at)
-            VALUES ('PENDING', 'queued', ?, ?)
-            """,
-            (timestamp, timestamp),
-        )
-        operation_id = int(cursor.lastrowid)
-        acquire_vps_lease(db, "IP_CHANGE", operation_id)
-        return operation_id
+    # Compatibility wrapper: new IP operations atomically bind an immutable
+    # VPN snapshot before any Aeza action can be scheduled.
+    from app.vpn_state import prepare_ip_change_operation
+
+    return prepare_ip_change_operation().operation_id
 
 
 def update_operation(operation_id: int, **fields: Any) -> None:

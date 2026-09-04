@@ -227,6 +227,34 @@ def _apply_operation_coordinator(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_safe_ip_rotation(connection: sqlite3.Connection) -> None:
+    for column, declaration in {
+        "revision": "INTEGER REFERENCES vpn_snapshots(revision)",
+        "published_revision": "INTEGER REFERENCES vpn_snapshots(revision)",
+        "action_state": "TEXT NOT NULL DEFAULT 'NOT_STARTED'",
+        "purchase_state": "TEXT NOT NULL DEFAULT 'NOT_STARTED'",
+        "make_main_state": "TEXT NOT NULL DEFAULT 'NOT_STARTED'",
+        "apply_state": "TEXT NOT NULL DEFAULT 'NOT_STARTED'",
+        "cleanup_warning": "TEXT",
+        "rollback_outcome": "TEXT",
+        "new_ip_created_at": "TEXT",
+        "new_main_at": "TEXT",
+        "apply_completed_at": "TEXT",
+        "published_at": "TEXT",
+        "reconciled_at": "TEXT",
+        "reconciliation_note": "TEXT",
+    }.items():
+        _add_column_if_missing(
+            connection, "ip_change_operations", column, declaration
+        )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ip_change_operations_revision
+        ON ip_change_operations(revision)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -254,6 +282,16 @@ MIGRATIONS = (
             "status/reboot server operations"
         ),
         apply=_apply_operation_coordinator,
+    ),
+    Migration(
+        version=4,
+        name="safe_aeza_ip_rotation",
+        signature=(
+            "bind IP rotation to immutable VPN revision; persist external action "
+            "milestones, publish revision, cleanup warning, rollback outcome, "
+            "and explicit manual reconciliation metadata"
+        ),
+        apply=_apply_safe_ip_rotation,
     ),
 )
 
