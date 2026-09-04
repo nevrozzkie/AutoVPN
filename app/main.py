@@ -14,7 +14,12 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.aeza import AezaClient
-from app.amnezia import build_amnezia_client_config, build_amnezia_vpn_key
+from app.amnezia import (
+    build_amnezia_client_config,
+    build_amnezia_vpn_key,
+    render_amnezia_client_config,
+    render_amnezia_vpn_key,
+)
 from app.db import (
     create_client,
     create_install_operation,
@@ -74,7 +79,11 @@ from app.runtime_config import (
     amnezia_port_value,
 )
 from app.stats import format_bytes, refresh_client_stats
-from app.subscriptions import build_sing_box_subscription, build_subscription
+from app.subscriptions import (
+    render_sing_box_subscription,
+    render_subscription,
+)
+from app.vpn_config import capture_vpn_config
 from app.security import (
     SECURITY_HEADERS,
     csrf_failure_detail,
@@ -816,56 +825,56 @@ def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
 
 @app.get("/sub/{token}", response_class=PlainTextResponse)
 def subscription(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(build_subscription(client, current_ip))
+    return PlainTextResponse(render_subscription(config, client.as_dict()))
 
 
 @app.get("/sing-box/{token}", response_class=JSONResponse)
 def sing_box_subscription(token: str) -> JSONResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return JSONResponse(build_sing_box_subscription(client, current_ip))
+    return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
 
 
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    captured_client = config.client_by_token(token)
+    if not captured_client or not captured_client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    client = captured_client.as_dict()
     base_url = str(request.base_url).rstrip("/")
-    current_amnezia_port = amnezia_port()
-    current_vless_port = vless_port()
-    current_hysteria_port = hysteria_port()
     return templates.TemplateResponse(
         request,
         "client_page.html",
         {
             "client": client,
-            "current_ip": current_ip,
-            "config_updated_at": get_setting("vpn.config_updated_at"),
+            "current_ip": config.current_ip,
+            "config_updated_at": config.config_updated_at,
             "protocols": get_client_protocol_statuses(),
             "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
-            "vless_enabled": current_vless_port is not None,
-            "hysteria_enabled": current_hysteria_port is not None,
-            "sing_box_enabled": current_vless_port is not None or current_hysteria_port is not None,
-            "amnezia_enabled": current_amnezia_port is not None,
+            "vless_enabled": config.vless.protocol.enabled,
+            "hysteria_enabled": config.hysteria.protocol.enabled,
+            "sing_box_enabled": config.vless.protocol.enabled or config.hysteria.protocol.enabled,
+            "amnezia_enabled": config.amnezia.protocol.enabled,
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
-            "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip) if current_amnezia_port is not None else "",
+            "amnezia_vpn_key": render_amnezia_vpn_key(config, captured_client)
+            if config.amnezia.protocol.enabled
+            else "",
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
         },
     )
@@ -884,12 +893,13 @@ async def client_refresh_protocols(token: str) -> RedirectResponse:
 
 @app.get("/client/{token}/subscription.qr")
 def client_subscription_qr(request: Request, token: str) -> Response:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     import qrcode
 
-    subscription_url = f"{str(request.base_url).rstrip('/')}/sub/{client['token']}"
+    subscription_url = f"{str(request.base_url).rstrip('/')}/sub/{client.token}"
     image = qrcode.make(subscription_url)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -898,15 +908,15 @@ def client_subscription_qr(request: Request, token: str) -> Response:
 
 @app.get("/client/{token}/amnezia.qr")
 def client_amnezia_qr(token: str) -> Response:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     import qrcode
 
-    image = qrcode.make(get_amnezia_vpn_key(client, current_ip))
+    image = qrcode.make(render_amnezia_vpn_key(config, client))
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return Response(buffer.getvalue(), media_type="image/png")
@@ -914,37 +924,37 @@ def client_amnezia_qr(token: str) -> Response:
 
 @app.get("/ip/{token}", response_class=PlainTextResponse)
 def current_eu_ip(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(f"{current_ip}\n")
+    return PlainTextResponse(f"{config.current_ip}\n")
 
 
 @app.get("/amnezia/{token}", response_class=PlainTextResponse)
 def amnezia_config(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     return PlainTextResponse(
-        get_amnezia_config(client, current_ip),
+        render_amnezia_client_config(config, client),
         headers={
-            "Content-Disposition": f"attachment; filename=amnezia-{client['id']}.conf"
+            "Content-Disposition": f"attachment; filename=amnezia-{client.id}.conf"
         },
     )
 
 
 @app.get("/amnezia-key/{token}", response_class=PlainTextResponse)
 def amnezia_vpn_key(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(get_amnezia_vpn_key(client, current_ip) + "\n")
+    return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")

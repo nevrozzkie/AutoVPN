@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import secrets
 import sqlite3
@@ -11,7 +12,6 @@ from typing import Any, Iterator
 
 from app.config import settings
 from app.amnezia import (
-    client_amnezia_address,
     generate_obfuscation_settings,
     generate_preshared_key,
     generate_private_key,
@@ -164,7 +164,9 @@ def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:
         private_key = client.get("amnezia_private_key") or generate_private_key()
         public_key = client.get("amnezia_public_key") or generate_public_key(private_key)
         preshared_key = client.get("amnezia_preshared_key") or generate_preshared_key()
-        address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
+        address = client.get("amnezia_ipv4") or _legacy_or_free_amnezia_address(
+            db, int(client["id"])
+        )
         db.execute(
             """
             UPDATE clients
@@ -176,6 +178,49 @@ def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:
             """,
             (private_key, public_key, preshared_key, address, client["id"]),
         )
+
+
+def _amnezia_network(db: sqlite3.Connection) -> ipaddress.IPv4Network:
+    prefix = _setting(db, "config.amnezia_network_prefix") or settings.amnezia_network_prefix
+    try:
+        network = ipaddress.ip_network(f"{prefix}.0/24", strict=True)
+    except ValueError as exc:
+        raise ValueError(f"Invalid AmneziaWG /24 network prefix: {prefix}") from exc
+    if not isinstance(network, ipaddress.IPv4Network):
+        raise ValueError(f"AmneziaWG network must be IPv4: {prefix}")
+    return network
+
+
+def _allocate_amnezia_address(db: sqlite3.Connection) -> str:
+    network = _amnezia_network(db)
+    used = {
+        str(row["amnezia_ipv4"])
+        for row in db.execute(
+            "SELECT amnezia_ipv4 FROM clients WHERE amnezia_ipv4 IS NOT NULL AND amnezia_ipv4 != ''"
+        )
+    }
+    # The first usable host is the server. Every row reserves its address,
+    # including disabled clients and (after migration v2) soft-deleted clients.
+    for address in list(network.hosts())[1:]:
+        candidate = str(address)
+        if candidate not in used:
+            return candidate
+    raise RuntimeError(f"AmneziaWG address pool {network} is exhausted")
+
+
+def _legacy_or_free_amnezia_address(
+    db: sqlite3.Connection, client_id: int
+) -> str:
+    network = _amnezia_network(db)
+    preferred_octet = client_id + 1
+    if 2 <= preferred_octet <= 254:
+        preferred = str(network.network_address + preferred_octet)
+        in_use = db.execute(
+            "SELECT 1 FROM clients WHERE amnezia_ipv4 = ? LIMIT 1", (preferred,)
+        ).fetchone()
+        if not in_use:
+            return preferred
+    return _allocate_amnezia_address(db)
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -251,6 +296,8 @@ def create_client(name: str) -> dict[str, Any]:
     amnezia_public_key = generate_public_key(amnezia_private_key)
     amnezia_preshared_key = generate_preshared_key()
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        amnezia_ipv4 = _allocate_amnezia_address(db)
         cursor = db.execute(
             """
             INSERT INTO clients(
@@ -268,15 +315,11 @@ def create_client(name: str) -> dict[str, Any]:
                 amnezia_private_key,
                 amnezia_public_key,
                 amnezia_preshared_key,
-                "",
+                amnezia_ipv4,
                 created_at,
             ),
         )
         client_id = int(cursor.lastrowid)
-        db.execute(
-            "UPDATE clients SET amnezia_ipv4 = ? WHERE id = ?",
-            (client_amnezia_address(client_id), client_id),
-        )
         _mark_vpn_config_updated(db)
         return db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
 

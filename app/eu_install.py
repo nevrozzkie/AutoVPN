@@ -11,25 +11,21 @@ import tempfile
 import time
 from typing import Any
 
-from app.config import settings
-from app.amnezia import build_amnezia_server_config
+from app.amnezia import render_amnezia_server_config
 from app.db import (
     get_setting,
-    list_clients,
     update_install_operation,
 )
 from app.runtime_config import (
-    amnezia_port,
     eu_ssh_host,
     eu_ssh_key_path,
     eu_ssh_password,
     eu_ssh_port,
     eu_ssh_user,
-    hysteria_port,
     ssh_connect_timeout_seconds,
-    vless_port,
 )
 from app.protocol_status import refresh_protocol_statuses
+from app.vpn_config import CapturedVpnConfig, capture_vpn_config
 
 
 class EuInstallError(RuntimeError):
@@ -49,37 +45,19 @@ def xray_client_email(client: dict[str, Any]) -> str:
     return f"{_safe_label(client['name'])}-{client['id']}"
 
 
-def _enabled_clients() -> list[dict[str, Any]]:
-    return [client for client in list_clients() if client["enabled"]]
-
-
-def build_eu_install_script() -> str:
-    clients = _enabled_clients()
-    reality_private_key = get_setting("vless.reality_private_key")
-    reality_short_id = get_setting("vless.reality_short_id")
-    server_private_key = get_setting("amnezia.server_private_key")
-    current_vless_port = vless_port()
-    current_hysteria_port = hysteria_port()
-    current_amnezia_port = amnezia_port()
-    amnezia_obfuscation = {
-        "jc": int(get_setting("amnezia.jc", "5")),
-        "jmin": int(get_setting("amnezia.jmin", "40")),
-        "jmax": int(get_setting("amnezia.jmax", "1000")),
-        "s1": int(get_setting("amnezia.s1", "64")),
-        "s2": int(get_setting("amnezia.s2", "128")),
-        "h1": int(get_setting("amnezia.h1", "1")),
-        "h2": int(get_setting("amnezia.h2", "2")),
-        "h3": int(get_setting("amnezia.h3", "3")),
-        "h4": int(get_setting("amnezia.h4", "4")),
-    }
+def build_eu_install_script(config: CapturedVpnConfig | None = None) -> str:
+    config = config or capture_vpn_config()
+    clients = [client.as_dict() for client in config.enabled_clients]
+    current_vless_port = config.vless.protocol.port if config.vless.protocol.enabled else None
+    current_hysteria_port = (
+        config.hysteria.protocol.port if config.hysteria.protocol.enabled else None
+    )
+    current_amnezia_port = (
+        config.amnezia.protocol.port if config.amnezia.protocol.enabled else None
+    )
     amnezia_config = ""
     if current_amnezia_port is not None:
-        amnezia_config = build_amnezia_server_config(
-            clients,
-            server_private_key=server_private_key,
-            obfuscation=amnezia_obfuscation,
-            listen_port=current_amnezia_port,
-        )
+        amnezia_config = render_amnezia_server_config(config)
     xray_clients = [
         {
             "id": client["vless_uuid"],
@@ -88,8 +66,8 @@ def build_eu_install_script() -> str:
         }
         for client in clients
     ]
-    hysteria_password = get_setting("hysteria.password")
-    hysteria_obfs_password = get_setting("hysteria.obfs_password")
+    hysteria_password = config.hysteria.password
+    hysteria_obfs_password = config.hysteria.obfs_password
 
     xray_config = {
         "log": {"loglevel": "warning"},
@@ -151,10 +129,10 @@ def build_eu_install_script() -> str:
                     "security": "reality",
                     "realitySettings": {
                         "show": False,
-                        "target": settings.vless_reality_target,
-                        "serverNames": settings.vless_reality_server_names,
-                        "privateKey": reality_private_key,
-                        "shortIds": [reality_short_id],
+                        "target": config.vless.target,
+                        "serverNames": list(config.vless.server_names),
+                        "privateKey": config.vless.private_key,
+                        "shortIds": [config.vless.short_id],
                     },
                 },
                 "sniffing": {
@@ -182,7 +160,7 @@ fi
         vless_firewall_script = ""
     if current_hysteria_port is not None:
         hysteria_config_script = f"""
-HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
+HYSTERIA_SNI={shlex.quote(config.vless.server_name)}
 if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ] || ! openssl x509 -in /etc/autovpn/hysteria.crt -noout -subject | grep -Eq "CN ?= ?${{HYSTERIA_SNI}}"; then
   rm -f /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
   openssl req -x509 -newkey rsa:2048 -nodes \\

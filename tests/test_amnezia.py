@@ -87,7 +87,7 @@ def test_amnezia_server_client_name_cannot_inject_config_lines() -> None:
         [
             {
                 "id": 1,
-                "name": "Alice\nPostUp = injected\r\n[Interface]",
+                "name": "Alice\x00\x1b\nPostUp = injected\r\n[Interface]",
                 "amnezia_public_key": "client-public",
                 "amnezia_preshared_key": "psk",
                 "amnezia_ipv4": "10.66.66.2",
@@ -108,6 +108,8 @@ def test_amnezia_server_client_name_cannot_inject_config_lines() -> None:
     )
 
     assert "# Alice PostUp = injected [Interface]\n" in config
+    assert "\x00" not in config
+    assert "\x1b" not in config
     assert "\nPostUp = injected\n" not in config
     assert sum(line == "[Interface]" for line in config.splitlines()) == 1
 
