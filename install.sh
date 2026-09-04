@@ -4,6 +4,10 @@ set -euo pipefail
 APP_NAME="autovpn"
 APP_USER="${APP_USER:-autovpn}"
 APP_DIR="${APP_DIR:-/opt/autovpn}"
+DATA_DIR="${DATA_DIR:-/var/lib/autovpn}"
+DATABASE_PATH="$DATA_DIR/autovpn.sqlite3"
+BACKUP_DIR="$DATA_DIR/backups"
+LEGACY_DATABASE="$APP_DIR/data/autovpn.sqlite3"
 ENV_FILE="${ENV_FILE:-/etc/autovpn.env}"
 SERVICE_FILE="/etc/systemd/system/autovpn.service"
 NGINX_SITE="/etc/nginx/sites-available/autovpn"
@@ -12,6 +16,8 @@ DEFAULT_REPO_URL="https://github.com/nevrozzkie/AutoVPN.git"
 REPO_URL="${AUTOVPN_REPO_URL:-$DEFAULT_REPO_URL}"
 APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-8000}"
+SOURCE_DIR=""
+STAGING_DIR=""
 
 WEBROOT_DIR="${WEBROOT_DIR:-/var/www/autovpn}"
 IP_CERT_RENEW_SCRIPT="/usr/local/sbin/autovpn-renew-ip-cert"
@@ -243,30 +249,84 @@ install_packages() {
   apt-get install -y git nginx python3 python3-venv python3-pip rsync sqlite3 curl
 }
 
+cleanup_staging() {
+  if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+    rm -rf -- "$STAGING_DIR"
+  fi
+}
+
 prepare_source() {
   if [ -f "pyproject.toml" ] && [ -d "app" ]; then
-    local current_dir
-    current_dir="$(pwd)"
-    if [ "$current_dir" != "$APP_DIR" ]; then
-      echo "[autovpn] copying current checkout to $APP_DIR"
-      mkdir -p "$APP_DIR"
-      rsync -a --delete \
-        --exclude ".git" \
-        --exclude ".venv" \
-        --exclude "__pycache__" \
-        "$current_dir/" "$APP_DIR/"
-    fi
-    return
+    SOURCE_DIR="$(pwd)"
+  else
+    echo "[autovpn] preparing source from $REPO_URL"
+    STAGING_DIR="$(mktemp -d)"
+    SOURCE_DIR="$STAGING_DIR/source"
+    git clone "$REPO_URL" "$SOURCE_DIR"
   fi
 
-  echo "[autovpn] cloning $REPO_URL to $APP_DIR"
-  rm -rf "$APP_DIR"
-  git clone "$REPO_URL" "$APP_DIR"
+  if [ ! -f "$SOURCE_DIR/pyproject.toml" ] || [ ! -d "$SOURCE_DIR/app" ] || \
+      [ ! -f "$SOURCE_DIR/tools/prepare_data.py" ]; then
+    echo "[autovpn] prepared source failed preflight" >&2
+    exit 1
+  fi
+}
+
+prepare_persistent_data() {
+  echo "[autovpn] backing up and preparing persistent data"
+  install -d -m 0700 "$DATA_DIR" "$BACKUP_DIR"
+  python3 "$SOURCE_DIR/tools/prepare_data.py" \
+    --database "$DATABASE_PATH" \
+    --backup-dir "$BACKUP_DIR" \
+    --legacy-database "$LEGACY_DATABASE"
+}
+
+deploy_source() {
+  if [ "$SOURCE_DIR" = "$APP_DIR" ]; then
+    return
+  fi
+  echo "[autovpn] updating application source in $APP_DIR"
+  mkdir -p "$APP_DIR"
+  rsync -a --delete \
+    --exclude ".git" \
+    --exclude ".venv" \
+    --exclude "__pycache__" \
+    --exclude "data" \
+    --exclude ".env" \
+    "$SOURCE_DIR/" "$APP_DIR/"
+}
+
+preserve_existing_env() {
+  local env_backup env_tmp line saw_database
+  env_backup="$BACKUP_DIR/autovpn.env.pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)"
+  install -m 0600 "$ENV_FILE" "$env_backup"
+  env_tmp="$(mktemp "$(dirname "$ENV_FILE")/.autovpn.env.XXXXXX")"
+  saw_database=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      DATABASE_PATH=*)
+        env_line DATABASE_PATH "$DATABASE_PATH"
+        saw_database=1
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$ENV_FILE" >"$env_tmp"
+  if [ "$saw_database" -eq 0 ]; then
+    env_line DATABASE_PATH "$DATABASE_PATH" >>"$env_tmp"
+  fi
+  install -m 0600 "$env_tmp" "$ENV_FILE"
+  rm -f "$env_tmp"
+  echo "[autovpn] preserved existing environment; backup: $env_backup"
 }
 
 write_env_file() {
   echo
   echo "[autovpn] writing configuration. Open Setup in the browser to finish configuration."
+
+  if [ -f "$ENV_FILE" ]; then
+    preserve_existing_env
+    return
+  fi
 
   local admin_username admin_password current_ip
   local aeza_token aeza_service_id aeza_domain
@@ -302,7 +362,7 @@ write_env_file() {
   {
     env_line APP_HOST "$APP_HOST"
     env_line APP_PORT "$APP_PORT"
-    env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
+    env_line DATABASE_PATH "$DATABASE_PATH"
     env_line ADMIN_USERNAME "$admin_username"
     echo
     env_line AEZA_API_BASE "https://my.aeza.net"
@@ -335,10 +395,9 @@ write_env_file() {
   chmod 600 "$ENV_FILE"
 
   if [ -n "$current_ip" ]; then
-    mkdir -p "$APP_DIR/data"
     local current_ip_sql
     current_ip_sql="${current_ip//\'/\'\'}"
-    sqlite3 "$APP_DIR/data/autovpn.sqlite3" \
+    sqlite3 "$DATABASE_PATH" \
       "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
        INSERT INTO settings(key, value) VALUES ('current_ip', '$current_ip_sql')
        ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
@@ -354,11 +413,15 @@ install_python_app() {
     useradd --system --gid "$APP_USER" --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
   fi
 
-  mkdir -p "$APP_DIR/data"
   python3 -m venv "$APP_DIR/.venv"
   "$APP_DIR/.venv/bin/pip" install --upgrade pip
   "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
   chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+  chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
+  chmod 0700 "$DATA_DIR" "$BACKUP_DIR"
+  if [ -f "$DATABASE_PATH" ]; then
+    chmod 0600 "$DATABASE_PATH"
+  fi
 }
 
 write_systemd() {
@@ -390,7 +453,7 @@ bootstrap_admin() {
   echo "[autovpn] storing admin credentials (hashed) in the database"
   AUTOVPN_BOOT_USER="$ADMIN_USERNAME" \
   AUTOVPN_BOOT_PASS="$ADMIN_PASSWORD" \
-  AUTOVPN_BOOT_DB="$APP_DIR/data/autovpn.sqlite3" \
+  AUTOVPN_BOOT_DB="$DATABASE_PATH" \
   "$APP_DIR/.venv/bin/python" - <<'PY'
 import os, sqlite3
 from app.security import hash_password
@@ -405,15 +468,15 @@ for key, value in (
     ("config.admin_username", os.environ.get("AUTOVPN_BOOT_USER") or "admin"),
     ("config.admin_password", hash_password(os.environ["AUTOVPN_BOOT_PASS"])),
 ):
-    conn.execute(
-        "INSERT INTO settings(key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
+    existing = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if not existing or not existing[0]:
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (key, value))
 conn.commit()
 conn.close()
 PY
-  chown -R "$APP_USER:$APP_USER" "$APP_DIR/data"
+  chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
+  chmod 0700 "$DATA_DIR" "$BACKUP_DIR"
+  chmod 0600 "$DATABASE_PATH"
 }
 
 install_certbot_for_domain() {
@@ -690,10 +753,13 @@ configure_nginx() {
 }
 
 main() {
-  cleanup_existing_install
+  trap cleanup_staging EXIT
   install_packages
   collect_admin_credentials
   prepare_source
+  prepare_persistent_data
+  cleanup_existing_install
+  deploy_source
   write_env_file
   install_python_app
   bootstrap_admin
@@ -704,6 +770,7 @@ main() {
   echo "AutoVPN installed."
   echo "Service status: systemctl status autovpn"
   echo "Config file: $ENV_FILE"
+  echo "Data directory: $DATA_DIR"
   echo "Admin login was set during install (stored hashed in the database)."
   case "${NGINX_TLS:-}" in
     yes)
