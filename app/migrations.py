@@ -185,6 +185,48 @@ def _apply_desired_applied_snapshots(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_operation_coordinator(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_leases (
+            resource TEXT PRIMARY KEY,
+            owner_type TEXT NOT NULL,
+            owner_id INTEGER NOT NULL,
+            acquired_at TEXT NOT NULL,
+            heartbeat_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK (kind IN ('STATUS', 'REBOOT')),
+            status TEXT NOT NULL CHECK (
+                status IN ('PENDING', 'RUNNING', 'DONE', 'FAILED', 'TIMED_OUT', 'AMBIGUOUS')
+            ),
+            current_step TEXT NOT NULL,
+            action_state TEXT NOT NULL CHECK (
+                action_state IN ('NOT_STARTED', 'SENDING', 'SENT', 'AMBIGUOUS')
+            ),
+            provider_status TEXT,
+            provider_ip TEXT,
+            ssh_status TEXT,
+            services_json TEXT,
+            protocol_health_json TEXT,
+            result_message TEXT,
+            warning_message TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT
+        )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -203,6 +245,15 @@ MIGRATIONS = (
             "vpn state and immutable canonical snapshot lifecycle"
         ),
         apply=_apply_desired_applied_snapshots,
+    ),
+    Migration(
+        version=3,
+        name="shared_vps_operation_coordinator",
+        signature=(
+            "create exclusive VPN VPS operation leases and durable sanitized "
+            "status/reboot server operations"
+        ),
+        apply=_apply_operation_coordinator,
     ),
 )
 

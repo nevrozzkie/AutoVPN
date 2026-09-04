@@ -27,6 +27,7 @@ from app.eu_install import EuInstallError, build_eu_install_script, run_eu_insta
 from app.security import hash_password
 from app.vpn_config import capture_vpn_config
 from app.vpn_state import (
+    fail_install_operation,
     get_vpn_snapshot,
     load_install_snapshot,
     prepare_install_operation,
@@ -122,13 +123,17 @@ def test_snapshot_payload_and_hash_are_canonical_and_stable() -> None:
 
     first = prepare_install_operation("203.0.113.10")
     first_snapshot = get_vpn_snapshot(first.revision)
+    fail_install_operation(first.operation_id, "retry canonical snapshot")
     second = prepare_install_operation("203.0.113.10")
     second_snapshot = get_vpn_snapshot(second.revision)
 
     assert first.revision == second.revision
     assert first.payload_sha256 == second.payload_sha256
-    assert first_snapshot == second_snapshot
     assert first_snapshot is not None
+    assert second_snapshot is not None
+    assert first_snapshot["payload_json"] == second_snapshot["payload_json"]
+    assert first_snapshot["payload_sha256"] == second_snapshot["payload_sha256"]
+    assert first_snapshot["prepared_at"] == second_snapshot["prepared_at"]
     assert first_snapshot["payload_json"].startswith('{"amnezia":')
     assert hashlib.sha256(first_snapshot["payload_json"].encode()).hexdigest() == (
         first_snapshot["payload_sha256"]

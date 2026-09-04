@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.db import get_db, now_iso, purge_applied_deleted_clients
+from app.operation_coordinator import acquire_vps_lease, release_vps_lease
 from app.vpn_config import (
     CapturedVpnConfig,
     canonical_vpn_config_json,
@@ -72,8 +73,10 @@ def prepare_install_operation(target_host: str) -> PreparedInstall:
             """,
             (target_host, config.revision, timestamp, timestamp),
         )
+        operation_id = int(cursor.lastrowid)
+        acquire_vps_lease(db, "INSTALL", operation_id)
         return PreparedInstall(
-            operation_id=int(cursor.lastrowid),
+            operation_id=operation_id,
             revision=config.revision,
             payload_sha256=payload_sha256,
         )
@@ -140,6 +143,7 @@ def complete_install_operation(operation_id: int, output: str) -> None:
             """,
             (output, timestamp, operation_id),
         )
+        release_vps_lease(db, "INSTALL", operation_id)
 
 
 def fail_install_operation(operation_id: int, error_message: str) -> None:
@@ -166,6 +170,7 @@ def fail_install_operation(operation_id: int, error_message: str) -> None:
             """,
             (error_message, timestamp, operation_id),
         )
+        release_vps_lease(db, "INSTALL", operation_id)
 
 
 def get_vpn_snapshot(revision: int) -> dict[str, Any] | None:

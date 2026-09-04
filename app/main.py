@@ -52,6 +52,7 @@ from app.eu_install import (
     run_eu_install,
 )
 from app.ip_change import apply_manual_main_ip, run_ip_change
+from app.operation_coordinator import OperationBusyError
 from app.protocol_status import get_client_protocol_statuses, get_protocol_statuses, refresh_protocol_statuses
 from app.runtime_config import (
     admin_password,
@@ -558,9 +559,10 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
 def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    if has_running_operation():
+    try:
+        operation_id = create_operation()
+    except OperationBusyError:
         return RedirectResponse("/admin/ip/confirm?already_running=1", status_code=status.HTTP_303_SEE_OTHER)
-    operation_id = create_operation()
     background_tasks.add_task(_run_operation_background, operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -772,10 +774,11 @@ def admin_run_install(
     background_tasks: BackgroundTasks,
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
-    if has_running_install_operation():
-        return RedirectResponse("/admin?install_already_running=1", status_code=status.HTTP_303_SEE_OTHER)
     host = resolve_eu_host()
-    prepared = prepare_install_operation(host)
+    try:
+        prepared = prepare_install_operation(host)
+    except OperationBusyError:
+        return RedirectResponse("/admin?install_already_running=1", status_code=status.HTTP_303_SEE_OTHER)
     background_tasks.add_task(_run_install_background, prepared.operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -18,6 +18,13 @@ from app.amnezia import (
 )
 from app.config import settings
 from app.migrations import migrate_database
+from app.operation_coordinator import (
+    TERMINAL_STATUSES,
+    acquire_vps_lease,
+    heartbeat_vps_lease,
+    recover_incomplete_vps_operations,
+    release_vps_lease,
+)
 from app.reality import (
     generate_reality_private_key,
     generate_reality_public_key,
@@ -562,6 +569,7 @@ def has_running_operation() -> bool:
 def create_operation() -> int:
     timestamp = now_iso()
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         cursor = db.execute(
             """
             INSERT INTO ip_change_operations(status, current_step, created_at, updated_at)
@@ -569,7 +577,9 @@ def create_operation() -> int:
             """,
             (timestamp, timestamp),
         )
-        return int(cursor.lastrowid)
+        operation_id = int(cursor.lastrowid)
+        acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        return operation_id
 
 
 def update_operation(operation_id: int, **fields: Any) -> None:
@@ -580,10 +590,15 @@ def update_operation(operation_id: int, **fields: Any) -> None:
     values = list(fields.values())
     values.append(operation_id)
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         db.execute(
             f"UPDATE ip_change_operations SET {assignments} WHERE id = ?",
             values,
         )
+        if fields.get("status") in TERMINAL_STATUSES:
+            release_vps_lease(db, "IP_CHANGE", operation_id)
+        else:
+            heartbeat_vps_lease(db, "IP_CHANGE", operation_id)
 
 
 def list_install_operations(limit: int = 100) -> list[dict[str, Any]]:
@@ -614,31 +629,9 @@ def has_running_install_operation() -> bool:
 
 
 def fail_incomplete_install_operations(reason: str) -> None:
-    timestamp = now_iso()
     with get_db() as db:
-        db.execute(
-            """
-            UPDATE vpn_snapshots
-            SET lifecycle = 'FAILED', failed_at = ?, error_message = ?
-            WHERE lifecycle = 'PREPARED'
-              AND revision IN (
-                  SELECT revision FROM vpn_install_operations
-                  WHERE status IN ('PENDING', 'RUNNING') AND revision IS NOT NULL
-              )
-            """,
-            (timestamp, reason),
-        )
-        db.execute(
-            """
-            UPDATE vpn_install_operations
-            SET status = 'FAILED',
-                current_step = 'interrupted',
-                error_message = ?,
-                updated_at = ?
-            WHERE status IN ('PENDING', 'RUNNING')
-            """,
-            (reason, timestamp),
-        )
+        db.execute("BEGIN IMMEDIATE")
+        recover_incomplete_vps_operations(db, reason)
 
 
 def create_install_operation(target_host: str) -> int:
@@ -657,10 +650,15 @@ def update_install_operation(operation_id: int, **fields: Any) -> None:
     values = list(fields.values())
     values.append(operation_id)
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         db.execute(
             f"UPDATE vpn_install_operations SET {assignments} WHERE id = ?",
             values,
         )
+        if fields.get("status") in TERMINAL_STATUSES:
+            release_vps_lease(db, "INSTALL", operation_id)
+        else:
+            heartbeat_vps_lease(db, "INSTALL", operation_id)
 
 
 def reset_server_and_aeza_state() -> None:
