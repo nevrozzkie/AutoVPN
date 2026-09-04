@@ -143,6 +143,12 @@ def server_command_timeout_seconds() -> int:
     return config_int("server_command_timeout_seconds", 30)
 
 
+def transactional_vpn_apply_enabled() -> bool:
+    return config_bool(
+        "enable_transactional_vpn_apply", settings.enable_transactional_vpn_apply
+    )
+
+
 def vless_port() -> int | None:
     return protocol_port("vless", settings.vless_port, True)
 

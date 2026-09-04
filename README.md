@@ -248,6 +248,25 @@ VPS скрипт строится из сохранённого snapshot, поэ
 контур синхронизации при смене Aeza IP не выдаёт ложного подтверждения applied revision, поэтому
 после него для подтверждения состояния следует запустить обычную установку/синхронизацию.
 
+### Staged transactional apply (по feature flag)
+
+Новый контур включается только через `ENABLE_TRANSACTIONAL_VPN_APPLY=1`; по умолчанию он
+выключен, и `/admin/install/run` использует прежний install-script как compatibility fallback.
+Это намеренный integration gate: перед включением флага скрипт нужно проверить на отдельном VPS
+с теми же версиями Xray, Hysteria2, AmneziaWG и systemd, что используются в production.
+
+При включённом флаге первый запуск при необходимости выполняет bootstrap пакетов, после чего
+использует общий config-only apply. Повторный запуск с удовлетворённым bootstrap marker не
+выполняет `apt`/download заново. Config-only script создаёт приватный staging-каталог, валидирует
+включённые конфиги до переключения, сохраняет текущие файлы и состояния systemd, устанавливает
+файлы через rename, перезапускает и проверяет сервисы. Ошибка после начала переключения запускает
+rollback файлов и предыдущих enabled/active состояний; staging удаляется. Вывод validation-команд
+подавляется, чтобы конфиги и секреты не попадали в журнал операции.
+
+Этот механизм уменьшает риск частично применённой конфигурации, но до отдельной integration-
+проверки не считается доказанным атомарным rollback на всех целевых дистрибутивах. Firewall rules
+по-прежнему добавляются best-effort и не удаляются rollback-контуром.
+
 ## Первичная настройка через сайт
 
 Если пароль админки ещё не задан, AutoVPN открывает `/admin/setup` без Basic Auth.
@@ -441,6 +460,9 @@ SERVER_REBOOT_TIMEOUT_SECONDS=300
 SERVER_POLL_INTERVAL_SECONDS=5
 SERVER_SSH_PROBE_TIMEOUT_SECONDS=5
 SERVER_COMMAND_TIMEOUT_SECONDS=30
+
+# Default OFF: staged transactional install/config apply
+ENABLE_TRANSACTIONAL_VPN_APPLY=0
 ```
 
 Если значения заданы через `/admin/setup`, они хранятся в SQLite как `config.*` и имеют приоритет в runtime.

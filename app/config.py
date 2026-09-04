@@ -16,6 +16,13 @@ def _get_csv(name: str, default: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _get_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: str = os.getenv("DATABASE_PATH", "./data/autovpn.sqlite3")
@@ -46,6 +53,9 @@ class Settings:
         "SERVER_SSH_PROBE_TIMEOUT_SECONDS", 5
     )
     server_command_timeout_seconds: int = _get_int("SERVER_COMMAND_TIMEOUT_SECONDS", 30)
+    enable_transactional_vpn_apply: bool = _get_bool(
+        "ENABLE_TRANSACTIONAL_VPN_APPLY"
+    )
 
     vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")

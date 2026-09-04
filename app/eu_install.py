@@ -23,8 +23,13 @@ from app.runtime_config import (
     eu_ssh_port,
     eu_ssh_user,
     ssh_connect_timeout_seconds,
+    transactional_vpn_apply_enabled,
 )
 from app.protocol_status import refresh_protocol_statuses
+from app.remote_apply import (
+    render_config_apply_script,
+    render_transactional_install_script,
+)
 from app.vpn_config import CapturedVpnConfig, capture_vpn_config
 from app.vpn_state import (
     complete_install_operation,
@@ -368,6 +373,23 @@ echo "[autovpn] done"
 """
 
 
+def build_eu_config_apply_script(config: CapturedVpnConfig) -> str:
+    return render_config_apply_script(config, revision=config.revision)
+
+
+def build_eu_deploy_script(
+    config: CapturedVpnConfig | None = None,
+    *,
+    transactional: bool | None = None,
+) -> str:
+    config = config or capture_vpn_config()
+    if transactional is None:
+        transactional = transactional_vpn_apply_enabled()
+    if transactional:
+        return render_transactional_install_script(config)
+    return build_eu_install_script(config)
+
+
 def build_ssh_command(host: str, remote_command: str = "printf 'autovpn-ssh-ok\\n' && uname -a") -> list[str]:
     if not host:
         raise EuInstallError("EU SSH host is not configured and current_ip is empty")
@@ -666,7 +688,8 @@ async def run_eu_install(operation_id: int) -> None:
     try:
         operation, config = load_install_snapshot(operation_id)
         host = str(operation["target_host"] or "")
-        script = build_eu_install_script(config)
+        transactional = transactional_vpn_apply_enabled()
+        script = build_eu_deploy_script(config, transactional=transactional)
         update_install_operation(
             operation_id,
             status="RUNNING",
@@ -676,7 +699,13 @@ async def run_eu_install(operation_id: int) -> None:
         update_install_operation(
             operation_id,
             current_step="remote_install_running",
-            output="Remote install started. It can take several minutes while apt, xray, hysteria and amneziawg are installed.",
+            output=(
+                "Transactional VPN deployment started. Package bootstrap runs only "
+                "when required, then the staged config apply is validated and switched."
+                if transactional
+                else "Remote install started. It can take several minutes while apt, "
+                "xray, hysteria and amneziawg are installed."
+            ),
         )
         exit_code, output = await asyncio.to_thread(_run_script_over_ssh, host, script)
         output_tail = output[-12000:]

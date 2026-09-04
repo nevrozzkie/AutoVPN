@@ -45,7 +45,7 @@ from app.db import (
     update_client_name,
 )
 from app.eu_install import (
-    build_eu_install_script,
+    build_eu_deploy_script,
     describe_ssh_command,
     forget_ssh_known_host,
     resolve_eu_host,
@@ -903,7 +903,7 @@ def admin_install_redirect(_: str = Depends(require_admin)) -> RedirectResponse:
 
 @app.get("/admin/install/script", response_class=PlainTextResponse)
 def admin_install_script(_: str = Depends(require_admin)) -> PlainTextResponse:
-    return PlainTextResponse(build_eu_install_script())
+    return PlainTextResponse(build_eu_deploy_script())
 
 
 @app.post("/admin/ssh/known-host/forget")
