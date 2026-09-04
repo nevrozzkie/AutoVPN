@@ -415,7 +415,8 @@ install_python_app() {
 
   python3 -m venv "$APP_DIR/.venv"
   "$APP_DIR/.venv/bin/pip" install --upgrade pip
-  "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
+  "$APP_DIR/.venv/bin/pip" install \
+    -c "$APP_DIR/constraints-runtime.txt" -e "$APP_DIR"
   chown -R "$APP_USER:$APP_USER" "$APP_DIR"
   chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
   chmod 0700 "$DATA_DIR" "$BACKUP_DIR"

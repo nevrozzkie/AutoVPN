@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import secrets
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -60,6 +62,7 @@ from app.protocol_status import (
     get_protocol_statuses,
     refresh_transport_protocol_statuses,
 )
+from app.readiness import database_is_ready
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -117,11 +120,23 @@ from app.server_operations import (
 )
 from app.router_api import RouterApiError, router, router_api_error_response
 
-app = FastAPI(title="AutoVPN")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    fail_incomplete_install_operations(
+        "AutoVPN was restarted while this VPS operation was still running. Review its state before retrying."
+    )
+    yield
+
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+
+app = FastAPI(title="AutoVPN", lifespan=lifespan)
 app.add_exception_handler(RouterApiError, router_api_error_response)
 app.include_router(router)
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
+app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 security = HTTPBasic()
 setup_security = HTTPBasic(auto_error=False)
 
@@ -325,14 +340,6 @@ def format_eur_minor_units(value: object) -> str:
         return "unknown"
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-    fail_incomplete_install_operations(
-        "AutoVPN was restarted while this VPS operation was still running. Review its state before retrying."
-    )
-
-
 def _verify_admin_credentials(request: Request, credentials: HTTPBasicCredentials) -> bool:
     """Constant-time check of admin credentials with login rate limiting."""
     key = client_key(request)
@@ -520,6 +527,13 @@ def setup_submit(
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    if database_is_ready(settings.database_path):
+        return JSONResponse({"status": "ready"})
+    return JSONResponse({"status": "not_ready"}, status_code=503)
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)

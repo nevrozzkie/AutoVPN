@@ -228,6 +228,48 @@ persistent path. Остальные значения при обновлении
 зависимостей или синхронизация исходников оборвётся после preflight, автоматического rollback
 к прежней версии кода нет. Проверенная резервная копия БД остаётся в `DATA_DIR/backups`.
 
+### Production upgrade и восстановление
+
+Перед обновлением сохраните текущий commit/release, `/etc/autovpn.env` (или локальный `.env`) и
+проверьте значение `DATABASE_PATH`. Обычный installer сам делает согласованный SQLite backup
+до замены исходников. Кроме того, перед первой ещё не применённой schema migration приложение
+создаёт отдельный проверенный `autovpn-pre-migration-*.sqlite3`; простой `cp` работающей WAL-БД
+для восстановления не используйте.
+
+После обновления проверяйте оба endpoint:
+
+- `/healthz` подтверждает, что HTTP-процесс отвечает, и сохраняет legacy body
+  `{"status":"ok"}`;
+- `/readyz` read-only проверяет доступность SQLite и точное соответствие набора
+  `schema_migrations` этой версии приложения. Он ничего не создаёт и не мигрирует; до
+  завершения startup migration возвращается общий `503 {"status":"not_ready"}` без деталей.
+
+Если нужна ручная остановка/восстановление, остановите сервис, сохраните отказавшую БД для
+разбора, восстановите проверенный SQLite backup в configured `DATABASE_PATH`, выставьте каталог
+`0700`, файл `0600` и прежнего service owner, затем верните совместимую версию исходников и
+запустите сервис. Installer остаётся in-place: автоматического rollback кода или удалённых
+действий на Aeza/VPS нет. Не откатывайте только БД под более новый код без проверки migration
+границы и не считайте локальный backup rollback-ом внешних SSH/Aeza действий.
+
+Runtime dependencies зафиксированы exact pins в `constraints-runtime.txt`; оба Unix-installer
+применяют этот файл при `pip install -e`. Набор снят с проверенного macOS CPython 3.14 test venv.
+Deployment target остаётся Ubuntu 24.04 с CPython 3.12+, но Linux compatibility должна быть
+подтверждена отдельным clean-install canary; это не универсальный lock для Windows или любой
+платформы. Обновлять pins следует отдельным изменением с canary на целевом VPS. Wheel явно
+включает `app/templates/**` и весь `app/static/**`; offline gate запускается с заранее
+установленными setuptools `84.0.0` и wheel `0.48.0`, через
+`pip wheel --no-deps --no-build-isolation`.
+
+Перед включением новых mutation/API контуров отдельно проверьте на staging:
+
+1. transactional apply и rollback файлов/systemd на той же Ubuntu и версиях VPN-сервисов;
+2. безопасную ротацию IPv4 на тестовой услуге Aeza, включая потерянные ответы и ручную сверку;
+3. Router API на реальном OpenWrt/Cudy, включая сохранение credential и повтор apply-result.
+
+До этих проверок `ENABLE_TRANSACTIONAL_VPN_APPLY`, `ENABLE_SAFE_AEZA_IP_ROTATION` и
+`ENABLE_ROUTER_API` должны оставаться `0`. Статус и reboot относятся к VPS API Aeza;
+AmneziaWG — это VPN-протокол и не является провайдером VPS.
+
 ### Desired/applied конфигурация VPN
 
 Изменения VPN-настроек и клиентов увеличивают `desired revision`. При запуске

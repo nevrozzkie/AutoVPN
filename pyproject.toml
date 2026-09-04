@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools==84.0.0", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "autovpn"
 version = "0.1.0"
@@ -17,10 +21,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2.0",
+    "setuptools==84.0.0",
+    "wheel==0.48.0",
 ]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html", "static/*", "static/**/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -481,7 +481,8 @@ main() {
   echo "[autovpn] creating virtualenv"
   python3 -m venv "$APP_DIR/.venv"
   "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
-  "$APP_DIR/.venv/bin/python" -m pip install -e "$APP_DIR"
+  "$APP_DIR/.venv/bin/python" -m pip install \
+    -c "$APP_DIR/constraints-runtime.txt" -e "$APP_DIR"
   init_local_db
   write_run_script
 
