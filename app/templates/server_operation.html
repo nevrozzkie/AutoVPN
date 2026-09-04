@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ "Перезагрузка" if operation.kind == "REBOOT" else "Проверка состояния" }} VPS в Aeza</h1>
+
+<section class="panel">
+  <div><strong>Операция:</strong> #{{ operation.id }}</div>
+  <div><strong>Статус:</strong> {{ operation.status|status_label }}</div>
+  <div><strong>Шаг:</strong> {{ operation.current_step|step_label }}</div>
+  {% if operation.kind == "REBOOT" %}
+    <div><strong>Состояние команды Aeza:</strong> {{ operation.action_state }}</div>
+  {% endif %}
+  <div><strong>Статус Aeza:</strong> {{ operation.provider_status or "нет данных" }}</div>
+  <div><strong>IP у Aeza:</strong> {{ operation.provider_ip or "нет данных" }}</div>
+  <div><strong>SSH:</strong> {{ operation.ssh_status or "нет данных" }}</div>
+  <div><strong>Создано:</strong> {{ operation.created_at|msk }}</div>
+  <div><strong>Завершено:</strong> {{ operation.completed_at|msk }}</div>
+</section>
+
+{% if operation.result_message %}<section class="panel ok">{{ operation.result_message }}</section>{% endif %}
+{% if operation.warning_message %}<section class="panel warning">{{ operation.warning_message }}</section>{% endif %}
+{% if operation.error_message %}<section class="panel danger">{{ operation.error_message }}</section>{% endif %}
+
+<details class="panel technical-details">
+  <summary>Проверки VPN-сервисов</summary>
+  <pre>{{ operation.services_json or "нет данных" }}</pre>
+</details>
+<details class="panel technical-details">
+  <summary>Проверки VPN-протоколов</summary>
+  <pre>{{ operation.protocol_health_json or "нет данных" }}</pre>
+</details>
+
+<div class="actions action-bar">
+  <a href="/admin/server">К состоянию VPS</a>
+  <a href="/admin/operations">Весь журнал операций</a>
+</div>
+{% endblock %}

@@ -1,5 +1,13 @@
+import pytest
+
+import app.eu_install as eu_install
 from app.db import create_client, get_setting, init_db, set_setting
-from app.eu_install import build_eu_install_script, describe_ssh_command, forget_ssh_known_host
+from app.eu_install import (
+    build_eu_install_script,
+    describe_ssh_command,
+    forget_ssh_known_host,
+    run_remote_command,
+)
 
 
 def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
@@ -120,3 +128,34 @@ def test_forget_ssh_known_host_uses_ssh_keygen(monkeypatch) -> None:
         ]
     finally:
         object.__setattr__(settings, "eu_ssh_port", original_port)
+
+
+@pytest.mark.anyio
+async def test_run_remote_command_passes_bounded_timeout_to_ssh_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_ssh_exec(
+        host: str,
+        command: str,
+        stdin_data: str = "",
+        command_timeout: float | None = None,
+    ) -> tuple[int, str]:
+        captured.update(
+            host=host,
+            command=command,
+            stdin_data=stdin_data,
+            command_timeout=command_timeout,
+        )
+        return 0, "ok"
+
+    monkeypatch.setattr(eu_install, "_ssh_exec", fake_ssh_exec)
+
+    assert await run_remote_command("203.0.113.10", "true", timeout=2.5) == (0, "ok")
+    assert captured == {
+        "host": "203.0.113.10",
+        "command": "true",
+        "stdin_data": "",
+        "command_timeout": 2.5,
+    }

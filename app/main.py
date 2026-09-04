@@ -96,6 +96,15 @@ from app.security import (
     login_rate_limiter,
     verify_password,
 )
+from app.server_operations import (
+    create_server_operation,
+    get_active_vps_operation,
+    get_latest_server_operation,
+    get_server_operation,
+    list_server_operations,
+    run_server_reboot,
+    run_server_status,
+)
 
 app = FastAPI(title="AutoVPN")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -178,6 +187,8 @@ STATUS_LABELS = {
     "RUNNING": "Выполняется",
     "DONE": "Готово",
     "PENDING": "Ожидает",
+    "TIMED_OUT": "Истёк таймаут",
+    "AMBIGUOUS": "Требуется проверка",
 }
 
 
@@ -199,6 +210,20 @@ STEP_LABELS = {
     "remote_install_running": "удалённая установка выполняется",
     "done": "готово",
     "failed": "ошибка",
+    "provider_status": "статус VPS в Aeza",
+    "provider_status_before_reboot": "проверка статуса Aeza перед перезагрузкой",
+    "ssh_reachability": "проверка SSH",
+    "send_reboot": "отправка команды перезагрузки",
+    "wait_reboot": "ожидание перезагрузки",
+    "verify_reboot": "проверка после перезагрузки",
+    "verify_ambiguous_reboot": "безопасная проверка результата",
+    "service_health": "проверка сервисов",
+    "protocol_health": "проверка протоколов",
+    "wait_provider": "ожидание статуса Aeza",
+    "wait_ssh": "ожидание SSH",
+    "timed_out": "истёк таймаут",
+    "manual_verification_required": "нужна ручная проверка",
+    "verification_complete": "проверка завершена",
 }
 
 
@@ -290,7 +315,7 @@ def format_eur_minor_units(value: object) -> str:
 def on_startup() -> None:
     init_db()
     fail_incomplete_install_operations(
-        "AutoVPN was restarted while this install operation was still running. Start install/sync again."
+        "AutoVPN was restarted while this VPS operation was still running. Review its state before retrying."
     )
 
 
@@ -494,6 +519,8 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     clients = list_clients()
     target_host = resolve_eu_host()
     latest_install_operation = get_latest_install_operation()
+    latest_server_operation = get_latest_server_operation()
+    active_vps_operation = get_active_vps_operation()
     vpn_state = get_vpn_state()
     latest_install_error = latest_install_operation["error_message"] if latest_install_operation else ""
     ssh_host_key_changed = bool(
@@ -523,13 +550,17 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
             "latest_install_operation": latest_install_operation,
+            "latest_server_operation": latest_server_operation,
+            "active_vps_operation": active_vps_operation,
             "vpn_state": vpn_state,
             "vpn_config_dirty": vpn_state["applied_revision"] is None
             or vpn_state["desired_revision"] != vpn_state["applied_revision"],
             "ssh_host_key_changed": ssh_host_key_changed,
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
-            "auto_refresh": has_running_operation() or has_running_install_operation(),
+            "auto_refresh": has_running_operation()
+            or has_running_install_operation()
+            or active_vps_operation is not None,
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
@@ -736,15 +767,133 @@ def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> Redi
 def admin_operations(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     operation_running = has_running_operation()
     install_running = has_running_install_operation()
+    server_running = get_active_vps_operation() is not None
     return templates.TemplateResponse(
         request,
         "operations.html",
         {
             "operations": list_operations(),
             "install_operations": list_install_operations(),
-            "auto_refresh": operation_running or install_running,
+            "server_operations": list_server_operations(),
+            "auto_refresh": operation_running or install_running or server_running,
         },
     )
+
+
+@app.get("/admin/server", response_class=HTMLResponse)
+def admin_server(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "server.html",
+        {
+            "latest_operation": get_latest_server_operation(),
+            "active_operation": get_active_vps_operation(),
+            "aeza_available": aeza_ip_rotation_available(),
+            "service_id": aeza_service_id(),
+            "current_ip": get_setting("current_ip"),
+            "target_host": resolve_eu_host(),
+            "aeza_required": request.query_params.get("aeza_required") == "1",
+            "operation_busy": request.query_params.get("operation_busy") == "1",
+        },
+    )
+
+
+@app.post("/admin/server/status/refresh")
+def admin_server_status_refresh(
+    background_tasks: BackgroundTasks,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    try:
+        operation_id = create_server_operation("STATUS")
+    except OperationBusyError:
+        return RedirectResponse(
+            "/admin/server?operation_busy=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    background_tasks.add_task(_run_server_status_background, operation_id)
+    return RedirectResponse(
+        f"/admin/server/operations/{operation_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/admin/server/reboot/confirm", response_class=HTMLResponse)
+def admin_server_reboot_confirm(
+    request: Request,
+    _: str = Depends(require_admin),
+) -> Response:
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    return templates.TemplateResponse(
+        request,
+        "server_reboot_confirm.html",
+        {
+            "service_id": aeza_service_id(),
+            "current_ip": get_setting("current_ip"),
+            "latest_operation": get_latest_server_operation(),
+            "active_operation": get_active_vps_operation(),
+        },
+    )
+
+
+@app.post("/admin/server/reboot")
+def admin_server_reboot(
+    background_tasks: BackgroundTasks,
+    confirm: str = Form(""),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if confirm != "REBOOT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type REBOOT exactly to confirm server reboot",
+        )
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    try:
+        operation_id = create_server_operation("REBOOT")
+    except OperationBusyError:
+        return RedirectResponse(
+            "/admin/server?operation_busy=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    background_tasks.add_task(_run_server_reboot_background, operation_id)
+    return RedirectResponse(
+        f"/admin/server/operations/{operation_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/admin/server/operations/{operation_id}", response_class=HTMLResponse)
+def admin_server_operation(
+    request: Request,
+    operation_id: int,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    operation = get_server_operation(operation_id)
+    if not operation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return templates.TemplateResponse(
+        request,
+        "server_operation.html",
+        {
+            "operation": operation,
+            "auto_refresh": operation["status"] in {"PENDING", "RUNNING"},
+        },
+    )
+
+
+async def _run_server_status_background(operation_id: int) -> None:
+    await run_server_status(operation_id)
+
+
+async def _run_server_reboot_background(operation_id: int) -> None:
+    await run_server_reboot(operation_id)
 
 
 @app.get("/admin/install")
@@ -822,7 +971,11 @@ async def _refresh_stats_background() -> None:
 
 @app.post("/admin/reset-server")
 def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
-    if has_running_operation() or has_running_install_operation():
+    if (
+        has_running_operation()
+        or has_running_install_operation()
+        or get_active_vps_operation() is not None
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot reset server settings while an operation is running",

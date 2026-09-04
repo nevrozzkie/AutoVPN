@@ -16,7 +16,11 @@ class DeepCheckResult:
     detail: str = ""
 
 
-async def run_deep_protocol_checks(current_ip: str) -> dict[str, DeepCheckResult]:
+async def run_deep_protocol_checks(
+    current_ip: str,
+    *,
+    command_timeout: float | None = None,
+) -> dict[str, DeepCheckResult]:
     client = _first_enabled_client()
     if not client:
         return {}
@@ -29,7 +33,17 @@ async def run_deep_protocol_checks(current_ip: str) -> dict[str, DeepCheckResult
 
     script = build_deep_check_script(client, current_ip)
     try:
-        exit_code, output = await run_remote_command(host, "bash -s", stdin_data=script)
+        if command_timeout is None:
+            exit_code, output = await run_remote_command(
+                host, "bash -s", stdin_data=script
+            )
+        else:
+            exit_code, output = await run_remote_command(
+                host,
+                "bash -s",
+                stdin_data=script,
+                timeout=command_timeout,
+            )
     except Exception:
         return {}
     if exit_code != 0:

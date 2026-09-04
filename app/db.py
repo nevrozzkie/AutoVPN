@@ -691,6 +691,7 @@ def reset_server_and_aeza_state() -> None:
         )
         db.execute("DELETE FROM ip_change_operations")
         db.execute("DELETE FROM vpn_install_operations")
+        db.execute("DELETE FROM server_operations")
         db.execute("DELETE FROM client_stats")
         db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",

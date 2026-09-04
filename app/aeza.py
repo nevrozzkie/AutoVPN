@@ -174,9 +174,25 @@ def normalize_ipv4(data: Any) -> dict[str, Any]:
 def normalize_service(data: Any) -> dict[str, Any]:
     payload = _unwrap_payload(data)
     if not isinstance(payload, dict):
-        return {"ip": "", "raw": data}
+        return {"ip": "", "provider_status": "", "raw": data}
+    provider_status = ""
+    for key in (
+        "provider_status",
+        "providerStatus",
+        "status",
+        "state",
+        "server_status",
+        "serverStatus",
+        "power_status",
+        "powerStatus",
+    ):
+        candidate = payload.get(key)
+        if isinstance(candidate, (str, int, float)) and not isinstance(candidate, bool):
+            provider_status = str(candidate)
+            break
     return {
         "ip": str(payload.get("ip") or payload.get("address") or payload.get("ipv4") or ""),
+        "provider_status": provider_status,
         "raw": payload,
     }
 

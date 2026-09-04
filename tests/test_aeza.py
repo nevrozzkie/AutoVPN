@@ -110,8 +110,32 @@ def test_normalize_service_uses_service_ip_as_main_ip() -> None:
 
     assert normalize_service(payload) == {
         "ip": "62.60.236.116",
+        "provider_status": "",
         "raw": payload,
     }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"status": "running"}, "running"),
+        ({"providerStatus": "online"}, "online"),
+        ({"state": "rebooting"}, "rebooting"),
+        ({"serverStatus": "active"}, "active"),
+        ({"power_status": 1}, "1"),
+    ],
+)
+def test_normalize_service_uses_only_explicit_aeza_status_fields(
+    payload: dict[str, object], expected: str
+) -> None:
+    assert normalize_service({"data": payload})["provider_status"] == expected
+
+
+def test_normalize_service_does_not_infer_running_from_ip() -> None:
+    normalized = normalize_service({"ip": "62.60.236.116"})
+
+    assert normalized["ip"] == "62.60.236.116"
+    assert normalized["provider_status"] == ""
 
 
 def test_normalize_ipv4_price_from_har_shape() -> None:

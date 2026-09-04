@@ -123,6 +123,26 @@ def ssh_connect_timeout_seconds() -> int:
     return config_int("ssh_connect_timeout_seconds", 15)
 
 
+def server_status_timeout_seconds() -> int:
+    return config_int("server_status_timeout_seconds", 15)
+
+
+def server_reboot_timeout_seconds() -> int:
+    return config_int("server_reboot_timeout_seconds", 300)
+
+
+def server_poll_interval_seconds() -> int:
+    return config_int("server_poll_interval_seconds", 5)
+
+
+def server_ssh_probe_timeout_seconds() -> int:
+    return config_int("server_ssh_probe_timeout_seconds", 5)
+
+
+def server_command_timeout_seconds() -> int:
+    return config_int("server_command_timeout_seconds", 30)
+
+
 def vless_port() -> int | None:
     return protocol_port("vless", settings.vless_port, True)
 

@@ -469,7 +469,12 @@ def _redact_password(text: str, password: str) -> str:
     return text.replace(password, "***")
 
 
-def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
+def _ssh_exec_system_password(
+    host: str,
+    command: str,
+    stdin_data: str = "",
+    command_timeout: float | None = None,
+) -> tuple[int, str]:
     password = eu_ssh_password()
     if not password:
         raise EuInstallError("Configure EU_SSH_PASSWORD")
@@ -498,6 +503,7 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
             stderr=subprocess.STDOUT,
             env=env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+            timeout=command_timeout,
             check=False,
         )
         output = result.stdout.decode("utf-8", errors="replace")
@@ -556,7 +562,12 @@ def _build_verified_ssh_client(paramiko):  # type: ignore[no-untyped-def]
     return ssh
 
 
-def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
+def _ssh_exec(
+    host: str,
+    command: str,
+    stdin_data: str = "",
+    command_timeout: float | None = None,
+) -> tuple[int, str]:
     import paramiko
 
     if not host:
@@ -567,7 +578,9 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         raise EuInstallError("Configure EU_SSH_PASSWORD or EU_SSH_KEY_PATH")
 
     if password and os.name != "nt":
-        return _ssh_exec_system_password(host, command, stdin_data)
+        return _ssh_exec_system_password(
+            host, command, stdin_data, command_timeout=command_timeout
+        )
 
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
@@ -589,7 +602,9 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         ssh = _build_verified_ssh_client(paramiko)
         try:
             ssh.connect(**connect_kwargs)
-            stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
+            stdin, stdout, stderr = ssh.exec_command(
+                command, get_pty=True, timeout=command_timeout
+            )
             if stdin_data:
                 stdin.write(stdin_data)
             stdin.channel.shutdown_write()
@@ -634,8 +649,17 @@ async def run_remote_command(
     host: str,
     command: str,
     stdin_data: str = "",
+    timeout: float | None = None,
 ) -> tuple[int, str]:
-    return await asyncio.to_thread(_ssh_exec, host, command, stdin_data)
+    if timeout is None:
+        return await asyncio.to_thread(_ssh_exec, host, command, stdin_data)
+    return await asyncio.to_thread(
+        _ssh_exec,
+        host,
+        command,
+        stdin_data,
+        command_timeout=timeout,
+    )
 
 
 async def run_eu_install(operation_id: int) -> None:

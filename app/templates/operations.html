@@ -41,6 +41,40 @@
   </tbody>
 </table>
 
+<h2>VPS в Aeza</h2>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Операция</th>
+      <th>Статус</th>
+      <th>Шаг</th>
+      <th>Статус Aeza</th>
+      <th>SSH</th>
+      <th>Результат</th>
+      <th>Обновлено</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for operation in server_operations %}
+      <tr>
+        <td><a href="/admin/server/operations/{{ operation.id }}">{{ operation.id }}</a></td>
+        <td>{{ "Перезагрузка" if operation.kind == "REBOOT" else "Проверка" }}</td>
+        <td>{{ operation.status|status_label }}</td>
+        <td>{{ operation.current_step|step_label }}</td>
+        <td>{{ operation.provider_status or "нет данных" }}</td>
+        <td>{{ operation.ssh_status or "нет данных" }}</td>
+        <td class="{% if operation.error_message %}danger{% elif operation.warning_message %}warning{% endif %}">
+          {{ operation.error_message or operation.warning_message or operation.result_message or "" }}
+        </td>
+        <td>{{ operation.updated_at|msk }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">Проверок и перезагрузок пока нет</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
 <h2>Установка / синхронизация VPN</h2>
 <table>
   <thead>

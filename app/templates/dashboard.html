@@ -46,6 +46,22 @@
       <div class="ok">Применена</div>
     {% endif %}
   </section>
+  <section class="panel">
+    <div class="label">VPS в Aeza</div>
+    {% if latest_server_operation %}
+      <div class="value">{{ latest_server_operation.status|status_label }}</div>
+      <div class="muted">
+        {{ latest_server_operation.current_step|step_label }} ·
+        {{ latest_server_operation.updated_at|msk }}
+      </div>
+      {% if latest_server_operation.provider_status %}
+        <div>Статус Aeza: {{ latest_server_operation.provider_status }}</div>
+      {% endif %}
+    {% else %}
+      <div class="value">нет проверок</div>
+    {% endif %}
+    <div class="actions"><a href="/admin/server">Статус и перезагрузка VPS</a></div>
+  </section>
 </div>
 
 {% if protocol_status_available %}
@@ -104,9 +120,9 @@
 <h2>Действия</h2>
 <div class="actions action-bar">
   <form method="post" action="/admin/install/run" class="inline">
-    <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
+    <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  {% if operation_running or not aeza_ip_rotation_available %}
+  {% if operation_running or active_vps_operation or not aeza_ip_rotation_available %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">Обновить IP</a>
@@ -117,6 +133,8 @@
 
 {% if install_running %}
   <p class="muted">Установка или синхронизация уже выполняется.</p>
+{% elif active_vps_operation %}
+  <p class="muted">VPN VPS занят другой операцией.</p>
 {% elif not target_host %}
   <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице Setup.</p>
 {% endif %}

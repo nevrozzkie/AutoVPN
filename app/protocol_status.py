@@ -118,9 +118,18 @@ def _compute_status(protocol: dict, probe_ok: bool | None, deep: DeepCheckResult
     return base
 
 
-async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int | bool | None]]:
+async def refresh_protocol_statuses(
+    current_ip: str,
+    *,
+    command_timeout: float | None = None,
+) -> list[dict[str, str | int | bool | None]]:
     checked_at = now_iso()
-    deep_results = await run_deep_protocol_checks(current_ip)
+    if command_timeout is None:
+        deep_results = await run_deep_protocol_checks(current_ip)
+    else:
+        deep_results = await run_deep_protocol_checks(
+            current_ip, command_timeout=command_timeout
+        )
 
     probe_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:

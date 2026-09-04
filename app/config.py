@@ -39,6 +39,13 @@ class Settings:
     eu_ssh_key_path: str = os.getenv("EU_SSH_KEY_PATH", "")
     eu_ssh_password: str = os.getenv("EU_SSH_PASSWORD", "")
     ssh_connect_timeout_seconds: int = _get_int("SSH_CONNECT_TIMEOUT_SECONDS", 15)
+    server_status_timeout_seconds: int = _get_int("SERVER_STATUS_TIMEOUT_SECONDS", 15)
+    server_reboot_timeout_seconds: int = _get_int("SERVER_REBOOT_TIMEOUT_SECONDS", 300)
+    server_poll_interval_seconds: int = _get_int("SERVER_POLL_INTERVAL_SECONDS", 5)
+    server_ssh_probe_timeout_seconds: int = _get_int(
+        "SERVER_SSH_PROBE_TIMEOUT_SECONDS", 5
+    )
+    server_command_timeout_seconds: int = _get_int("SERVER_COMMAND_TIMEOUT_SECONDS", 30)
 
     vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")

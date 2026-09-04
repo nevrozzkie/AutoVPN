@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Подтверждение перезагрузки VPS через Aeza</h1>
+
+<section class="panel danger">
+  Перезагрузка прервёт VPN-соединения. AutoVPN отправит команду Aeza ровно один раз,
+  после чего будет только проверять возвращение VPS и VPN-сервисов.
+</section>
+
+<section class="panel">
+  <div><strong>Услуга Aeza:</strong> {{ service_id }}</div>
+  <div><strong>Текущий IP AutoVPN:</strong> {{ current_ip or "не задан" }}</div>
+  <div><strong>Последний статус Aeza:</strong> {{ latest_operation.provider_status if latest_operation and latest_operation.provider_status else "нет данных" }}</div>
+</section>
+
+{% if active_operation %}
+  <section class="panel warning">
+    VPS занят операцией {{ active_operation.owner_type }} #{{ active_operation.owner_id }}.
+  </section>
+{% endif %}
+
+<form method="post" action="/admin/server/reboot" class="panel">
+  <label for="confirm">Введите <code>REBOOT</code> для подтверждения</label>
+  <input id="confirm" name="confirm" type="text" autocomplete="off" required>
+  <div class="actions action-bar">
+    <button type="submit" class="danger-button" {% if active_operation %}disabled{% endif %}>Перезагрузить VPS через Aeza</button>
+    <a href="/admin/server">Отмена</a>
+  </div>
+</form>
+{% endblock %}
