@@ -1,8 +1,4 @@
-import os
-import tempfile
 from datetime import datetime
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
 from app.db import create_client, get_setting, init_db, update_client_name
 

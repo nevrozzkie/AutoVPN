@@ -1,8 +1,3 @@
-import os
-import tempfile
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
-
 from app.db import create_client, get_setting, init_db, set_setting
 from app.eu_install import build_eu_install_script, describe_ssh_command, forget_ssh_known_host
 
@@ -75,6 +70,7 @@ def test_build_eu_install_script_disables_protocols_with_empty_ports() -> None:
 def test_describe_ssh_command_marks_password_auth() -> None:
     from app.config import settings
 
+    init_db()
     original_password = settings.eu_ssh_password
     original_key_path = settings.eu_ssh_key_path
     try:
@@ -100,6 +96,7 @@ def test_forget_ssh_known_host_uses_ssh_keygen(monkeypatch) -> None:
     from app.config import settings
     import app.eu_install as eu_install
 
+    init_db()
     calls: list[list[str]] = []
 
     class Result:

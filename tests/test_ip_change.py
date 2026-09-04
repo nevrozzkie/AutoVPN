@@ -1,8 +1,3 @@
-import os
-import tempfile
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
-
 import pytest
 
 from app.db import create_operation, get_latest_operation, get_setting, init_db, set_setting

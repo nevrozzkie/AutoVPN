@@ -1,8 +1,4 @@
 import asyncio
-import os
-import tempfile
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
 
 from app.db import init_db, set_setting
 from app.deep_protocol_checks import DeepCheckResult

@@ -1,8 +1,3 @@
-import os
-import tempfile
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
-
 from app.db import create_client, get_setting, init_db, set_setting
 from app.config import settings
 from app.subscriptions import build_sing_box_subscription, build_subscription
