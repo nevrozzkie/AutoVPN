@@ -144,7 +144,7 @@
   <section class="panel danger">
     SSH-ключ хоста для {{ target_host }} изменился. Это нормально после переустановки VPS, но также может быть признаком атаки посредника.
     Нажимайте кнопку ниже только если вы уверены, что это тот же ваш VPS после переустановки или замены сервера.
-    <form method="post" action="/admin/ssh/known-host/forget" class="actions" onsubmit="return confirm('Удалить старый SSH-ключ хоста для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.')">
+    <form method="post" action="/admin/ssh/known-host/forget" class="actions" data-confirm-message="Удалить старый SSH-ключ хоста для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.">
       <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH-ключ хоста</button>
     </form>
   </section>

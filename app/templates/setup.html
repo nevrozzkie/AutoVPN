@@ -186,6 +186,8 @@
         const duplicated = new Set();
         protocolPortInputs.forEach((input) => {
           input.classList.remove("invalid");
+          const enabled = document.querySelector(`#${input.dataset.enabledId}`).checked;
+          if (!enabled) return;
           const port = input.value.trim();
           if (!port) return;
           if (seen.has(port)) {
@@ -196,7 +198,8 @@
         });
         protocolPortInvalid = duplicated.size > 0;
         protocolPortInputs.forEach((input) => {
-          input.classList.toggle("invalid", duplicated.has(input.value.trim()));
+          const enabled = document.querySelector(`#${input.dataset.enabledId}`).checked;
+          input.classList.toggle("invalid", enabled && duplicated.has(input.value.trim()));
         });
         protocolPortError.style.display = protocolPortInvalid ? "block" : "none";
         syncSubmitState();

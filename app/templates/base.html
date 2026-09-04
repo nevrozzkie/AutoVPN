@@ -304,6 +304,13 @@
         document.documentElement.dataset.theme = next;
         localStorage.setItem("autovpn-theme", next);
       }
+      document.querySelectorAll("form[data-confirm-message]").forEach((form) => {
+        form.addEventListener("submit", (event) => {
+          if (!window.confirm(form.dataset.confirmMessage)) {
+            event.preventDefault();
+          }
+        });
+      });
     </script>
   </body>
 </html>

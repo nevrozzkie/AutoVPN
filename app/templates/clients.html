@@ -95,7 +95,7 @@
             <button type="submit">Включить</button>
           </form>
         {% endif %}
-        <form class="inline" method="post" action="/admin/clients/{{ client.id }}/delete" onsubmit="return confirm('Удалить клиента {{ client.name }}? После этого его подписка перестанет работать.')">
+        <form class="inline" method="post" action="/admin/clients/{{ client.id }}/delete" data-confirm-message="Удалить клиента {{ client.name }}? После этого его подписка перестанет работать.">
           <button type="submit" class="danger-button">Удалить</button>
         </form>
       </div>

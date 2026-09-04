@@ -186,13 +186,20 @@ def get_setting(key: str, default: str = "") -> str:
 
 def set_setting(key: str, value: str) -> None:
     with get_db() as db:
-        db.execute(
+        _set_setting(db, key, value)
+
+
+def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = False) -> None:
+    with get_db() as db:
+        db.executemany(
             """
             INSERT INTO settings(key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
-            (key, value),
+            values.items(),
         )
+        if mark_vpn_config_updated:
+            _mark_vpn_config_updated(db)
 
 
 def mark_vpn_config_updated() -> None:

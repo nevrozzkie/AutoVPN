@@ -470,7 +470,7 @@
             {% endif %}
           </h2>
           <p><code>{{ subscription_url }}</code></p>
-          <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
+          <button type="button" data-copy-value="{{ subscription_url }}">Скопировать подписку</button>
           <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
           <div id="subscription-qr" class="qr">
             <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
@@ -479,7 +479,7 @@
             <summary>sing-box <span class="muted">не тестировалось</span></summary>
             <p><code>{{ sing_box_subscription_url }}</code></p>
             <a class="button" href="{{ sing_box_subscription_url }}">Открыть конфиг</a>
-            <button type="button" onclick="navigator.clipboard.writeText('{{ sing_box_subscription_url }}')">Скопировать ссылку</button>
+            <button type="button" data-copy-value="{{ sing_box_subscription_url }}">Скопировать ссылку</button>
           </details>
         </section>
       {% endif %}
@@ -831,6 +831,11 @@
         document.documentElement.dataset.theme = next;
         localStorage.setItem("autovpn-theme", next);
       }
+      document.querySelectorAll("[data-copy-value]").forEach((button) => {
+        button.addEventListener("click", () => {
+          navigator.clipboard.writeText(button.dataset.copyValue);
+        });
+      });
       document.querySelectorAll(".guide-stage").forEach((stage) => {
         stage.addEventListener("toggle", () => {
           if (!stage.open) return;

@@ -217,9 +217,14 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     if origin:
         if origin == "null":
             # Some browsers/webviews send Origin: null for same-page form submits.
-            # Allow it only when Fetch Metadata says the request is not cross-site.
             fetch_site = request.headers.get("sec-fetch-site", "").lower()
-            return fetch_site in {"same-origin", "none", ""}
+            loopback_request = any(
+                _is_loopback_host(_hostname_port(expected_host)[0])
+                for expected_host in expected_hosts
+            )
+            if loopback_request:
+                return fetch_site in {"same-origin", "none", ""}
+            return fetch_site == "same-origin"
         return any(_same_host_or_loopback_alias(_host_of(origin), expected_host) for expected_host in expected_hosts)
     referer = request.headers.get("referer", "")
     if referer:
@@ -227,18 +232,29 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
     return True
 
 
+def is_public_token_path(path: str) -> bool:
+    parts = tuple(part for part in path.split("/") if part)
+    if len(parts) == 2 and parts[0] in {
+        "sub",
+        "sing-box",
+        "ip",
+        "amnezia",
+        "amnezia-key",
+    }:
+        return True
+    if len(parts) < 2 or parts[0] != "client":
+        return False
+    return parts[2:] in {
+        (),
+        ("subscription.qr",),
+        ("amnezia.qr",),
+        ("protocols", "refresh"),
+    }
+
+
 def csrf_failure_detail(request) -> str:  # type: ignore[no-untyped-def]
-    host = request.headers.get("host", "")
-    forwarded_host = request.headers.get("x-forwarded-host", "")
-    origin = request.headers.get("origin", "")
-    referer = request.headers.get("referer", "")
-    return (
-        "Cross-origin request blocked (CSRF protection). "
-        f"host={host or '-'}; "
-        f"x-forwarded-host={forwarded_host or '-'}; "
-        f"origin={origin or '-'}; "
-        f"referer={referer or '-'}"
-    )
+    del request
+    return "Cross-origin request blocked (CSRF protection)."
 
 
 SECURITY_HEADERS = {

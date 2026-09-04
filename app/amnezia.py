@@ -61,6 +61,10 @@ def client_amnezia_address(client_id: int) -> str:
     return f"{settings.amnezia_network_prefix}.{octet}"
 
 
+def _config_comment(value: object) -> str:
+    return " ".join(str(value).splitlines())
+
+
 def build_amnezia_client_config(
     client: dict[str, Any],
     *,
@@ -182,7 +186,7 @@ def build_amnezia_server_config(
         address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
         peer_blocks.append(
             f"""[Peer]
-# {client["name"]}
+# {_config_comment(client["name"])}
 PublicKey = {client["amnezia_public_key"]}
 PresharedKey = {client["amnezia_preshared_key"]}
 AllowedIPs = {address}/32

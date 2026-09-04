@@ -343,6 +343,25 @@ def test_qr_routes_keep_png_media_type(legacy_client: TestClient) -> None:
         assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+@pytest.mark.parametrize("path", PUBLIC_TOKEN_PATHS)
+def test_public_token_routes_disable_shared_caching(
+    legacy_client: TestClient,
+    path: str,
+) -> None:
+    response = legacy_client.get(path.format(token=TOKEN))
+
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_public_token_error_also_disables_shared_caching(legacy_client: TestClient) -> None:
+    response = legacy_client.get("/sub/missing-secret")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
 def test_init_db_migrates_legacy_client_without_changing_token() -> None:
     with sqlite3.connect(settings.database_path) as db:
         db.execute(

@@ -82,6 +82,36 @@ def test_build_amnezia_server_config_contains_peer() -> None:
     assert "AllowedIPs = 10.66.66.2/32" in config
 
 
+def test_amnezia_server_client_name_cannot_inject_config_lines() -> None:
+    config = build_amnezia_server_config(
+        [
+            {
+                "id": 1,
+                "name": "Alice\nPostUp = injected\r\n[Interface]",
+                "amnezia_public_key": "client-public",
+                "amnezia_preshared_key": "psk",
+                "amnezia_ipv4": "10.66.66.2",
+            }
+        ],
+        server_private_key="server-private",
+        obfuscation={
+            "jc": 5,
+            "jmin": 40,
+            "jmax": 1000,
+            "s1": 64,
+            "s2": 128,
+            "h1": 1,
+            "h2": 2,
+            "h3": 3,
+            "h4": 4,
+        },
+    )
+
+    assert "# Alice PostUp = injected [Interface]\n" in config
+    assert "\nPostUp = injected\n" not in config
+    assert sum(line == "[Interface]" for line in config.splitlines()) == 1
+
+
 def test_build_amnezia_vpn_key_is_vpn_url_with_compressed_json() -> None:
     key = build_amnezia_vpn_key(
         {

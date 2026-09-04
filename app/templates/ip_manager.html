@@ -51,11 +51,11 @@
         <td>{% if effective_main %}<span class="ok">да</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
         <td>
           {% if not effective_main %}
-            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/make-main" onsubmit="return confirm('Сделать {{ item.ip }} главным IP и синхронизировать VPN конфиги?')">
+            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/make-main" data-confirm-message="Сделать {{ item.ip }} главным IP и синхронизировать VPN конфиги?">
               <input type="hidden" name="ip" value="{{ item.ip }}">
               <button type="submit">Сделать главным</button>
             </form>
-            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/delete" onsubmit="return confirm('Удалить IP {{ item.ip }}?')">
+            <form class="inline" method="post" action="/admin/ip/{{ item.id }}/delete" data-confirm-message="Удалить IP {{ item.ip }}?">
               <input type="hidden" name="ip" value="{{ item.ip }}">
               <input type="hidden" name="is_main" value="0">
               <button type="submit" class="danger-button">Удалить</button>

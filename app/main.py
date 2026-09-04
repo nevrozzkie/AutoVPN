@@ -33,9 +33,9 @@ from app.db import (
     list_clients_with_stats,
     list_install_operations,
     list_operations,
-    mark_vpn_config_updated,
     reset_server_and_aeza_state,
     set_setting,
+    set_settings,
     set_client_enabled,
     update_client_name,
 )
@@ -80,6 +80,7 @@ from app.security import (
     csrf_failure_detail,
     client_key,
     hash_password,
+    is_public_token_path,
     is_same_origin_request,
     login_rate_limiter,
     verify_password,
@@ -96,13 +97,17 @@ setup_security = HTTPBasic(auto_error=False)
 async def security_middleware(request: Request, call_next):
     # CSRF: state-changing requests must come from the panel's own origin.
     if not is_same_origin_request(request):
-        return PlainTextResponse(
+        response = PlainTextResponse(
             csrf_failure_detail(request),
             status_code=status.HTTP_403_FORBIDDEN,
         )
-    response = await call_next(request)
+    else:
+        response = await call_next(request)
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
+    if is_public_token_path(request.url.path):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -137,7 +142,9 @@ def _required_port_value(raw_value: str, label: str) -> int:
 
 def _ensure_unique_enabled_protocol_ports(protocol_settings: dict[str, tuple[bool, int]]) -> None:
     seen: dict[int, str] = {}
-    for protocol, (_, port) in protocol_settings.items():
+    for protocol, (enabled, port) in protocol_settings.items():
+        if not enabled:
+            continue
         if port in seen:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -415,44 +422,48 @@ def setup_submit(
     if not setup_complete() and not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin password is required")
 
-    set_setting("config.admin_username", admin_username_value.strip() or "admin")
-    if password:
-        set_setting("config.admin_password", hash_password(password))
     current_ip_value = current_ip.strip()
-    if current_ip_value:
-        set_setting("current_ip", current_ip_value)
-
     ssh_host_value = eu_ssh_host_value.strip()
     if ssh_host_value == current_ip_value:
         ssh_host_value = ""
-    set_setting("config.eu_ssh_host", ssh_host_value)
-    set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
-    set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
+    ssh_port = _required_port_value(str(eu_ssh_port_value), "SSH")
+    existing_ssh_password = eu_ssh_password()
+    ssh_key_path = eu_ssh_key_path_value.strip()
     protocol_settings = {
         "vless": (vless_enabled_value == "on", _required_port_value(vless_port_value, "VLESS")),
         "hysteria": (hysteria_enabled_value == "on", _required_port_value(hysteria_port_value, "Hysteria")),
         "amnezia": (amnezia_enabled_value == "on", _required_port_value(amnezia_port_value, "AmneziaWG")),
     }
     _ensure_unique_enabled_protocol_ports(protocol_settings)
-    for protocol, (enabled, port) in protocol_settings.items():
-        set_setting(f"config.{protocol}_enabled", "1" if enabled else "0")
-        set_setting(f"config.{protocol}_port", str(port))
-    if eu_ssh_password_value:
-        set_setting("config.eu_ssh_password", eu_ssh_password_value)
-        set_setting("config.eu_ssh_key_path", "")
-    else:
-        if not eu_ssh_password() or eu_ssh_key_path_value.strip():
-            set_setting("config.eu_ssh_password", "")
-        set_setting("config.eu_ssh_key_path", eu_ssh_key_path_value.strip())
 
-    set_setting("config.aeza_api_base", "https://my.aeza.net")
+    updates = {
+        "config.admin_username": admin_username_value.strip() or "admin",
+        "config.eu_ssh_host": ssh_host_value,
+        "config.eu_ssh_user": eu_ssh_user_value.strip() or "root",
+        "config.eu_ssh_port": str(ssh_port),
+        "config.aeza_api_base": "https://my.aeza.net",
+        "config.aeza_service_id": aeza_service_id_value.strip(),
+        "config.aeza_ipv4_payment_method": "balance",
+        "config.aeza_ipv4_domain": aeza_ipv4_domain_value.strip(),
+        "config.aeza_ipv4_after_purchase_delay_seconds": "120",
+    }
+    if password:
+        updates["config.admin_password"] = hash_password(password)
+    if current_ip_value:
+        updates["current_ip"] = current_ip_value
+    for protocol, (enabled, port) in protocol_settings.items():
+        updates[f"config.{protocol}_enabled"] = "1" if enabled else "0"
+        updates[f"config.{protocol}_port"] = str(port)
+    if eu_ssh_password_value:
+        updates["config.eu_ssh_password"] = eu_ssh_password_value
+        updates["config.eu_ssh_key_path"] = ""
+    else:
+        if not existing_ssh_password or ssh_key_path:
+            updates["config.eu_ssh_password"] = ""
+        updates["config.eu_ssh_key_path"] = ssh_key_path
     if aeza_token_value.strip():
-        set_setting("config.aeza_token", aeza_token_value.strip())
-    set_setting("config.aeza_service_id", aeza_service_id_value.strip())
-    set_setting("config.aeza_ipv4_payment_method", "balance")
-    set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
-    set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "120")
-    mark_vpn_config_updated()
+        updates["config.aeza_token"] = aeza_token_value.strip()
+    set_settings(updates, mark_vpn_config_updated=True)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -547,7 +558,6 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
     error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
     current_ip = get_setting("current_ip")
-    synced_main_ip = ""
     try:
         client = get_aeza_client()
         ipv4_list = await client.get_ipv4_list(aeza_service_id())
@@ -557,11 +567,6 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             for item in ipv4_list:
                 if item.get("ip") == aeza_main_ip:
                     item["is_main"] = True
-            if aeza_main_ip != current_ip:
-                set_setting("current_ip", aeza_main_ip)
-                mark_vpn_config_updated()
-                synced_main_ip = aeza_main_ip
-                current_ip = aeza_main_ip
     except Exception as exc:
         error = error or str(exc)
     return templates.TemplateResponse(
@@ -571,7 +576,7 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             "current_ip": current_ip,
             "ipv4_list": ipv4_list,
             "error": error,
-            "synced_main_ip": synced_main_ip,
+            "synced_main_ip": "",
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
         },
