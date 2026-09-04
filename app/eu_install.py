@@ -23,6 +23,7 @@ from app.runtime_config import (
     eu_ssh_port,
     eu_ssh_user,
     ssh_connect_timeout_seconds,
+    server_command_timeout_seconds,
     transactional_vpn_apply_enabled,
 )
 from app.protocol_status import refresh_protocol_statuses
@@ -30,6 +31,7 @@ from app.remote_apply import (
     render_config_apply_script,
     render_transactional_install_script,
 )
+from app.secret_sanitization import sanitize_error
 from app.vpn_config import CapturedVpnConfig, capture_vpn_config
 from app.vpn_state import (
     complete_install_operation,
@@ -462,7 +464,10 @@ def _probe_ssh_banner(host: str) -> str:
 
 def _format_ssh_error(host: str, exc: Exception) -> str:
     target = f"{eu_ssh_user()}@{host}:{eu_ssh_port()}"
-    message = str(exc) or exc.__class__.__name__
+    message = sanitize_error(
+        str(exc) or exc.__class__.__name__,
+        eu_ssh_password(),
+    )
     if "Error reading SSH protocol banner" in message or "No existing session" in message:
         hint = f"SSH handshake failed for {target}: Paramiko could not complete the SSH handshake."
         try:
@@ -674,7 +679,7 @@ async def run_remote_command(
     timeout: float | None = None,
 ) -> tuple[int, str]:
     if timeout is None:
-        return await asyncio.to_thread(_ssh_exec, host, command, stdin_data)
+        timeout = float(server_command_timeout_seconds())
     return await asyncio.to_thread(
         _ssh_exec,
         host,
@@ -716,5 +721,8 @@ async def run_eu_install(operation_id: int) -> None:
         await refresh_protocol_statuses(host)
         complete_install_operation(operation_id, output_tail)
     except Exception as exc:
-        fail_install_operation(operation_id, str(exc)[-12000:])
+        fail_install_operation(
+            operation_id,
+            sanitize_error(exc, eu_ssh_password(), limit=12000),
+        )
         raise

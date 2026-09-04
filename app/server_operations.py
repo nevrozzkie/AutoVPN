@@ -24,6 +24,7 @@ from app.runtime_config import (
     aeza_token,
     amnezia_enabled,
     eu_ssh_port,
+    eu_ssh_password,
     hysteria_enabled,
     server_command_timeout_seconds,
     server_poll_interval_seconds,
@@ -32,6 +33,7 @@ from app.runtime_config import (
     server_ssh_probe_timeout_seconds,
     vless_enabled,
 )
+from app.secret_sanitization import sanitize_error
 
 
 SERVICE_STATUS_COMMAND = """for service in xray hysteria-server awg-quick@awg0; do
@@ -85,11 +87,7 @@ def _clean(value: object, limit: int = 4000) -> str:
 
 
 def _safe_error(value: object) -> str:
-    message = _clean(value)
-    token = aeza_token()
-    if token:
-        message = message.replace(token, "***")
-    return message
+    return sanitize_error(value, aeza_token(), eu_ssh_password())
 
 
 def _json(value: object) -> str:
@@ -121,12 +119,14 @@ def update_server_operation(operation_id: int, **fields: object) -> None:
     unknown = set(fields) - SERVER_FIELDS
     if unknown:
         raise ValueError(f"Unsupported server operation fields: {sorted(unknown)}")
-    sanitized = {
-        key: value
-        if key in {"status", "action_state", "started_at", "completed_at"}
-        else _clean(value)
-        for key, value in fields.items()
-    }
+    sanitized = {}
+    for key, value in fields.items():
+        if key in {"status", "action_state", "started_at", "completed_at"}:
+            sanitized[key] = value
+        elif key in {"error_message", "warning_message"}:
+            sanitized[key] = _safe_error(value)
+        else:
+            sanitized[key] = _clean(value)
     sanitized["updated_at"] = now_iso()
     assignments = ", ".join(f"{key} = ?" for key in sanitized)
     values = [*sanitized.values(), operation_id]
@@ -161,6 +161,26 @@ def mark_reboot_sending(operation_id: int) -> bool:
             heartbeat_vps_lease(db, "SERVER", operation_id)
             return True
         return False
+
+
+def create_protocol_refresh_operation() -> int:
+    timestamp = now_iso()
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            """
+            INSERT INTO server_operations(
+                kind, status, current_step, action_state, created_at, updated_at
+            ) VALUES (
+                'STATUS', 'PENDING', 'queued_protocol_refresh',
+                'NOT_STARTED', ?, ?
+            )
+            """,
+            (timestamp, timestamp),
+        )
+        operation_id = int(cursor.lastrowid)
+        acquire_vps_lease(db, "SERVER", operation_id)
+        return operation_id
 
 
 def get_server_operation(operation_id: int) -> dict[str, Any] | None:
@@ -339,6 +359,65 @@ async def run_server_status(
             status="TIMED_OUT",
             current_step="timed_out",
             error_message="Aeza VPS status refresh timed out",
+            completed_at=now_iso(),
+        )
+    except Exception as exc:
+        update_server_operation(
+            operation_id,
+            status="FAILED",
+            current_step="failed",
+            error_message=_safe_error(exc),
+            completed_at=now_iso(),
+        )
+
+
+async def run_protocol_refresh(
+    operation_id: int,
+    *,
+    timing: ServerTiming | None = None,
+) -> None:
+    timing = timing or configured_server_timing()
+    operation = get_server_operation(operation_id)
+    if operation is None or operation["current_step"] != "queued_protocol_refresh":
+        return
+    try:
+        host = resolve_eu_host() or get_setting("current_ip")
+        if not host:
+            raise RuntimeError("VPN VPS host is not configured")
+        update_server_operation(
+            operation_id,
+            status="RUNNING",
+            current_step="protocol_health",
+            started_at=now_iso(),
+        )
+        protocols = await asyncio.wait_for(
+            refresh_protocol_statuses(
+                host,
+                command_timeout=timing.command_timeout,
+            ),
+            timeout=max(
+                0.01,
+                timing.command_timeout + timing.ssh_probe_timeout + 2,
+            ),
+        )
+        protocol_summary = [
+            {"key": item.get("key"), "status": item.get("status")}
+            for item in protocols
+        ]
+        update_server_operation(
+            operation_id,
+            status="DONE",
+            current_step="done",
+            protocol_health_json=_json(protocol_summary),
+            result_message="VPN protocol status refreshed",
+            completed_at=now_iso(),
+        )
+    except TimeoutError:
+        update_server_operation(
+            operation_id,
+            status="TIMED_OUT",
+            current_step="timed_out",
+            error_message="VPN protocol status refresh timed out",
             completed_at=now_iso(),
         )
     except Exception as exc:

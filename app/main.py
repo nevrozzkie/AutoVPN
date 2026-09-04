@@ -55,7 +55,11 @@ from app.eu_install import (
 )
 from app.ip_change import run_ip_change
 from app.operation_coordinator import OperationBusyError
-from app.protocol_status import get_client_protocol_statuses, get_protocol_statuses, refresh_protocol_statuses
+from app.protocol_status import (
+    get_client_protocol_statuses,
+    get_protocol_statuses,
+    refresh_transport_protocol_statuses,
+)
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -99,7 +103,9 @@ from app.security import (
     login_rate_limiter,
     verify_password,
 )
+from app.secret_sanitization import sanitize_error
 from app.server_operations import (
+    create_protocol_refresh_operation,
     create_server_operation,
     get_active_vps_operation,
     get_latest_server_operation,
@@ -107,6 +113,7 @@ from app.server_operations import (
     list_server_operations,
     run_server_reboot,
     run_server_status,
+    run_protocol_refresh,
 )
 from app.router_api import RouterApiError, router, router_api_error_response
 
@@ -1029,8 +1036,19 @@ def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(
         and latest_install_operation["status"] == "DONE"
         and latest_install_operation["target_host"] == target_host
     ):
-        background_tasks.add_task(refresh_protocol_statuses, current_ip)
+        try:
+            operation_id = create_protocol_refresh_operation()
+        except OperationBusyError:
+            return RedirectResponse(
+                "/admin?operation_busy=1",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        background_tasks.add_task(_run_protocol_refresh_background, operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+async def _run_protocol_refresh_background(operation_id: int) -> None:
+    await run_protocol_refresh(operation_id)
 
 
 @app.post("/admin/stats/refresh")
@@ -1043,7 +1061,10 @@ async def _refresh_stats_background() -> None:
     try:
         await refresh_client_stats()
     except Exception as exc:
-        set_setting("stats.last_error", str(exc)[-4000:])
+        set_setting(
+            "stats.last_error",
+            sanitize_error(exc, aeza_token(), eu_ssh_password()),
+        )
 
 
 @app.post("/admin/reset-server")
@@ -1101,7 +1122,12 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "current_ip": config.current_ip,
             "config_updated_at": config.config_updated_at,
             "protocols": get_client_protocol_statuses(),
-            "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
+            "protocol_status_available": bool(
+                get_setting("protocol.vless.last_checked_at")
+                or get_setting("protocol.vless.transport_last_checked_at")
+                or get_setting("protocol.hysteria_quic.transport_last_checked_at")
+                or get_setting("protocol.amnezia.transport_last_checked_at")
+            ),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
@@ -1125,7 +1151,7 @@ async def client_refresh_protocols(token: str) -> RedirectResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     current_ip = get_setting("current_ip")
     if current_ip:
-        await refresh_protocol_statuses(current_ip)
+        await refresh_transport_protocol_statuses(current_ip)
     return RedirectResponse(f"/client/{token}", status_code=status.HTTP_303_SEE_OTHER)
 
 

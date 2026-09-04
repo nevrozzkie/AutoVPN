@@ -115,3 +115,32 @@ async def test_deep_check_forwards_bounded_ssh_timeout(
         "stdin_data": "check-script",
         "timeout": 7.5,
     }
+
+
+@pytest.mark.anyio
+async def test_deep_check_uses_default_bounded_ssh_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    captured: list[float | None] = []
+
+    async def fake_remote_command(
+        host: str,
+        command: str,
+        stdin_data: str = "",
+        timeout: float | None = None,
+    ) -> tuple[int, str]:
+        captured.append(timeout)
+        return 0, "VLESS_DEEP=VERIFIED"
+
+    monkeypatch.setattr(deep_protocol_checks, "_first_enabled_client", lambda: {"id": 1})
+    monkeypatch.setattr(
+        deep_protocol_checks, "build_deep_check_script", lambda client, ip: "check-script"
+    )
+    monkeypatch.setattr(eu_install, "resolve_eu_host", lambda: "203.0.113.10")
+    monkeypatch.setattr(eu_install, "run_remote_command", fake_remote_command)
+
+    result = await deep_protocol_checks.run_deep_protocol_checks("203.0.113.10")
+
+    assert result["vless"].verified is True
+    assert captured and captured[0] is not None and captured[0] > 0

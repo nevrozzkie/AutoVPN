@@ -430,6 +430,13 @@
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
                 {% endif %}
+                {% if protocol.transport_last_checked_at %}
+                  <br><span class="muted">Транспорт: {{ protocol.transport_status|status_label }}</span>
+                  <br><span class="muted">Проверено снаружи: {{ protocol.transport_last_checked_at|msk }}</span>
+                  {% if protocol.transport_status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
+                    <br><span class="muted">Транспортная проверка не подтверждает VPN handshake или авторизацию.</span>
+                  {% endif %}
+                {% endif %}
                 {% if protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
                   {% if protocol.udp %}
                     <br><span class="muted">Это не проверяет handshake, SNI и авторизацию.</span>

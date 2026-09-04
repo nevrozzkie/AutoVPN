@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 from dataclasses import dataclass
 
 from app.config import settings
 from app.db import get_setting, list_clients
-from app.runtime_config import hysteria_port, vless_port
+from app.runtime_config import hysteria_port, server_command_timeout_seconds, vless_port
 from app.subscriptions import hysteria_auth
 from app.vpn_config import CapturedVpnConfig
 
@@ -45,18 +46,21 @@ async def run_deep_protocol_checks(
         script = build_deep_check_script(client, current_ip)
     else:
         script = build_deep_check_script(client, current_ip, config=config)
+    timeout = (
+        float(command_timeout)
+        if command_timeout is not None
+        else float(server_command_timeout_seconds())
+    )
     try:
-        if command_timeout is None:
-            exit_code, output = await run_remote_command(
-                host, "bash -s", stdin_data=script
-            )
-        else:
-            exit_code, output = await run_remote_command(
+        exit_code, output = await asyncio.wait_for(
+            run_remote_command(
                 host,
                 "bash -s",
                 stdin_data=script,
-                timeout=command_timeout,
-            )
+                timeout=timeout,
+            ),
+            timeout=max(0.01, timeout + 1),
+        )
     except Exception:
         return {}
     if exit_code != 0:

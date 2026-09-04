@@ -21,10 +21,12 @@ from app.runtime_config import (
     aeza_service_id,
     aeza_token,
     eu_ssh_port,
+    eu_ssh_password,
     server_command_timeout_seconds,
     server_ssh_probe_timeout_seconds,
     server_status_timeout_seconds,
 )
+from app.secret_sanitization import sanitize_error
 from app.vpn_config import CapturedVpnConfig
 from app.vpn_state import load_ip_change_snapshot, publish_ip_change
 
@@ -67,11 +69,12 @@ def _clean(value: object, limit: int = 1000) -> str:
 
 
 def _safe_error(exc: BaseException) -> str:
-    message = _clean(exc) or exc.__class__.__name__
-    token = aeza_token().strip()
-    if token:
-        message = message.replace(token, "[redacted]")
-    return message
+    return sanitize_error(
+        _clean(exc) or exc.__class__.__name__,
+        aeza_token().strip(),
+        eu_ssh_password(),
+        limit=1000,
+    )
 
 
 def _find_main_ip(ipv4_list: list[dict[str, Any]], current_ip: str) -> dict[str, Any]:

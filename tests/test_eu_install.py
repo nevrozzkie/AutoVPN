@@ -159,3 +159,25 @@ async def test_run_remote_command_passes_bounded_timeout_to_ssh_helper(
         "stdin_data": "",
         "command_timeout": 2.5,
     }
+
+
+@pytest.mark.anyio
+async def test_run_remote_command_has_bounded_default_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    captured: list[float | None] = []
+
+    def fake_ssh_exec(
+        host: str,
+        command: str,
+        stdin_data: str = "",
+        command_timeout: float | None = None,
+    ) -> tuple[int, str]:
+        captured.append(command_timeout)
+        return 0, "ok"
+
+    monkeypatch.setattr(eu_install, "_ssh_exec", fake_ssh_exec)
+
+    assert await run_remote_command("203.0.113.10", "true") == (0, "ok")
+    assert captured and captured[0] is not None and captured[0] > 0
