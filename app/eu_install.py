@@ -14,6 +14,7 @@ from typing import Any
 from app.amnezia import render_amnezia_server_config
 from app.db import (
     get_setting,
+    heartbeat_install_operation,
     update_install_operation,
 )
 from app.runtime_config import (
@@ -25,6 +26,8 @@ from app.runtime_config import (
     ssh_connect_timeout_seconds,
     server_command_timeout_seconds,
     transactional_vpn_apply_enabled,
+    vpn_deploy_timeout_seconds,
+    vpn_lease_heartbeat_seconds,
 )
 from app.protocol_status import refresh_protocol_statuses
 from app.remote_apply import (
@@ -37,10 +40,15 @@ from app.vpn_state import (
     complete_install_operation,
     fail_install_operation,
     load_install_snapshot,
+    mark_install_operation_ambiguous,
 )
 
 
 class EuInstallError(RuntimeError):
+    pass
+
+
+class EuInstallStateUncertainError(EuInstallError):
     pass
 
 
@@ -668,8 +676,62 @@ def _ssh_exec(
     raise EuInstallError(_format_ssh_error(host, last_exc or RuntimeError("unknown SSH error")))
 
 
-def _run_script_over_ssh(host: str, script: str) -> tuple[int, str]:
-    return _ssh_exec(host, "bash -s", script)
+def _run_script_over_ssh(
+    host: str,
+    script: str,
+    timeout: float | None = None,
+) -> tuple[int, str]:
+    return _ssh_exec(host, "bash -s", script, command_timeout=timeout)
+
+
+async def _run_script_over_ssh_async(
+    host: str,
+    script: str,
+    timeout: float,
+) -> tuple[int, str]:
+    return await asyncio.to_thread(_run_script_over_ssh, host, script, timeout)
+
+
+async def _run_deploy_with_heartbeat(
+    operation_id: int,
+    host: str,
+    script: str,
+    *,
+    timeout: float,
+    heartbeat_interval: float,
+) -> tuple[int, str]:
+    timeout = max(0.01, float(timeout))
+    heartbeat_interval = max(0.01, min(float(heartbeat_interval), timeout))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    task = asyncio.create_task(_run_script_over_ssh_async(host, script, timeout))
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise EuInstallStateUncertainError(
+                    f"Remote VPN deployment timed out after {timeout:g} seconds; "
+                    "the VPS state requires manual verification"
+                )
+            done, _ = await asyncio.wait(
+                {task}, timeout=min(heartbeat_interval, remaining)
+            )
+            if task in done:
+                return task.result()
+            if loop.time() >= deadline:
+                raise EuInstallStateUncertainError(
+                    f"Remote VPN deployment timed out after {timeout:g} seconds; "
+                    "the VPS state requires manual verification"
+                )
+            if not heartbeat_install_operation(operation_id):
+                raise EuInstallStateUncertainError(
+                    "Remote VPN deployment lost its durable VPS lease; "
+                    "the VPS state requires manual verification"
+                )
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 async def run_remote_command(
@@ -712,7 +774,13 @@ async def run_eu_install(operation_id: int) -> None:
                 "xray, hysteria and amneziawg are installed."
             ),
         )
-        exit_code, output = await asyncio.to_thread(_run_script_over_ssh, host, script)
+        exit_code, output = await _run_deploy_with_heartbeat(
+            operation_id,
+            host,
+            script,
+            timeout=float(vpn_deploy_timeout_seconds()),
+            heartbeat_interval=float(vpn_lease_heartbeat_seconds()),
+        )
         output_tail = output[-12000:]
         if exit_code != 0:
             raise EuInstallError(
@@ -720,6 +788,12 @@ async def run_eu_install(operation_id: int) -> None:
             )
         await refresh_protocol_statuses(host)
         complete_install_operation(operation_id, output_tail)
+    except EuInstallStateUncertainError as exc:
+        mark_install_operation_ambiguous(
+            operation_id,
+            sanitize_error(exc, eu_ssh_password(), limit=12000),
+        )
+        raise
     except Exception as exc:
         fail_install_operation(
             operation_id,

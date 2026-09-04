@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import threading
+import time
 
 import pytest
 
+import app.db as db_module
 import app.operation_coordinator as coordinator
 from app.db import (
     create_operation,
     fail_incomplete_install_operations,
     get_db,
     init_db,
+    reset_server_and_aeza_state,
     update_operation,
 )
 from app.operation_coordinator import (
@@ -58,6 +63,67 @@ def test_install_and_ip_operations_are_mutually_exclusive() -> None:
 
     update_operation(ip_operation_id, status="FAILED", current_step="failed")
     assert prepare_install_operation("203.0.113.10").operation_id > install.operation_id
+
+
+def test_reset_refuses_active_operation_without_deleting_worker_state() -> None:
+    init_db()
+    prepared = prepare_install_operation("203.0.113.10")
+
+    with pytest.raises(OperationBusyError):
+        reset_server_and_aeza_state()
+
+    with get_db() as db:
+        assert db.execute(
+            "SELECT status FROM vpn_install_operations WHERE id = ?",
+            (prepared.operation_id,),
+        ).fetchone()["status"] == "PENDING"
+        assert db.execute(
+            "SELECT owner_type, owner_id FROM operation_leases"
+        ).fetchone() == {
+            "owner_type": "INSTALL",
+            "owner_id": prepared.operation_id,
+        }
+
+
+def test_reset_and_create_are_serialized_without_orphaning_new_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    reset_has_lock = threading.Event()
+    allow_reset = threading.Event()
+    create_started = threading.Event()
+    real_clear = db_module._clear_server_and_aeza_state
+
+    def paused_clear(connection):
+        reset_has_lock.set()
+        assert allow_reset.wait(timeout=2)
+        real_clear(connection)
+
+    def create_after_reset_started():
+        create_started.set()
+        return prepare_install_operation("203.0.113.10")
+
+    monkeypatch.setattr(db_module, "_clear_server_and_aeza_state", paused_clear)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reset_future = executor.submit(reset_server_and_aeza_state)
+        assert reset_has_lock.wait(timeout=1)
+        create_future = executor.submit(create_after_reset_started)
+        assert create_started.wait(timeout=1)
+        time.sleep(0.05)
+        assert not create_future.done()
+        allow_reset.set()
+        reset_future.result(timeout=2)
+        prepared = create_future.result(timeout=2)
+
+    with get_db() as db:
+        operations = db.execute(
+            "SELECT id, status FROM vpn_install_operations"
+        ).fetchall()
+        lease = db.execute(
+            "SELECT owner_type, owner_id FROM operation_leases WHERE resource = 'vpn_vps'"
+        ).fetchone()
+    assert operations == [{"id": prepared.operation_id, "status": "PENDING"}]
+    assert lease == {"owner_type": "INSTALL", "owner_id": prepared.operation_id}
 
 
 def test_release_only_succeeds_for_current_owner() -> None:

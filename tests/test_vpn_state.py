@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 import hashlib
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.eu_install as eu_install
+import app.operation_coordinator as operation_coordinator
 import app.main as main
 from app.db import (
     create_client,
@@ -46,7 +49,9 @@ def _install_fakes(
     exit_code: int = 0,
     scripts: list[str] | None = None,
 ) -> None:
-    def fake_run(host: str, script: str) -> tuple[int, str]:
+    def fake_run(
+        host: str, script: str, timeout: float | None = None
+    ) -> tuple[int, str]:
         if scripts is not None:
             scripts.append(script)
         return exit_code, "fake ssh output"
@@ -56,6 +61,82 @@ def _install_fakes(
 
     monkeypatch.setattr(eu_install, "_run_script_over_ssh", fake_run)
     monkeypatch.setattr(eu_install, "refresh_protocol_statuses", fake_refresh)
+
+
+@pytest.mark.anyio
+async def test_hung_remote_deploy_heartbeats_then_finishes_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    set_setting("current_ip", "203.0.113.10")
+    create_client("Alice")
+    prepared = prepare_install_operation("203.0.113.10")
+    with get_db() as db:
+        initial_expiry = db.execute(
+            "SELECT expires_at FROM operation_leases WHERE resource = 'vpn_vps'"
+        ).fetchone()["expires_at"]
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    heartbeat_count = 0
+
+    async def hanging_deploy(host: str, script: str, timeout: float):
+        assert host == "203.0.113.10"
+        assert timeout == 0.12
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    real_heartbeat = eu_install.heartbeat_install_operation
+
+    def recording_heartbeat(operation_id: int) -> bool:
+        nonlocal heartbeat_count
+        heartbeat_count += 1
+        return real_heartbeat(operation_id)
+
+    monkeypatch.setattr(eu_install, "_run_script_over_ssh_async", hanging_deploy)
+    monkeypatch.setattr(eu_install, "heartbeat_install_operation", recording_heartbeat)
+    monkeypatch.setattr(eu_install, "vpn_deploy_timeout_seconds", lambda: 0.12)
+    monkeypatch.setattr(eu_install, "vpn_lease_heartbeat_seconds", lambda: 0.02)
+    monkeypatch.setattr(
+        operation_coordinator,
+        "_now",
+        lambda: datetime.now(UTC) + timedelta(minutes=30),
+    )
+
+    install_task = asyncio.create_task(run_eu_install(prepared.operation_id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    while heartbeat_count == 0:
+        await asyncio.sleep(0.005)
+
+    with get_db() as db:
+        operation = db.execute(
+            "SELECT status FROM vpn_install_operations WHERE id = ?",
+            (prepared.operation_id,),
+        ).fetchone()
+        lease = db.execute(
+            "SELECT owner_type, owner_id, expires_at FROM operation_leases "
+            "WHERE resource = 'vpn_vps'"
+        ).fetchone()
+    assert operation["status"] == "RUNNING"
+    assert lease["owner_type"] == "INSTALL"
+    assert lease["owner_id"] == prepared.operation_id
+    assert lease["expires_at"] > initial_expiry
+
+    with pytest.raises(eu_install.EuInstallStateUncertainError, match="timed out"):
+        await install_task
+
+    assert cancelled.is_set()
+    assert heartbeat_count >= 1
+    with get_db() as db:
+        operation = db.execute(
+            "SELECT status, current_step FROM vpn_install_operations WHERE id = ?",
+            (prepared.operation_id,),
+        ).fetchone()
+        assert operation == {"status": "AMBIGUOUS", "current_step": "ambiguous"}
+        assert db.execute("SELECT 1 FROM operation_leases").fetchone() is None
+    assert get_vpn_snapshot(prepared.revision)["lifecycle"] == "FAILED"
 
 
 def test_vpn_mutations_advance_desired_revision_once_each() -> None:

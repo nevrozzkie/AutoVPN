@@ -251,6 +251,7 @@ STEP_LABELS = {
     "wait_provider": "ожидание статуса Aeza",
     "wait_ssh": "ожидание SSH",
     "timed_out": "истёк таймаут",
+    "ambiguous": "требуется ручная проверка",
     "manual_verification_required": "нужна ручная проверка",
     "verification_complete": "проверка завершена",
 }
@@ -1083,16 +1084,13 @@ async def _refresh_stats_background() -> None:
 
 @app.post("/admin/reset-server")
 def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
-    if (
-        has_running_operation()
-        or has_running_install_operation()
-        or get_active_vps_operation() is not None
-    ):
+    try:
+        reset_server_and_aeza_state()
+    except OperationBusyError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot reset server settings while an operation is running",
         )
-    reset_server_and_aeza_state()
     return RedirectResponse("/admin/setup", status_code=status.HTTP_303_SEE_OTHER)
 
 

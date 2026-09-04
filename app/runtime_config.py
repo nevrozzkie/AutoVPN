@@ -143,6 +143,14 @@ def server_command_timeout_seconds() -> int:
     return config_int("server_command_timeout_seconds", 30)
 
 
+def vpn_deploy_timeout_seconds() -> int:
+    return config_int("vpn_deploy_timeout_seconds", 1800)
+
+
+def vpn_lease_heartbeat_seconds() -> int:
+    return config_int("vpn_lease_heartbeat_seconds", 30)
+
+
 def transactional_vpn_apply_enabled() -> bool:
     return config_bool(
         "enable_transactional_vpn_apply", settings.enable_transactional_vpn_apply

@@ -378,6 +378,8 @@ write_env_file() {
     env_line EU_SSH_KEY_PATH "$eu_ssh_key_path"
     env_line EU_SSH_PASSWORD "$eu_ssh_password"
     env_line SSH_CONNECT_TIMEOUT_SECONDS "15"
+    env_line VPN_DEPLOY_TIMEOUT_SECONDS "1800"
+    env_line VPN_LEASE_HEARTBEAT_SECONDS "30"
     echo
     env_line VLESS_PORT "443"
     env_line HYSTERIA_PORT "8443"

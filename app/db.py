@@ -19,6 +19,8 @@ from app.amnezia import (
 from app.config import settings
 from app.migrations import migrate_database
 from app.operation_coordinator import (
+    LeaseOwner,
+    OperationBusyError,
     TERMINAL_STATUSES,
     acquire_vps_lease,
     heartbeat_vps_lease,
@@ -688,45 +690,84 @@ def update_install_operation(operation_id: int, **fields: Any) -> None:
             heartbeat_vps_lease(db, "INSTALL", operation_id)
 
 
+def heartbeat_install_operation(operation_id: int) -> bool:
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        operation = db.execute(
+            "SELECT status FROM vpn_install_operations WHERE id = ?",
+            (operation_id,),
+        ).fetchone()
+        if operation is None or operation["status"] not in {"PENDING", "RUNNING"}:
+            return False
+        return heartbeat_vps_lease(db, "INSTALL", operation_id)
+
+
+def _active_operation_owner(db: sqlite3.Connection) -> LeaseOwner | None:
+    lease = db.execute(
+        "SELECT owner_type, owner_id FROM operation_leases WHERE resource = 'vpn_vps'"
+    ).fetchone()
+    if lease:
+        return LeaseOwner(str(lease["owner_type"]), int(lease["owner_id"]))
+    for table, owner_type in (
+        ("vpn_install_operations", "INSTALL"),
+        ("ip_change_operations", "IP_CHANGE"),
+        ("server_operations", "SERVER"),
+    ):
+        operation = db.execute(
+            f"SELECT id FROM {table} WHERE status IN ('PENDING', 'RUNNING') "
+            "ORDER BY id LIMIT 1"
+        ).fetchone()
+        if operation:
+            return LeaseOwner(owner_type, int(operation["id"]))
+    return None
+
+
+def _clear_server_and_aeza_state(db: sqlite3.Connection) -> None:
+    vpn_changed = db.execute(
+        """
+        SELECT 1 FROM settings
+        WHERE (key = 'current_ip' AND value != '')
+           OR key LIKE 'config.vless_%'
+           OR key LIKE 'config.hysteria_%'
+           OR key LIKE 'config.amnezia_%'
+        LIMIT 1
+        """
+    ).fetchone() is not None
+    db.execute(
+        """
+        DELETE FROM settings
+        WHERE key IN (
+            'current_ip',
+            'last_healthcheck_status',
+            'ssh.known_host_reset_last_output',
+            'stats.last_refresh_at',
+            'stats.last_error'
+        )
+        OR key LIKE 'config.eu_%'
+        OR key LIKE 'config.aeza_%'
+        OR key LIKE 'protocol.%'
+        """
+    )
+    db.execute("DELETE FROM ip_change_operations")
+    db.execute("DELETE FROM vpn_install_operations")
+    db.execute("DELETE FROM server_operations")
+    db.execute("DELETE FROM client_stats")
+    db.execute(
+        "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+        ("current_ip", ""),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+        ("last_healthcheck_status", "UNKNOWN"),
+    )
+    if vpn_changed:
+        _mark_vpn_config_updated(db)
+
+
 def reset_server_and_aeza_state() -> None:
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        vpn_changed = db.execute(
-            """
-            SELECT 1 FROM settings
-            WHERE (key = 'current_ip' AND value != '')
-               OR key LIKE 'config.vless_%'
-               OR key LIKE 'config.hysteria_%'
-               OR key LIKE 'config.amnezia_%'
-            LIMIT 1
-            """
-        ).fetchone() is not None
-        db.execute(
-            """
-            DELETE FROM settings
-            WHERE key IN (
-                'current_ip',
-                'last_healthcheck_status',
-                'ssh.known_host_reset_last_output',
-                'stats.last_refresh_at',
-                'stats.last_error'
-            )
-            OR key LIKE 'config.eu_%'
-            OR key LIKE 'config.aeza_%'
-            OR key LIKE 'protocol.%'
-            """
-        )
-        db.execute("DELETE FROM ip_change_operations")
-        db.execute("DELETE FROM vpn_install_operations")
-        db.execute("DELETE FROM server_operations")
-        db.execute("DELETE FROM client_stats")
-        db.execute(
-            "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
-            ("current_ip", ""),
-        )
-        db.execute(
-            "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
-            ("last_healthcheck_status", "UNKNOWN"),
-        )
-        if vpn_changed:
-            _mark_vpn_config_updated(db)
+        owner = _active_operation_owner(db)
+        if owner is not None:
+            raise OperationBusyError(owner)
+        _clear_server_and_aeza_state(db)

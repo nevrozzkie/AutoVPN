@@ -304,6 +304,12 @@ Transactional install и безопасная ротация IP использу
 rollback файлов и предыдущих enabled/active состояний; staging удаляется. Вывод validation-команд
 подавляется, чтобы конфиги и секреты не попадали в журнал операции.
 
+Ожидание SSH deploy ограничено `VPN_DEPLOY_TIMEOUT_SECONDS` (по умолчанию 1800 секунд).
+Пока удалённая команда выполняется, AutoVPN продлевает принадлежащий install operation общий
+VPS lease каждые `VPN_LEASE_HEARTBEAT_SECONDS` (по умолчанию 30 секунд). Потеря lease или
+превышение timeout отменяет локальное ожидание и завершает operation как `AMBIGUOUS`: applied
+revision не продвигается, а состояние VPS нужно проверить вручную перед повтором.
+
 Перед switch создаётся приватный versioned backup вне staging:
 `/var/lib/autovpn/config-backups/revision-...`. `manifest.ready` публикуется через rename только
 после записи manifest, успешный apply оставляет marker `APPLIED`, rollback — `ROLLED_BACK`.
@@ -600,6 +606,8 @@ SERVER_REBOOT_TIMEOUT_SECONDS=300
 SERVER_POLL_INTERVAL_SECONDS=5
 SERVER_SSH_PROBE_TIMEOUT_SECONDS=5
 SERVER_COMMAND_TIMEOUT_SECONDS=30
+VPN_DEPLOY_TIMEOUT_SECONDS=1800
+VPN_LEASE_HEARTBEAT_SECONDS=30
 
 # Default OFF: staged transactional install/config apply
 ENABLE_TRANSACTIONAL_VPN_APPLY=0

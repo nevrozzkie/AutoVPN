@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.db import create_client, get_db, get_setting, init_db, set_setting
 from app.security import hash_password
+from app.vpn_state import prepare_install_operation
 
 
 def _admin_client(*, raise_server_exceptions: bool = True) -> TestClient:
@@ -159,6 +160,28 @@ def test_setup_database_failure_rolls_back_the_whole_settings_update() -> None:
     assert response.status_code == 500
     assert response.text == "Internal Server Error"
     assert _settings_snapshot() == before
+
+
+def test_reset_route_atomically_refuses_active_vps_operation() -> None:
+    client = _admin_client()
+    prepared = prepare_install_operation("203.0.113.10")
+
+    response = client.post(
+        "/admin/reset-server",
+        auth=("admin", "old-password"),
+        headers={"Origin": "http://panel.local"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    with get_db() as connection:
+        assert connection.execute(
+            "SELECT status FROM vpn_install_operations WHERE id = ?",
+            (prepared.operation_id,),
+        ).fetchone()["status"] == "PENDING"
+        assert connection.execute(
+            "SELECT owner_id FROM operation_leases WHERE owner_type = 'INSTALL'"
+        ).fetchone()["owner_id"] == prepared.operation_id
 
 
 def test_admin_ip_get_is_read_only_when_aeza_main_ip_differs(monkeypatch) -> None:

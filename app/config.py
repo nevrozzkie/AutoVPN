@@ -53,6 +53,10 @@ class Settings:
         "SERVER_SSH_PROBE_TIMEOUT_SECONDS", 5
     )
     server_command_timeout_seconds: int = _get_int("SERVER_COMMAND_TIMEOUT_SECONDS", 30)
+    vpn_deploy_timeout_seconds: int = _get_int("VPN_DEPLOY_TIMEOUT_SECONDS", 1800)
+    vpn_lease_heartbeat_seconds: int = _get_int(
+        "VPN_LEASE_HEARTBEAT_SECONDS", 30
+    )
     enable_transactional_vpn_apply: bool = _get_bool(
         "ENABLE_TRANSACTIONAL_VPN_APPLY"
     )

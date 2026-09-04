@@ -242,7 +242,9 @@ async def test_transactional_install_uses_only_bound_immutable_snapshot(
     scripts: list[str] = []
     updates: list[dict[str, object]] = []
 
-    def fake_run(host: str, script: str) -> tuple[int, str]:
+    def fake_run(
+        host: str, script: str, timeout: float | None = None
+    ) -> tuple[int, str]:
         scripts.append(script)
         return 0, "apply ok"
 

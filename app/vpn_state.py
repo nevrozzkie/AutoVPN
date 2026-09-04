@@ -378,6 +378,34 @@ def fail_install_operation(operation_id: int, error_message: str) -> None:
         release_vps_lease(db, "INSTALL", operation_id)
 
 
+def mark_install_operation_ambiguous(operation_id: int, error_message: str) -> None:
+    timestamp = now_iso()
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        operation = db.execute(
+            "SELECT revision FROM vpn_install_operations WHERE id = ?", (operation_id,)
+        ).fetchone()
+        if operation and operation["revision"] is not None:
+            db.execute(
+                """
+                UPDATE vpn_snapshots
+                SET lifecycle = 'FAILED', failed_at = ?, error_message = ?
+                WHERE revision = ? AND lifecycle != 'APPLIED'
+                """,
+                (timestamp, error_message, operation["revision"]),
+            )
+        db.execute(
+            """
+            UPDATE vpn_install_operations
+            SET status = 'AMBIGUOUS', current_step = 'ambiguous', error_message = ?,
+                updated_at = ?
+            WHERE id = ? AND status IN ('PENDING', 'RUNNING')
+            """,
+            (error_message, timestamp, operation_id),
+        )
+        release_vps_lease(db, "INSTALL", operation_id)
+
+
 def get_vpn_snapshot(revision: int) -> dict[str, Any] | None:
     with get_db() as db:
         return db.execute(
