@@ -17,6 +17,16 @@ from app.router_credentials import (
     RouterAuthenticationFailure,
     authenticate_router_credential,
 )
+from app.router_apply_results import (
+    APPLY_RESULT_MAX_BODY_BYTES,
+    RouterApplyConflictError,
+    RouterApplyValidationError,
+    StoredRouterApplyResult,
+    find_router_apply_result_replay,
+    record_router_apply_result,
+    validate_idempotency_key,
+    validate_router_apply_result,
+)
 from app.vpn_config import CapturedVpnConfig, VpnClient, captured_vpn_config_from_json
 
 
@@ -300,10 +310,10 @@ def response_etag(payload: dict[str, Any]) -> str:
     return f'"{hashlib.sha256(canonical_json_bytes(payload)).hexdigest()}"'
 
 
-@router.get("/snapshot")
-def router_snapshot(request: Request) -> Response:
-    credential = authorize_router(request, "snapshot:read")
-    snapshot, config, published_at = _load_applied_snapshot()
+def _client_from_applied_snapshot(
+    credential: AuthenticatedRouterCredential,
+    config: CapturedVpnConfig,
+) -> VpnClient:
     client = next(
         (candidate for candidate in config.enabled_clients if candidate.id == credential.client_id),
         None,
@@ -314,6 +324,80 @@ def router_snapshot(request: Request) -> Response:
             "client_not_applied",
             "Router credential client is not present in the applied snapshot",
         )
+    return client
+
+
+def _duplicate_rejecting_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RouterApplyValidationError("JSON object contains a duplicate key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_: str) -> None:
+    raise RouterApplyValidationError("JSON contains a non-finite number")
+
+
+async def _read_apply_result_body(request: Request) -> bytes:
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise RouterApiError(415, "unsupported_media_type", "Content-Type must be application/json")
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            raise RouterApiError(400, "invalid_header", "Content-Length is invalid") from None
+        if declared_length < 0:
+            raise RouterApiError(400, "invalid_header", "Content-Length is invalid")
+        if declared_length > APPLY_RESULT_MAX_BODY_BYTES:
+            raise RouterApiError(413, "body_too_large", "Request body is too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > APPLY_RESULT_MAX_BODY_BYTES:
+            raise RouterApiError(413, "body_too_large", "Request body is too large")
+    if not body:
+        raise RouterApiError(400, "invalid_json", "Request body must contain JSON")
+    return bytes(body)
+
+
+def _parse_apply_result_json(body: bytes) -> Any:
+    try:
+        return json.loads(
+            body,
+            object_pairs_hook=_duplicate_rejecting_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, RouterApplyValidationError) as exc:
+        if isinstance(exc, RouterApplyValidationError):
+            message = str(exc)
+        else:
+            message = "Request body is not valid JSON"
+        raise RouterApiError(400, "invalid_json", message) from None
+
+
+def _apply_result_response(result: StoredRouterApplyResult) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "result_id": result.id,
+        "idempotency_key": result.idempotency_key,
+        "revision": result.revision,
+        "snapshot_sha256": result.snapshot_sha256,
+        "outcome": result.outcome,
+        "active_profile": result.active_profile,
+        "accepted_at": result.created_at,
+        "replayed": result.replayed,
+    }
+
+
+@router.get("/snapshot")
+def router_snapshot(request: Request) -> Response:
+    credential = authorize_router(request, "snapshot:read")
+    snapshot, config, published_at = _load_applied_snapshot()
+    client = _client_from_applied_snapshot(credential, config)
     if not config.current_ip:
         raise RouterApiError(
             503,
@@ -333,4 +417,114 @@ def router_snapshot(request: Request) -> Response:
         content=canonical_json_bytes(payload),
         media_type="application/json",
         headers=headers,
+    )
+
+
+@router.put("/apply-results/{idempotency_key}")
+async def router_apply_result(request: Request, idempotency_key: str) -> Response:
+    credential = authorize_router(request, "apply:write")
+    try:
+        validated_key = validate_idempotency_key(idempotency_key)
+    except RouterApplyValidationError as exc:
+        raise RouterApiError(400, "invalid_idempotency_key", str(exc)) from None
+    if_match = request.headers.get("if-match", "")
+    if len(if_match) > MAX_CONDITIONAL_HEADER:
+        raise RouterApiError(400, "invalid_header", "Conditional header is too long")
+    if not if_match:
+        snapshot, _, _ = _load_applied_snapshot()
+        raise RouterApiError(
+            428,
+            "if_match_required",
+            "If-Match for the applied router snapshot is required",
+            extra={"current_applied_revision": int(snapshot["revision"])},
+        )
+    raw_body = await _read_apply_result_body(request)
+    parsed = _parse_apply_result_json(raw_body)
+    try:
+        result = validate_router_apply_result(parsed)
+    except RouterApplyValidationError as exc:
+        raise RouterApiError(400, "invalid_apply_result", str(exc)) from None
+    try:
+        replay = find_router_apply_result_replay(
+            credential.credential_id, validated_key, result, if_match
+        )
+    except RouterApplyConflictError as exc:
+        snapshot, _, _ = _load_applied_snapshot()
+        if exc.code == "etag_mismatch":
+            raise RouterApiError(
+                412,
+                "etag_mismatch",
+                "If-Match does not match the original idempotent result",
+                extra={"current_applied_revision": int(snapshot["revision"])},
+            ) from None
+        raise RouterApiError(
+            409,
+            "idempotency_conflict",
+            "Idempotency key was already used for a different apply result",
+            extra={"current_applied_revision": int(snapshot["revision"])},
+        ) from None
+    if replay is not None:
+        return Response(
+            content=canonical_json_bytes(_apply_result_response(replay)),
+            media_type="application/json",
+            headers={**API_RESPONSE_HEADERS, "ETag": replay.snapshot_etag},
+        )
+
+    snapshot, config, published_at = _load_applied_snapshot()
+    client = _client_from_applied_snapshot(credential, config)
+    snapshot_payload = build_router_snapshot_response(
+        snapshot, config, client, published_at
+    )
+    current_etag = response_etag(snapshot_payload)
+    if not hmac.compare_digest(if_match, current_etag):
+        raise RouterApiError(
+            412,
+            "etag_mismatch",
+            "If-Match does not match the applied router snapshot",
+            extra={"current_applied_revision": int(snapshot["revision"])},
+        )
+    if (
+        result.revision != int(snapshot["revision"])
+        or result.snapshot_sha256 != snapshot["payload_sha256"]
+    ):
+        raise RouterApiError(
+            409,
+            "snapshot_conflict",
+            "Apply result does not reference the current applied snapshot",
+            extra={"current_applied_revision": int(snapshot["revision"])},
+        )
+    try:
+        stored = record_router_apply_result(
+            credential.credential_id, validated_key, result, current_etag
+        )
+    except RouterApplyConflictError as exc:
+        if exc.code == "snapshot_not_ready":
+            raise RouterApiError(
+                503,
+                "snapshot_not_ready",
+                "No applied VPN snapshot is available",
+                {"Retry-After": "30"},
+            ) from None
+        if exc.code == "etag_mismatch":
+            raise RouterApiError(
+                412,
+                "etag_mismatch",
+                "If-Match does not match the original idempotent result",
+                extra={"current_applied_revision": exc.current_applied_revision},
+            ) from None
+        message = (
+            "Idempotency key was already used for a different apply result"
+            if exc.code == "idempotency_conflict"
+            else "Applied VPN snapshot changed while accepting the result"
+        )
+        raise RouterApiError(
+            409,
+            exc.code,
+            message,
+            extra={"current_applied_revision": exc.current_applied_revision},
+        ) from None
+    return Response(
+        content=canonical_json_bytes(_apply_result_response(stored)),
+        media_type="application/json",
+        headers={**API_RESPONSE_HEADERS, "ETag": current_etag},
     )

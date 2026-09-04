@@ -272,6 +272,93 @@ rollback файлов и предыдущих enabled/active состояний;
 проверки не считается доказанным атомарным rollback на всех целевых дистрибутивах. Firewall rules
 по-прежнему добавляются best-effort и не удаляются rollback-контуром.
 
+### Router API v2 (по feature flag)
+
+Versioned API предназначен для будущего OpenWrt-контроллера и по умолчанию выключен. До
+интеграционного теста на Cudy WR3000S v1 оставьте `ENABLE_ROUTER_API=0`; при выключенном флаге
+все `/api/v2/router/*` отвечают `404`. API не обращается к Aeza и не запускает SSH-команды.
+
+Router credential не связан с legacy token из `/client/{token}` и `/sub/{token}`. Он имеет
+свои scopes и привязан к одному client id. В SQLite хранится только SHA-256 digest случайного
+секрета; полный Bearer token печатается ровно при issue или успешном rotate. Пример выдачи:
+
+```bash
+export DATABASE_PATH=/var/lib/autovpn/autovpn.sqlite3
+python -m app.router_credentials_cli issue \
+  --client-id 7 \
+  --label 'Cudy WR3000S' \
+  --scope snapshot:read \
+  --scope apply:write
+```
+
+Сохраните строку `token=avrt_...` сразу в защищённое хранилище роутера. Повторно получить
+секрет нельзя. Метаданные без digest/секрета, отзыв и замена действующего credential:
+
+```bash
+python -m app.router_credentials_cli list
+python -m app.router_credentials_cli revoke CREDENTIAL_ID
+python -m app.router_credentials_cli rotate CREDENTIAL_ID
+```
+
+Отозванный или истёкший credential нельзя оживить через rotate: выдайте новый credential.
+Операции credential и apply-result не меняют VPN desired revision.
+
+`GET /api/v2/router/snapshot` принимает `Authorization: Bearer ...` со scope `snapshot:read`.
+Он отдаёт только данные привязанного клиента из immutable `applied_revision`: VLESS REALITY и
+Hysteria2 представлены только outbound-фрагментами без TUN/DNS/global routing, AmneziaWG —
+структурированным профилем с `install_routes=false`. Полный legacy Amnezia import key явно
+назван отдельным полем и относится только к этому клиенту. Desired/live-конфигурация API не
+подмешивается. До первого подтверждённого apply ответ — `503 snapshot_not_ready`; если клиента
+нет в applied snapshot — `409 client_not_applied`.
+
+```bash
+curl -i \
+  -H 'Authorization: Bearer avrt_EXAMPLE.REDACTED_ONE_TIME_SECRET' \
+  https://panel.example/api/v2/router/snapshot
+```
+
+Ответ содержит `ETag`; точный `If-None-Match` возвращает пустой `304`. Все ответы API имеют
+`Cache-Control: private, no-store` и `Referrer-Policy: no-referrer`.
+
+`PUT /api/v2/router/apply-results/{idempotency_key}` требует scope `apply:write` и точный
+`If-Match` от полученного snapshot. JSON schema v1 принимает outcome `APPLIED`, `DEGRADED` или
+`FAILED`, active profile, ровно пять boolean capabilities (`vless`, `hysteria2`, `amneziawg`,
+`zapret`, `policy_routing`) и небольшой bounded diagnostics object:
+
+```bash
+curl -X PUT \
+  -H 'Authorization: Bearer avrt_EXAMPLE.REDACTED_ONE_TIME_SECRET' \
+  -H 'Content-Type: application/json' \
+  -H 'If-Match: "EXAMPLE_SNAPSHOT_ETAG"' \
+  --data '{
+    "schema_version": 1,
+    "revision": 42,
+    "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "APPLIED",
+    "active_profile": "vless-reality",
+    "capabilities": {
+      "vless": true,
+      "hysteria2": true,
+      "amneziawg": true,
+      "zapret": false,
+      "policy_routing": true
+    },
+    "diagnostics": {"firmware": "OpenWrt 24.10", "latency_ms": 18}
+  }' \
+  https://panel.example/api/v2/router/apply-results/boot-0001
+```
+
+Одинаковые idempotency key, каноническое body и исходный ETag возвращают тот же result без
+дубликата даже после появления новой applied revision. Новый stale result отклоняется; повтор
+key с другим body получает `409`. Diagnostics ограничены по размеру/глубине и не принимают
+control characters, HTML или значения/ключи, похожие на token/password/private key.
+Read-only просмотр безопасно сохранённых результатов:
+
+```bash
+python -m app.router_credentials_cli results --limit 20
+python -m app.router_credentials_cli result RESULT_ID
+```
+
 ## Первичная настройка через сайт
 
 Если пароль админки ещё не задан, AutoVPN открывает `/admin/setup` без Basic Auth.
@@ -477,6 +564,9 @@ ENABLE_TRANSACTIONAL_VPN_APPLY=0
 
 # Default OFF: durable Aeza IP rotation; requires transactional apply canary first
 ENABLE_SAFE_AEZA_IP_ROTATION=0
+
+# Default OFF: versioned OpenWrt router API
+ENABLE_ROUTER_API=0
 ```
 
 Если значения заданы через `/admin/setup`, они хранятся в SQLite как `config.*` и имеют приоритет в runtime.

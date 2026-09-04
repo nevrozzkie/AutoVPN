@@ -287,6 +287,48 @@ def _apply_router_credentials(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_router_apply_results(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS router_apply_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            credential_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL
+                CHECK (length(idempotency_key) BETWEEN 1 AND 128),
+            body_sha256 TEXT NOT NULL CHECK (length(body_sha256) = 64),
+            revision INTEGER NOT NULL,
+            snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+            snapshot_etag TEXT NOT NULL CHECK (length(snapshot_etag) = 66),
+            outcome TEXT NOT NULL
+                CHECK (outcome IN ('APPLIED', 'DEGRADED', 'FAILED')),
+            active_profile TEXT,
+            capabilities_json TEXT NOT NULL
+                CHECK (length(capabilities_json) <= 4096),
+            diagnostics_json TEXT NOT NULL
+                CHECK (length(diagnostics_json) <= 8192),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(credential_id)
+                REFERENCES router_credentials(credential_id) ON DELETE CASCADE,
+            FOREIGN KEY(revision) REFERENCES vpn_snapshots(revision),
+            UNIQUE(credential_id, idempotency_key)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS router_apply_results_revision
+        ON router_apply_results(revision, created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS router_apply_results_credential_created
+        ON router_apply_results(credential_id, created_at DESC)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -333,6 +375,15 @@ MIGRATIONS = (
             "scopes, revocation, expiry, and usage timestamps"
         ),
         apply=_apply_router_credentials,
+    ),
+    Migration(
+        version=6,
+        name="router_apply_results",
+        signature=(
+            "create durable idempotent router apply results with revision, canonical "
+            "body hash, bounded capability and diagnostic payloads"
+        ),
+        apply=_apply_router_apply_results,
     ),
 )
 
