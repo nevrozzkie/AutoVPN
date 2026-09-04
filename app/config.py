@@ -59,6 +59,7 @@ class Settings:
     enable_safe_aeza_ip_rotation: bool = _get_bool(
         "ENABLE_SAFE_AEZA_IP_ROTATION"
     )
+    enable_router_api: bool = _get_bool("ENABLE_ROUTER_API")
 
     vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")

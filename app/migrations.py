@@ -255,6 +255,38 @@ def _apply_safe_ip_rotation(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_router_credentials(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS router_credentials (
+            credential_id TEXT PRIMARY KEY
+                CHECK (length(credential_id) BETWEEN 8 AND 64),
+            client_id INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT ''
+                CHECK (length(label) <= 100),
+            secret_digest TEXT NOT NULL
+                CHECK (length(secret_digest) = 64),
+            scopes TEXT NOT NULL
+                CHECK (length(scopes) BETWEEN 1 AND 256),
+            enabled INTEGER NOT NULL DEFAULT 1
+                CHECK (enabled IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_used_at TEXT,
+            expires_at TEXT,
+            revoked_at TEXT,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS router_credentials_client_id
+        ON router_credentials(client_id)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -292,6 +324,15 @@ MIGRATIONS = (
             "and explicit manual reconciliation metadata"
         ),
         apply=_apply_safe_ip_rotation,
+    ),
+    Migration(
+        version=5,
+        name="router_credentials",
+        signature=(
+            "create independently authenticated per-client router credentials with "
+            "scopes, revocation, expiry, and usage timestamps"
+        ),
+        apply=_apply_router_credentials,
     ),
 )
 

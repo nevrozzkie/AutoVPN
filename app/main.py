@@ -108,8 +108,11 @@ from app.server_operations import (
     run_server_reboot,
     run_server_status,
 )
+from app.router_api import RouterApiError, router, router_api_error_response
 
 app = FastAPI(title="AutoVPN")
+app.add_exception_handler(RouterApiError, router_api_error_response)
+app.include_router(router)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()

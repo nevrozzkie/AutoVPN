@@ -90,6 +90,7 @@ def test_route_inventory_is_backward_compatible() -> None:
             route.name,
         )
         for route in main.app.routes
+        if hasattr(route, "path")
     }
 
     legacy_routes = {

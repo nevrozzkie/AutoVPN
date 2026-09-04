@@ -148,13 +148,15 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "vpn_snapshots",
         "operation_leases",
         "server_operations",
+        "router_credentials",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
         "shared_vps_operation_coordinator",
         "safe_aeza_ip_rotation",
+        "router_credentials",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS
@@ -267,8 +269,9 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
         connection.execute("CREATE TABLE must_be_rolled_back (value TEXT)")
         raise RuntimeError("simulated interrupted migration")
 
+    failed_version = max(item.version for item in migrations.MIGRATIONS) + 1
     failed = migrations.Migration(
-        version=5,
+        version=failed_version,
         name="failure_probe",
         signature="create table then fail",
         apply=fail_after_ddl,
@@ -280,7 +283,7 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT 1 FROM schema_migrations WHERE version = 5"
+            "SELECT 1 FROM schema_migrations WHERE version = ?", (failed_version,)
         ).fetchone() is None
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'must_be_rolled_back'"
