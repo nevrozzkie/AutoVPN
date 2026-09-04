@@ -144,11 +144,17 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "vpn_install_operations",
         "client_stats",
         "schema_migrations",
+        "vpn_state",
+        "vpn_snapshots",
     }
-    assert len(migration_rows) == 1
-    assert migration_rows[0]["version"] == 1
-    assert migration_rows[0]["name"] == "legacy_schema"
-    assert migration_rows[0]["checksum"] == migrations.MIGRATIONS[0].checksum
+    assert [row["version"] for row in migration_rows] == [1, 2]
+    assert [row["name"] for row in migration_rows] == [
+        "legacy_schema",
+        "desired_applied_snapshots",
+    ]
+    assert [row["checksum"] for row in migration_rows] == [
+        migration.checksum for migration in migrations.MIGRATIONS
+    ]
     assert not (database_path.parent / "backups").exists()
     assert _mode(database_path.parent) == 0o700
     assert _mode(database_path) == 0o600
@@ -180,6 +186,21 @@ def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
         assert connection.execute(
             "SELECT value FROM settings WHERE key = 'amnezia.server_private_key'"
         ).fetchone()["value"].encode() == material["amnezia_server_private"].encode()
+        migrated_client = connection.execute(
+            "SELECT deleted_at, deleted_revision FROM clients WHERE id = 9"
+        ).fetchone()
+        assert migrated_client == {"deleted_at": None, "deleted_revision": None}
+        assert connection.execute(
+            "SELECT desired_revision, applied_revision FROM vpn_state WHERE singleton = 1"
+        ).fetchone() == {"desired_revision": 0, "applied_revision": None}
+        install_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(vpn_install_operations)")
+        }
+        assert "revision" in install_columns
+        assert any(
+            row["table"] == "vpn_snapshots" and row["from"] == "revision"
+            for row in connection.execute("PRAGMA foreign_key_list(vpn_install_operations)")
+        )
 
     backups = list((database_path.parent / "backups").glob("*.sqlite3"))
     assert len(backups) == 1
@@ -198,9 +219,9 @@ def test_migration_is_applied_and_backed_up_exactly_once(database_path: Path) ->
     _create_current_legacy_database(database_path)
     init_db()
     with get_db() as connection:
-        applied_at = connection.execute(
-            "SELECT applied_at FROM schema_migrations WHERE version = 1"
-        ).fetchone()["applied_at"]
+        applied = connection.execute(
+            "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+        ).fetchall()
 
     init_db()
 
@@ -208,7 +229,7 @@ def test_migration_is_applied_and_backed_up_exactly_once(database_path: Path) ->
         rows = connection.execute(
             "SELECT version, applied_at FROM schema_migrations"
         ).fetchall()
-    assert rows == [{"version": 1, "applied_at": applied_at}]
+    assert rows == applied
     assert len(list((database_path.parent / "backups").glob("*.sqlite3"))) == 1
 
 
@@ -223,7 +244,7 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
         raise RuntimeError("simulated interrupted migration")
 
     failed = migrations.Migration(
-        version=2,
+        version=3,
         name="failure_probe",
         signature="create table then fail",
         apply=fail_after_ddl,
@@ -235,7 +256,7 @@ def test_failed_migration_rolls_back_schema_and_version_marker(
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT 1 FROM schema_migrations WHERE version = 2"
+            "SELECT 1 FROM schema_migrations WHERE version = 3"
         ).fetchone() is None
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'must_be_rolled_back'"

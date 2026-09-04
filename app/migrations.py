@@ -137,6 +137,54 @@ def _apply_legacy_schema(connection: sqlite3.Connection) -> None:
         _add_column_if_missing(connection, "ip_change_operations", column, declaration)
 
 
+def _apply_desired_applied_snapshots(connection: sqlite3.Connection) -> None:
+    _add_column_if_missing(connection, "clients", "deleted_at", "TEXT")
+    _add_column_if_missing(connection, "clients", "deleted_revision", "INTEGER")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vpn_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            desired_revision INTEGER NOT NULL DEFAULT 0,
+            applied_revision INTEGER,
+            desired_updated_at TEXT,
+            applied_updated_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO vpn_state(singleton, desired_revision, applied_revision)
+        VALUES (1, 0, NULL)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vpn_snapshots (
+            revision INTEGER PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            lifecycle TEXT NOT NULL CHECK (lifecycle IN ('PREPARED', 'APPLIED', 'FAILED')),
+            prepared_at TEXT NOT NULL,
+            applied_at TEXT,
+            failed_at TEXT,
+            error_message TEXT
+        )
+        """
+    )
+    _add_column_if_missing(
+        connection,
+        "vpn_install_operations",
+        "revision",
+        "INTEGER REFERENCES vpn_snapshots(revision)",
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS vpn_install_operations_revision
+        ON vpn_install_operations(revision)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -146,6 +194,15 @@ MIGRATIONS = (
             "add client_stats amnezia counters; add ip operation health fields"
         ),
         apply=_apply_legacy_schema,
+    ),
+    Migration(
+        version=2,
+        name="desired_applied_snapshots",
+        signature=(
+            "add clients soft delete metadata and install revision; create singleton "
+            "vpn state and immutable canonical snapshot lifecycle"
+        ),
+        apply=_apply_desired_applied_snapshots,
     ),
 )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -85,6 +86,7 @@ class CapturedVpnConfig:
     hysteria: HysteriaConfig
     amnezia: AmneziaConfig
     clients: tuple[VpnClient, ...]
+    revision: int = 0
 
     @property
     def enabled_clients(self) -> tuple[VpnClient, ...]:
@@ -117,7 +119,12 @@ def _protocol(values: dict[str, str], name: str, default_port: int) -> ProtocolC
 def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
     setting_rows = connection.execute("SELECT key, value FROM settings").fetchall()
     values = {str(row["key"]): str(row["value"]) for row in setting_rows}
-    client_rows = connection.execute("SELECT * FROM clients ORDER BY id DESC").fetchall()
+    client_rows = connection.execute(
+        "SELECT * FROM clients WHERE deleted_at IS NULL ORDER BY id DESC"
+    ).fetchall()
+    state = connection.execute(
+        "SELECT desired_revision FROM vpn_state WHERE singleton = 1"
+    ).fetchone()
 
     clients = tuple(
         VpnClient(
@@ -196,6 +203,7 @@ def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
             dns=_configured_value(values, "amnezia_dns", settings.amnezia_dns),
         ),
         clients=clients,
+        revision=int(state["desired_revision"]),
     )
 
 
@@ -216,3 +224,56 @@ def capture_vpn_config(
     with get_db() as database:
         database.execute("BEGIN")
         return _capture(database)
+
+
+def canonical_vpn_config_json(config: CapturedVpnConfig) -> str:
+    payload = {
+        "schema_version": 1,
+        "revision": config.revision,
+        "current_ip": config.current_ip,
+        "config_updated_at": config.config_updated_at,
+        "vless": asdict(config.vless),
+        "hysteria": asdict(config.hysteria),
+        "amnezia": asdict(config.amnezia),
+        "clients": [asdict(client) for client in config.enabled_clients],
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def captured_vpn_config_from_json(payload_json: str) -> CapturedVpnConfig:
+    payload = json.loads(payload_json)
+    if payload.get("schema_version") != 1:
+        raise ValueError("Unsupported captured VPN configuration schema")
+    vless = payload["vless"]
+    hysteria = payload["hysteria"]
+    amnezia = payload["amnezia"]
+    return CapturedVpnConfig(
+        current_ip=str(payload["current_ip"]),
+        config_updated_at=str(payload.get("config_updated_at", "")),
+        vless=VlessRealityConfig(
+            protocol=ProtocolConfig(**vless["protocol"]),
+            private_key=str(vless["private_key"]),
+            public_key=str(vless["public_key"]),
+            short_id=str(vless["short_id"]),
+            target=str(vless["target"]),
+            server_names=tuple(vless["server_names"]),
+            server_name=str(vless["server_name"]),
+            fingerprint=str(vless["fingerprint"]),
+            spider_x=str(vless["spider_x"]),
+        ),
+        hysteria=HysteriaConfig(
+            protocol=ProtocolConfig(**hysteria["protocol"]),
+            password=str(hysteria["password"]),
+            obfs_password=str(hysteria["obfs_password"]),
+        ),
+        amnezia=AmneziaConfig(
+            protocol=ProtocolConfig(**amnezia["protocol"]),
+            server_private_key=str(amnezia["server_private_key"]),
+            server_public_key=str(amnezia["server_public_key"]),
+            obfuscation=AmneziaObfuscation(**amnezia["obfuscation"]),
+            network_prefix=str(amnezia["network_prefix"]),
+            dns=str(amnezia["dns"]),
+        ),
+        clients=tuple(VpnClient(**client) for client in payload["clients"]),
+        revision=int(payload["revision"]),
+    )

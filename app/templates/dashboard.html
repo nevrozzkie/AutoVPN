@@ -34,6 +34,17 @@
     <div class="label">VPN VPS</div>
     <div class="value">{{ target_host or "не настроен" }}</div>
     <div class="muted">Активных клиентов: {{ enabled_clients_count }}</div>
+    <div class="muted">
+      Конфигурация: desired {{ vpn_state.desired_revision }} /
+      applied {{ vpn_state.applied_revision if vpn_state.applied_revision is not none else "не подтверждено" }}
+    </div>
+    {% if vpn_state.applied_revision is none %}
+      <div class="warning">Состояние VPS не подтверждено — нужна синхронизация</div>
+    {% elif vpn_config_dirty %}
+      <div class="warning">Есть неприменённые изменения</div>
+    {% else %}
+      <div class="ok">Применена</div>
+    {% endif %}
   </section>
 </div>
 

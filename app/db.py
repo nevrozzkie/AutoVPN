@@ -10,19 +10,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.config import settings
 from app.amnezia import (
     generate_obfuscation_settings,
     generate_preshared_key,
     generate_private_key,
     generate_public_key,
 )
+from app.config import settings
+from app.migrations import migrate_database
 from app.reality import (
     generate_reality_private_key,
     generate_reality_public_key,
     generate_reality_short_id,
 )
-from app.migrations import migrate_database
 
 
 DATABASE_BUSY_TIMEOUT_MS = 5_000
@@ -96,10 +96,16 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             ("last_healthcheck_status", "UNKNOWN"),
         )
-        _ensure_amnezia_settings(db)
-        _ensure_reality_settings(db)
-        _ensure_hysteria_settings(db)
-        _ensure_client_amnezia_material(db)
+        vpn_changed = any(
+            (
+                _ensure_amnezia_settings(db),
+                _ensure_reality_settings(db),
+                _ensure_hysteria_settings(db),
+                _ensure_client_amnezia_material(db),
+            )
+        )
+        if vpn_changed:
+            _mark_vpn_config_updated(db)
 
 
 def _setting(db: sqlite3.Connection, key: str) -> str:
@@ -117,48 +123,91 @@ def _set_setting(db: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def _mark_vpn_config_updated(db: sqlite3.Connection) -> None:
-    _set_setting(db, "vpn.config_updated_at", now_iso())
+def _mark_vpn_config_updated(db: sqlite3.Connection) -> int:
+    timestamp = now_iso()
+    _set_setting(db, "vpn.config_updated_at", timestamp)
+    db.execute(
+        """
+        UPDATE vpn_state
+        SET desired_revision = desired_revision + 1,
+            desired_updated_at = ?
+        WHERE singleton = 1
+        """,
+        (timestamp,),
+    )
+    return int(
+        db.execute(
+            "SELECT desired_revision FROM vpn_state WHERE singleton = 1"
+        ).fetchone()["desired_revision"]
+    )
 
 
-def _ensure_amnezia_settings(db: sqlite3.Connection) -> None:
+def _is_vpn_setting(key: str) -> bool:
+    return key == "current_ip" or key.startswith(
+        (
+            "vless.",
+            "hysteria.",
+            "amnezia.",
+            "config.vless_",
+            "config.hysteria_",
+            "config.amnezia_",
+        )
+    )
+
+
+def _ensure_amnezia_settings(db: sqlite3.Connection) -> bool:
+    changed = False
     private_key = _setting(db, "amnezia.server_private_key")
     if not private_key:
         private_key = generate_private_key()
         _set_setting(db, "amnezia.server_private_key", private_key)
+        changed = True
     if not _setting(db, "amnezia.server_public_key"):
         _set_setting(db, "amnezia.server_public_key", generate_public_key(private_key))
+        changed = True
 
     obfuscation = generate_obfuscation_settings()
     for key, value in obfuscation.items():
         setting_key = f"amnezia.{key}"
         if not _setting(db, setting_key):
             _set_setting(db, setting_key, str(value))
+            changed = True
+    return changed
 
 
-def _ensure_reality_settings(db: sqlite3.Connection) -> None:
+def _ensure_reality_settings(db: sqlite3.Connection) -> bool:
+    changed = False
     private_key = _setting(db, "vless.reality_private_key")
     if not private_key:
         private_key = generate_reality_private_key()
         _set_setting(db, "vless.reality_private_key", private_key)
+        changed = True
     if not _setting(db, "vless.reality_public_key"):
         _set_setting(db, "vless.reality_public_key", generate_reality_public_key(private_key))
+        changed = True
     if not _setting(db, "vless.reality_short_id"):
         _set_setting(db, "vless.reality_short_id", generate_reality_short_id())
+        changed = True
+    return changed
 
 
-def _ensure_hysteria_settings(db: sqlite3.Connection) -> None:
+def _ensure_hysteria_settings(db: sqlite3.Connection) -> bool:
+    changed = False
     if not _setting(db, "hysteria.password"):
         client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
         password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
         _set_setting(db, "hysteria.password", password)
+        changed = True
     # Hysteria transport password. Must be identical on server and client;
     # both configs are generated from this value.
     if not _setting(db, "hysteria.obfs_password"):
         _set_setting(db, "hysteria.obfs_password", secrets.token_urlsafe(16))
+        changed = True
+    return changed
 
 
-def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:
+def _ensure_client_amnezia_material(db: sqlite3.Connection) -> bool:
+    changed = False
     clients = db.execute("SELECT * FROM clients ORDER BY id").fetchall()
     for client in clients:
         private_key = client.get("amnezia_private_key") or generate_private_key()
@@ -167,6 +216,15 @@ def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:
         address = client.get("amnezia_ipv4") or _legacy_or_free_amnezia_address(
             db, int(client["id"])
         )
+        if not all(
+            (
+                client.get("amnezia_private_key"),
+                client.get("amnezia_public_key"),
+                client.get("amnezia_preshared_key"),
+                client.get("amnezia_ipv4"),
+            )
+        ):
+            changed = True
         db.execute(
             """
             UPDATE clients
@@ -178,6 +236,7 @@ def _ensure_client_amnezia_material(db: sqlite3.Connection) -> None:
             """,
             (private_key, public_key, preshared_key, address, client["id"]),
         )
+    return changed
 
 
 def _amnezia_network(db: sqlite3.Connection) -> ipaddress.IPv4Network:
@@ -231,11 +290,20 @@ def get_setting(key: str, default: str = "") -> str:
 
 def set_setting(key: str, value: str) -> None:
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        previous = _setting(db, key)
         _set_setting(db, key, value)
+        if _is_vpn_setting(key) and previous != value:
+            _mark_vpn_config_updated(db)
 
 
 def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = False) -> None:
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        vpn_changed = mark_vpn_config_updated and any(
+            _is_vpn_setting(key) and _setting(db, key) != value
+            for key, value in values.items()
+        )
         db.executemany(
             """
             INSERT INTO settings(key, value) VALUES (?, ?)
@@ -243,7 +311,7 @@ def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = Fals
             """,
             values.items(),
         )
-        if mark_vpn_config_updated:
+        if vpn_changed:
             _mark_vpn_config_updated(db)
 
 
@@ -254,7 +322,9 @@ def mark_vpn_config_updated() -> None:
 
 def list_clients() -> list[dict[str, Any]]:
     with get_db() as db:
-        return db.execute("SELECT * FROM clients ORDER BY id DESC").fetchall()
+        return db.execute(
+            "SELECT * FROM clients WHERE deleted_at IS NULL ORDER BY id DESC"
+        ).fetchall()
 
 
 def list_clients_with_stats() -> list[dict[str, Any]]:
@@ -272,6 +342,7 @@ def list_clients_with_stats() -> list[dict[str, Any]]:
                 client_stats.updated_at AS stats_updated_at
             FROM clients
             LEFT JOIN client_stats ON client_stats.client_id = clients.id
+            WHERE clients.deleted_at IS NULL
             ORDER BY clients.id DESC
             """
         ).fetchall()
@@ -279,12 +350,16 @@ def list_clients_with_stats() -> list[dict[str, Any]]:
 
 def get_client_by_token(token: str) -> dict[str, Any] | None:
     with get_db() as db:
-        return db.execute("SELECT * FROM clients WHERE token = ?", (token,)).fetchone()
+        return db.execute(
+            "SELECT * FROM clients WHERE token = ? AND deleted_at IS NULL", (token,)
+        ).fetchone()
 
 
 def get_client_by_id(client_id: int) -> dict[str, Any] | None:
     with get_db() as db:
-        return db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+        return db.execute(
+            "SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL", (client_id,)
+        ).fetchone()
 
 
 def create_client(name: str) -> dict[str, Any]:
@@ -326,17 +401,32 @@ def create_client(name: str) -> dict[str, Any]:
 
 def set_client_enabled(client_id: int, enabled: bool) -> None:
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        client = db.execute(
+            "SELECT enabled FROM clients WHERE id = ? AND deleted_at IS NULL",
+            (client_id,),
+        ).fetchone()
+        desired_value = 1 if enabled else 0
+        if client is None or int(client["enabled"]) == desired_value:
+            return
         db.execute(
-            "UPDATE clients SET enabled = ? WHERE id = ?",
-            (1 if enabled else 0, client_id),
+            "UPDATE clients SET enabled = ? WHERE id = ? AND deleted_at IS NULL",
+            (desired_value, client_id),
         )
         _mark_vpn_config_updated(db)
 
 
 def update_client_name(client_id: int, name: str) -> None:
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        client = db.execute(
+            "SELECT name FROM clients WHERE id = ? AND deleted_at IS NULL",
+            (client_id,),
+        ).fetchone()
+        if client is None or client["name"] == name:
+            return
         db.execute(
-            "UPDATE clients SET name = ? WHERE id = ?",
+            "UPDATE clients SET name = ? WHERE id = ? AND deleted_at IS NULL",
             (name, client_id),
         )
         _mark_vpn_config_updated(db)
@@ -344,8 +434,43 @@ def update_client_name(client_id: int, name: str) -> None:
 
 def delete_client(client_id: int) -> None:
     with get_db() as db:
-        db.execute("DELETE FROM clients WHERE id = ?", (client_id,))
-        _mark_vpn_config_updated(db)
+        db.execute("BEGIN IMMEDIATE")
+        exists = db.execute(
+            "SELECT 1 FROM clients WHERE id = ? AND deleted_at IS NULL", (client_id,)
+        ).fetchone()
+        if not exists:
+            return
+        revision = _mark_vpn_config_updated(db)
+        db.execute(
+            """
+            UPDATE clients
+            SET deleted_at = ?, deleted_revision = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (now_iso(), revision, client_id),
+        )
+
+
+def purge_applied_deleted_clients(db: sqlite3.Connection) -> int:
+    applied_value = db.execute(
+        "SELECT applied_revision FROM vpn_state WHERE singleton = 1"
+    ).fetchone()["applied_revision"]
+    if applied_value is None:
+        return 0
+    applied_revision = int(applied_value)
+    cursor = db.execute(
+        """
+        DELETE FROM clients
+        WHERE deleted_revision IS NOT NULL AND deleted_revision <= ?
+        """,
+        (applied_revision,),
+    )
+    return cursor.rowcount
+
+
+def get_vpn_state() -> dict[str, Any]:
+    with get_db() as db:
+        return db.execute("SELECT * FROM vpn_state WHERE singleton = 1").fetchone()
 
 
 def get_client_stats(client_id: int) -> dict[str, Any] | None:
@@ -493,6 +618,18 @@ def fail_incomplete_install_operations(reason: str) -> None:
     with get_db() as db:
         db.execute(
             """
+            UPDATE vpn_snapshots
+            SET lifecycle = 'FAILED', failed_at = ?, error_message = ?
+            WHERE lifecycle = 'PREPARED'
+              AND revision IN (
+                  SELECT revision FROM vpn_install_operations
+                  WHERE status IN ('PENDING', 'RUNNING') AND revision IS NOT NULL
+              )
+            """,
+            (timestamp, reason),
+        )
+        db.execute(
+            """
             UPDATE vpn_install_operations
             SET status = 'FAILED',
                 current_step = 'interrupted',
@@ -505,16 +642,11 @@ def fail_incomplete_install_operations(reason: str) -> None:
 
 
 def create_install_operation(target_host: str) -> int:
-    timestamp = now_iso()
-    with get_db() as db:
-        cursor = db.execute(
-            """
-            INSERT INTO vpn_install_operations(status, target_host, current_step, created_at, updated_at)
-            VALUES ('PENDING', ?, 'queued', ?, ?)
-            """,
-            (target_host, timestamp, timestamp),
-        )
-        return int(cursor.lastrowid)
+    # Compatibility wrapper for callers outside the HTTP handler. Importing
+    # lazily avoids a module cycle while preserving the atomic prepare path.
+    from app.vpn_state import prepare_install_operation
+
+    return prepare_install_operation(target_host).operation_id
 
 
 def update_install_operation(operation_id: int, **fields: Any) -> None:
@@ -533,6 +665,17 @@ def update_install_operation(operation_id: int, **fields: Any) -> None:
 
 def reset_server_and_aeza_state() -> None:
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        vpn_changed = db.execute(
+            """
+            SELECT 1 FROM settings
+            WHERE (key = 'current_ip' AND value != '')
+               OR key LIKE 'config.vless_%'
+               OR key LIKE 'config.hysteria_%'
+               OR key LIKE 'config.amnezia_%'
+            LIMIT 1
+            """
+        ).fetchone() is not None
         db.execute(
             """
             DELETE FROM settings
@@ -559,3 +702,5 @@ def reset_server_and_aeza_state() -> None:
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             ("last_healthcheck_status", "UNKNOWN"),
         )
+        if vpn_changed:
+            _mark_vpn_config_updated(db)

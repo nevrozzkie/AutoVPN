@@ -26,6 +26,11 @@ from app.runtime_config import (
 )
 from app.protocol_status import refresh_protocol_statuses
 from app.vpn_config import CapturedVpnConfig, capture_vpn_config
+from app.vpn_state import (
+    complete_install_operation,
+    fail_install_operation,
+    load_install_snapshot,
+)
 
 
 class EuInstallError(RuntimeError):
@@ -634,10 +639,10 @@ async def run_remote_command(
 
 
 async def run_eu_install(operation_id: int) -> None:
-    host = resolve_eu_host()
-    script = build_eu_install_script()
-
     try:
+        operation, config = load_install_snapshot(operation_id)
+        host = str(operation["target_host"] or "")
+        script = build_eu_install_script(config)
         update_install_operation(
             operation_id,
             status="RUNNING",
@@ -656,17 +661,7 @@ async def run_eu_install(operation_id: int) -> None:
                 f"SSH install failed with exit code {exit_code}\n{output_tail}"
             )
         await refresh_protocol_statuses(host)
-        update_install_operation(
-            operation_id,
-            status="DONE",
-            current_step="done",
-            output=output_tail,
-        )
+        complete_install_operation(operation_id, output_tail)
     except Exception as exc:
-        update_install_operation(
-            operation_id,
-            status="FAILED",
-            current_step="failed",
-            error_message=str(exc)[-12000:],
-        )
+        fail_install_operation(operation_id, str(exc)[-12000:])
         raise

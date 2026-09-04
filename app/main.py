@@ -22,7 +22,6 @@ from app.amnezia import (
 )
 from app.db import (
     create_client,
-    create_install_operation,
     create_operation,
     delete_client,
     fail_incomplete_install_operations,
@@ -31,6 +30,7 @@ from app.db import (
     get_latest_install_operation,
     get_latest_operation,
     get_setting,
+    get_vpn_state,
     has_running_install_operation,
     has_running_operation,
     init_db,
@@ -84,6 +84,7 @@ from app.subscriptions import (
     render_subscription,
 )
 from app.vpn_config import capture_vpn_config
+from app.vpn_state import prepare_install_operation
 from app.security import (
     SECURITY_HEADERS,
     csrf_failure_detail,
@@ -492,6 +493,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     clients = list_clients()
     target_host = resolve_eu_host()
     latest_install_operation = get_latest_install_operation()
+    vpn_state = get_vpn_state()
     latest_install_error = latest_install_operation["error_message"] if latest_install_operation else ""
     ssh_host_key_changed = bool(
         latest_install_error
@@ -520,6 +522,9 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
             "latest_install_operation": latest_install_operation,
+            "vpn_state": vpn_state,
+            "vpn_config_dirty": vpn_state["applied_revision"] is None
+            or vpn_state["desired_revision"] != vpn_state["applied_revision"],
             "ssh_host_key_changed": ssh_host_key_changed,
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
@@ -770,8 +775,8 @@ def admin_run_install(
     if has_running_install_operation():
         return RedirectResponse("/admin?install_already_running=1", status_code=status.HTTP_303_SEE_OTHER)
     host = resolve_eu_host()
-    operation_id = create_install_operation(host)
-    background_tasks.add_task(_run_install_background, operation_id)
+    prepared = prepare_install_operation(host)
+    background_tasks.add_task(_run_install_background, prepared.operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
