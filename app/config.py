@@ -58,12 +58,12 @@ class Settings:
         "VPN_LEASE_HEARTBEAT_SECONDS", 30
     )
     enable_transactional_vpn_apply: bool = _get_bool(
-        "ENABLE_TRANSACTIONAL_VPN_APPLY"
+        "ENABLE_TRANSACTIONAL_VPN_APPLY", True
     )
     enable_safe_aeza_ip_rotation: bool = _get_bool(
-        "ENABLE_SAFE_AEZA_IP_ROTATION"
+        "ENABLE_SAFE_AEZA_IP_ROTATION", True
     )
-    enable_router_api: bool = _get_bool("ENABLE_ROUTER_API")
+    enable_router_api: bool = _get_bool("ENABLE_ROUTER_API", True)
 
     vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")

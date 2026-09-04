@@ -364,6 +364,7 @@ def test_exact_replay_with_original_etag_survives_applied_revision_advance(
 
 def test_apply_result_feature_off_is_404() -> None:
     init_db()
+    set_setting("config.enable_router_api", "0")
     response = TestClient(main.app).put(
         "/api/v2/router/apply-results/off",
         headers={"Content-Type": "application/json"},

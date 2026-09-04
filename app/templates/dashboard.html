@@ -144,9 +144,9 @@
 {% elif not aeza_ip_rotation_available %}
   <p class="muted">Смена IP доступна только для Aeza: настройте AEZA_TOKEN и AEZA_SERVICE_ID.</p>
 {% elif not safe_aeza_ip_rotation_enabled %}
-  <p class="muted">Безопасная ротация Aeza выключена. После интеграционной проверки включите <code>ENABLE_SAFE_AEZA_IP_ROTATION=1</code>; старый контур не запускается.</p>
+  <p class="muted">Безопасная ротация Aeza выключена. Включить её можно на странице <a href="/admin/setup">Setup</a>; старый контур не запускается.</p>
 {% elif not transactional_vpn_apply_enabled %}
-  <p class="muted">Сначала включите и проверьте <code>ENABLE_TRANSACTIONAL_VPN_APPLY=1</code>; safe rotation не обходит этот gate.</p>
+  <p class="muted">Сначала включите транзакционное применение VPN на странице <a href="/admin/setup">Setup</a>; safe rotation не обходит этот gate.</p>
 {% endif %}
 
 <p class="danger">

@@ -44,6 +44,10 @@ def _valid_setup_form() -> dict[str, str]:
         "hysteria_port_value": "8443",
         "amnezia_enabled_value": "on",
         "amnezia_port_value": "51820",
+        "autovpn2_settings_present": "1",
+        "transactional_vpn_apply_enabled_value": "on",
+        "safe_aeza_ip_rotation_enabled_value": "on",
+        "router_api_enabled_value": "on",
         "aeza_token_value": "new-aeza-secret",
         "aeza_service_id_value": "new-service",
         "aeza_ipv4_domain_value": "new-domain",
@@ -132,6 +136,74 @@ def test_setup_allows_duplicate_port_when_one_protocol_is_disabled() -> None:
     assert get_setting("config.hysteria_enabled") == "0"
     assert get_setting("config.vless_port") == "443"
     assert get_setting("config.hysteria_port") == "443"
+
+
+def test_setup_persists_autovpn_2_feature_switches() -> None:
+    client = _admin_client()
+    form = _valid_setup_form()
+    form.pop("transactional_vpn_apply_enabled_value")
+    form.pop("safe_aeza_ip_rotation_enabled_value")
+    form.pop("router_api_enabled_value")
+
+    response = client.post(
+        "/admin/setup",
+        data=form,
+        auth=("admin", "old-password"),
+        headers={"Origin": "http://panel.local"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert get_setting("config.enable_transactional_vpn_apply") == "0"
+    assert get_setting("config.enable_safe_aeza_ip_rotation") == "0"
+    assert get_setting("config.enable_router_api") == "0"
+    assert main.transactional_vpn_apply_enabled() is False
+    assert main.safe_aeza_ip_rotation_enabled() is False
+    assert main.router_api_enabled() is False
+    assert client.get("/api/v2/router/snapshot").status_code == 404
+
+
+def test_setup_rejects_safe_rotation_without_transactional_apply_atomically() -> None:
+    client = _admin_client()
+    before = _settings_snapshot()
+    form = _valid_setup_form()
+    form.pop("transactional_vpn_apply_enabled_value")
+
+    response = client.post(
+        "/admin/setup",
+        data=form,
+        auth=("admin", "old-password"),
+        headers={"Origin": "http://panel.local"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert _settings_snapshot() == before
+
+
+def test_legacy_setup_post_without_autovpn_2_fields_preserves_switches() -> None:
+    client = _admin_client()
+    set_setting("config.enable_transactional_vpn_apply", "1")
+    set_setting("config.enable_safe_aeza_ip_rotation", "1")
+    set_setting("config.enable_router_api", "1")
+    form = _valid_setup_form()
+    form.pop("autovpn2_settings_present")
+    form.pop("transactional_vpn_apply_enabled_value")
+    form.pop("safe_aeza_ip_rotation_enabled_value")
+    form.pop("router_api_enabled_value")
+
+    response = client.post(
+        "/admin/setup",
+        data=form,
+        auth=("admin", "old-password"),
+        headers={"Origin": "http://panel.local"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert get_setting("config.enable_transactional_vpn_apply") == "1"
+    assert get_setting("config.enable_safe_aeza_ip_rotation") == "1"
+    assert get_setting("config.enable_router_api") == "1"
 
 
 def test_setup_database_failure_rolls_back_the_whole_settings_update() -> None:

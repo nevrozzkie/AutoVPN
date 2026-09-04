@@ -9,6 +9,7 @@
       {% endif %}
 
       <form method="post" action="/admin/setup">
+        <input type="hidden" name="autovpn2_settings_present" value="1">
         <section>
           <h2>Админка</h2>
           <div class="grid">
@@ -110,6 +111,33 @@
         </section>
 
         <section>
+          <h2>Возможности AutoVPN 2.0</h2>
+          <div class="grid">
+            <div>
+              <label class="check-label" for="transactional_vpn_apply_enabled_value">
+                <input id="transactional_vpn_apply_enabled_value" name="transactional_vpn_apply_enabled_value" type="checkbox" {% if transactional_vpn_apply_enabled %}checked{% endif %}>
+                Транзакционное применение VPN
+              </label>
+              <span class="muted">Применяет конфигурацию через snapshot, проверку и rollback.</span>
+            </div>
+            <div>
+              <label class="check-label" for="safe_aeza_ip_rotation_enabled_value">
+                <input id="safe_aeza_ip_rotation_enabled_value" name="safe_aeza_ip_rotation_enabled_value" type="checkbox" {% if safe_aeza_ip_rotation_enabled %}checked{% endif %}>
+                Безопасная смена IP Aeza
+              </label>
+              <span class="muted">Требует включённого транзакционного применения VPN.</span>
+            </div>
+            <div>
+              <label class="check-label" for="router_api_enabled_value">
+                <input id="router_api_enabled_value" name="router_api_enabled_value" type="checkbox" {% if router_api_enabled %}checked{% endif %}>
+                Router API v2
+              </label>
+              <span class="muted">API для синхронизации с OpenWrt; доступ требует отдельного Bearer credential.</span>
+            </div>
+          </div>
+        </section>
+
+        <section>
           <h2>Aeza, опционально</h2>
           <div class="grid">
             <div>
@@ -156,6 +184,8 @@
       const passwordMatchError = document.querySelector("#password-match-error");
       const protocolPortInputs = Array.from(document.querySelectorAll(".protocol-port"));
       const protocolPortError = document.querySelector("#protocol-port-error");
+      const transactionalApplyInput = document.querySelector("#transactional_vpn_apply_enabled_value");
+      const safeRotationInput = document.querySelector("#safe_aeza_ip_rotation_enabled_value");
       const submitButton = document.querySelector("#setup-submit-button");
       let passwordMismatch = false;
       let protocolPortInvalid = false;
@@ -209,12 +239,21 @@
         submitButton.disabled = passwordMismatch || protocolPortInvalid;
       }
 
+      function syncFeatureFlags() {
+        if (!transactionalApplyInput.checked) {
+          safeRotationInput.checked = false;
+        }
+        safeRotationInput.disabled = !transactionalApplyInput.checked;
+      }
+
       passwordInput.addEventListener("input", syncPasswordMatch);
       passwordConfirmInput.addEventListener("input", syncPasswordMatch);
       protocolPortInputs.forEach((input) => {
         input.addEventListener("input", syncProtocolPorts);
         document.querySelector(`#${input.dataset.enabledId}`).addEventListener("change", syncProtocolPorts);
       });
+      transactionalApplyInput.addEventListener("change", syncFeatureFlags);
+      syncFeatureFlags();
       syncPasswordMatch();
       syncProtocolPorts();
     </script>

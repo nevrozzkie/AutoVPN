@@ -10,8 +10,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.amnezia import render_amnezia_vpn_key
-from app.config import settings
 from app.db import get_db
+from app.runtime_config import router_api_enabled
 from app.router_credentials import (
     AuthenticatedRouterCredential,
     RouterAuthenticationFailure,
@@ -62,7 +62,7 @@ def router_api_error_response(_: Request, exc: RouterApiError) -> JSONResponse:
 
 
 def _require_enabled() -> None:
-    if not settings.enable_router_api:
+    if not router_api_enabled():
         raise RouterApiError(404, "not_found", "Resource not found")
 
 

@@ -260,15 +260,16 @@ Deployment target остаётся Ubuntu 24.04 с CPython 3.12+, но Linux com
 установленными setuptools `84.0.0` и wheel `0.48.0`, через
 `pip wheel --no-deps --no-build-isolation`.
 
-Перед включением новых mutation/API контуров отдельно проверьте на staging:
+Перед production-использованием новых mutation/API контуров отдельно проверьте на staging:
 
 1. transactional apply и rollback файлов/systemd на той же Ubuntu и версиях VPN-сервисов;
 2. безопасную ротацию IPv4 на тестовой услуге Aeza, включая потерянные ответы и ручную сверку;
 3. Router API на реальном OpenWrt/Cudy, включая сохранение credential и повтор apply-result.
 
-До этих проверок `ENABLE_TRANSACTIONAL_VPN_APPLY`, `ENABLE_SAFE_AEZA_IP_ROTATION` и
-`ENABLE_ROUTER_API` должны оставаться `0`. Статус и reboot относятся к VPS API Aeza;
-AmneziaWG — это VPN-протокол и не является провайдером VPS.
+Эти три возможности включены по умолчанию в новой установке и управляются на
+`/admin/setup`. Их можно временно выключить там же. Env-переменные задают только стартовое
+значение, пока соответствующая настройка ещё не сохранена в SQLite. Статус и reboot относятся
+к VPS API Aeza; AmneziaWG — это VPN-протокол и не является провайдером VPS.
 
 ### Desired/applied конфигурация VPN
 
@@ -286,15 +287,15 @@ VPS скрипт строится из сохранённого snapshot, поэ
 ревизии с удалением; только после этого запись можно безопасно очистить.
 
 Legacy shell-скрипт пока выполняет последовательные команды без атомарного rollback VPS.
-Transactional install и безопасная ротация IP используют immutable snapshot операции, но оба
-новых mutation-контура выключены по умолчанию до отдельной интеграционной проверки.
+Transactional install и безопасная ротация IP используют immutable snapshot операции. Оба
+контура включены по умолчанию, но их следует проверить на отдельном VPS до production.
 
-### Staged transactional apply (по feature flag)
+### Transactional apply
 
-Новый контур включается только через `ENABLE_TRANSACTIONAL_VPN_APPLY=1`; по умолчанию он
-выключен, и `/admin/install/run` использует прежний install-script как compatibility fallback.
-Это намеренный integration gate: перед включением флага скрипт нужно проверить на отдельном VPS
-с теми же версиями Xray, Hysteria2, AmneziaWG и systemd, что используются в production.
+Новый контур включён по умолчанию. Его можно отключить в `/admin/setup`; тогда
+`/admin/install/run` использует прежний install-script как compatibility fallback. Перед
+production скрипт нужно проверить на отдельном VPS с теми же версиями Xray, Hysteria2,
+AmneziaWG и systemd.
 
 При включённом флаге первый запуск при необходимости выполняет bootstrap пакетов, после чего
 использует общий config-only apply. Повторный запуск с удовлетворённым bootstrap marker не
@@ -320,11 +321,12 @@ revision не продвигается, а состояние VPS нужно п�
 проверки не считается доказанным атомарным rollback на всех целевых дистрибутивах. Firewall rules
 по-прежнему добавляются best-effort и не удаляются rollback-контуром.
 
-### Router API v2 (по feature flag)
+### Router API v2
 
-Versioned API предназначен для будущего OpenWrt-контроллера и по умолчанию выключен. До
-интеграционного теста на Cudy WR3000S v1 оставьте `ENABLE_ROUTER_API=0`; при выключенном флаге
-все `/api/v2/router/*` отвечают `404`. API не обращается к Aeza и не запускает SSH-команды.
+Versioned API предназначен для будущего OpenWrt-контроллера и включён по умолчанию. Доступ всё
+равно требует отдельного Bearer credential. До production проверьте API на Cudy WR3000S v1.
+Переключатель находится в `/admin/setup`; при выключении все `/api/v2/router/*` отвечают `404`.
+API не обращается к Aeza и не запускает SSH-команды.
 
 Router credential не связан с legacy token из `/client/{token}` и `/sub/{token}`. Он имеет
 свои scopes и привязан к одному client id. В SQLite хранится только SHA-256 digest случайного
@@ -543,9 +545,10 @@ Hysteria2-статистика не собирается: протокол по�
 6. В одной SQLite-транзакции опубликовать новый `current_ip` и applied revision.
 7. Только затем попытаться удалить старый IPv4. Потерянный ответ DELETE считается ambiguous и требует проверки в Aeza, а не доказательством сохранности или удаления IP.
 
-Контур включается только когда одновременно заданы `ENABLE_TRANSACTIONAL_VPN_APPLY=1` и
-`ENABLE_SAFE_AEZA_IP_ROTATION=1`; оба флага по умолчанию выключены.
-При выключенном флаге старый небезопасный rotation runner не запускается. Существующие URL
+Контур включён по умолчанию и требует включённого transactional apply. Оба переключателя
+доступны в `/admin/setup`; форма не позволяет оставить safe rotation включённой без
+transactional apply. При выключенном переключателе старый небезопасный rotation runner не
+запускается. Существующие URL
 `/admin/ip/buy`, `/admin/ip/{id}/make-main` и `/admin/ip/{id}/delete` сохранены для совместимости,
 но прямые POST-мутации перенаправляют на gated safe rotation и не могут обходить lease,
 snapshot или safety ordering.
@@ -609,17 +612,19 @@ SERVER_COMMAND_TIMEOUT_SECONDS=30
 VPN_DEPLOY_TIMEOUT_SECONDS=1800
 VPN_LEASE_HEARTBEAT_SECONDS=30
 
-# Default OFF: staged transactional install/config apply
-ENABLE_TRANSACTIONAL_VPN_APPLY=0
+# Bootstrap default for transactional install/config apply
+ENABLE_TRANSACTIONAL_VPN_APPLY=1
 
-# Default OFF: durable Aeza IP rotation; requires transactional apply canary first
-ENABLE_SAFE_AEZA_IP_ROTATION=0
+# Bootstrap default for durable Aeza IP rotation; requires transactional apply
+ENABLE_SAFE_AEZA_IP_ROTATION=1
 
-# Default OFF: versioned OpenWrt router API
-ENABLE_ROUTER_API=0
+# Bootstrap default for versioned OpenWrt router API
+ENABLE_ROUTER_API=1
 ```
 
-Если значения заданы через `/admin/setup`, они хранятся в SQLite как `config.*` и имеют приоритет в runtime.
+Если значения заданы через `/admin/setup`, они хранятся в SQLite как `config.*` и имеют
+приоритет в runtime. Поэтому существующая установка с явно сохранённым `=0` в `.env` останется
+выключенной до первого включения и сохранения через админку; новая установка получает `=1`.
 
 ## Сервисные команды
 

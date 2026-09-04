@@ -4,16 +4,15 @@
 
 {% if not safe_rotation_enabled %}
   <section class="panel warning">
-    Безопасная ротация Aeza выключена по умолчанию. Старый небезопасный контур не запускается.
-    Для поэтапного включения после проверки интеграции задайте
-    <code>ENABLE_SAFE_AEZA_IP_ROTATION=1</code>.
+    Безопасная ротация Aeza выключена. Старый небезопасный контур не запускается.
+    Включить безопасную ротацию можно на странице <a href="/admin/setup">Setup</a>.
   </section>
 {% endif %}
 
 {% if safe_rotation_enabled and not transactional_apply_enabled %}
   <section class="panel warning">
-    Ротация остаётся заблокированной, пока не включён и не проверен transactional
-    config apply: <code>ENABLE_TRANSACTIONAL_VPN_APPLY=1</code>.
+    Ротация остаётся заблокированной, пока на странице <a href="/admin/setup">Setup</a>
+    не включено транзакционное применение VPN.
   </section>
 {% endif %}
 

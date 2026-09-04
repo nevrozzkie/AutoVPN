@@ -71,6 +71,7 @@ from app.runtime_config import (
     aeza_ipv4_domain,
     aeza_service_id,
     aeza_token,
+    router_api_enabled,
     setup_complete,
     safe_aeza_ip_rotation_enabled,
     transactional_vpn_apply_enabled,
@@ -443,6 +444,9 @@ def admin_setup_page(
             "aeza_token_configured": bool(aeza_token()),
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
+            "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
+            "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
+            "router_api_enabled": router_api_enabled(),
             "setup_complete": setup_complete(),
             "install_running": has_running_install_operation(),
             "operation_running": has_running_operation(),
@@ -469,6 +473,10 @@ def setup_submit(
     hysteria_port_value: str = Form(""),
     amnezia_enabled_value: str | None = Form(None),
     amnezia_port_value: str = Form(""),
+    autovpn2_settings_present: str | None = Form(None),
+    transactional_vpn_apply_enabled_value: str | None = Form(None),
+    safe_aeza_ip_rotation_enabled_value: str | None = Form(None),
+    router_api_enabled_value: str | None = Form(None),
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
@@ -493,6 +501,20 @@ def setup_submit(
         "amnezia": (amnezia_enabled_value == "on", _required_port_value(amnezia_port_value, "AmneziaWG")),
     }
     _ensure_unique_enabled_protocol_ports(protocol_settings)
+    feature_updates: dict[str, str] = {}
+    if autovpn2_settings_present == "1":
+        transactional_apply_enabled = transactional_vpn_apply_enabled_value == "on"
+        safe_rotation_enabled = safe_aeza_ip_rotation_enabled_value == "on"
+        if safe_rotation_enabled and not transactional_apply_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Safe Aeza IP rotation requires transactional VPN apply",
+            )
+        feature_updates = {
+            "config.enable_transactional_vpn_apply": "1" if transactional_apply_enabled else "0",
+            "config.enable_safe_aeza_ip_rotation": "1" if safe_rotation_enabled else "0",
+            "config.enable_router_api": "1" if router_api_enabled_value == "on" else "0",
+        }
 
     updates = {
         "config.admin_username": admin_username_value.strip() or "admin",
@@ -504,6 +526,7 @@ def setup_submit(
         "config.aeza_ipv4_payment_method": "balance",
         "config.aeza_ipv4_domain": aeza_ipv4_domain_value.strip(),
         "config.aeza_ipv4_after_purchase_delay_seconds": "120",
+        **feature_updates,
     }
     if password:
         updates["config.admin_password"] = hash_password(password)

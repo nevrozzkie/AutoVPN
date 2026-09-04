@@ -199,6 +199,7 @@ def test_router_credential_cli_prints_secret_once_and_list_is_sanitized(
 
 def test_router_snapshot_feature_off_is_404() -> None:
     init_db()
+    set_setting("config.enable_router_api", "0")
     response = TestClient(main.app).get("/api/v2/router/snapshot")
 
     assert response.status_code == 404
