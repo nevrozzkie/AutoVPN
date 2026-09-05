@@ -8,7 +8,9 @@ const machine = require('autovpn.state');
 const journal = require('autovpn.journal');
 const runtime = require('autovpn.runtime');
 const processRunner = require('autovpn.process');
-const ROOT = '/etc/autovpn/runtime';
+const lanes = require('autovpn.lanes');
+let ROOT = null;
+let LANE = null;
 
 function readJson(path, limit) {
 	let raw = readfile(path, limit + 1);
@@ -36,7 +38,7 @@ function policy() {
 	let uci = cursor();
 	uci.load('autovpn');
 	let result = {
-		selection: uci.get('autovpn', 'runtime', 'selection') || 'auto',
+		selection: uci.get('autovpn', LANE.id == 'vpn_zapret' ? 'runtime_zapret' : 'runtime', 'selection') || 'auto',
 		wan_device: uci.get('autovpn', 'runtime', 'wan_device') || '',
 		dns_server: uci.get('autovpn', 'runtime', 'dns_server') || '1.1.1.1',
 		direct_domains: uci.get('autovpn', 'runtime', 'direct_domains') || [],
@@ -65,9 +67,13 @@ function fixedProfile(value) {
 	return null;
 }
 function upgrade(value, entry, preferred) {
+	if (entry.snapshot.schema_version >= 4) {
+		if (value.version == 3) return { ok: true, value: value };
+		return runtime.bundle(entry, value.policy, machine, fixedProfile(value) || preferred, LANE.id);
+	}
 	if (value.version != 1) return { ok: true, value: value };
 	let own = fixedProfile(value);
-	return runtime.bundle(entry, value.policy, machine, own != null ? own : preferred);
+	return runtime.bundle(entry, value.policy, machine, own != null ? own : preferred, LANE.id);
 }
 function probeEntry(state) {
 	if ((state.phase == 'ACTIVATING' || state.phase == 'VERIFYING') && state.desired != null) return state.desired;
@@ -87,8 +93,26 @@ function sameCommitPolicy(current, staged) {
 	downgraded.awg_available = false;
 	return current.awg_available === true && sprintf('%J', staged) == sprintf('%J', downgraded);
 }
+function emptyResult() {
+	return { ok: true, empty: true, lane: LANE.id, legacy_transport: false };
+}
+function response(value, result) {
+	result.lane = LANE.id;
+	result.legacy_transport = value.version < 3;
+	return result;
+}
+function unsupported(entry) {
+	return LANE.id == 'vpn_zapret' && entry.snapshot.schema_version < 4;
+}
+function expectedVersion(entry) {
+	return entry.snapshot.schema_version >= 4 ? 3 : 2;
+}
 function run() {
 	let action = ARGV[0];
+	let laneId = ARGV[3] == null ? 'vpn' : ARGV[3];
+	LANE = lanes.get(laneId);
+	if (LANE == null) return { ok: false, code: 'invalid_lane' };
+	ROOT = LANE.root;
 	if (type(ARGV[1]) != 'string' || match(ARGV[1], /^\/etc\/autovpn\/[A-Za-z0-9_.-]+\/journal\.json$/) == null)
 		return { ok: false, code: 'invalid_journal_path' };
 	let state = readJson(ARGV[1], 262144);
@@ -105,6 +129,7 @@ function run() {
 	if (action == 'disable-awg' || action == 'fallback-awg') {
 		let activeEntry = optionalAwgEntry(state);
 		if (activeEntry == null) return { ok: false, code: 'invalid_phase' };
+		if (unsupported(activeEntry)) return emptyResult();
 		let candidate = readJson(ROOT + '/candidate.json', 65536);
 		let chosen = null;
 		let file = null;
@@ -112,7 +137,8 @@ function run() {
 		for (let i = 0; i < length(bundleFiles); i++) {
 			let name = bundleFiles[i];
 			let value = readJson(ROOT + '/' + name + '.json', 65536);
-			if (runtime.matchesBundle(value, activeEntry, machine) && value.version == 2 &&
+			if (runtime.matchesBundle(value, activeEntry, machine, LANE.id) &&
+				value.version == expectedVersion(activeEntry) &&
 				sprintf('%J', value.config) == sprintf('%J', candidate)) {
 				chosen = value;
 				file = name;
@@ -127,7 +153,7 @@ function run() {
 		fallbackPolicy.awg_available = false;
 		let preferred = action == 'fallback-awg' ? ARGV[2] : chosen.profile;
 		if (action == 'fallback-awg') file = 'failover';
-		let fallback = runtime.bundle(activeEntry, fallbackPolicy, machine, preferred);
+		let fallback = runtime.bundle(activeEntry, fallbackPolicy, machine, preferred, LANE.id);
 		if (!fallback.ok || (action == 'disable-awg' && fallback.value.profile != chosen.profile))
 			return { ok: false, code: 'selected_vpn_unavailable' };
 		if (!writePrivate(ROOT + '/candidate.json', fallback.value.config) ||
@@ -135,26 +161,28 @@ function run() {
 			!writePrivate(ROOT + '/zapret.json', fallback.value.zapret) ||
 			!writePrivate(ROOT + '/' + file + '.json', fallback.value))
 			return { ok: false, code: 'runtime_write_failed' };
-		return { ok: true, active_profile: fallback.value.profile, capabilities: fallback.value.capabilities };
+		return response(fallback.value, { ok: true, active_profile: fallback.value.profile,
+			capabilities: fallback.value.capabilities });
 	}
 	if (action == 'probe-info' || action == 'probe-info-live' || action == 'select-profile' || action == 'commit-profile') {
 		let activeEntry = probeEntry(state);
 		if (activeEntry == null) return { ok: false, code: 'invalid_phase' };
+		if (unsupported(activeEntry)) return emptyResult();
 		let current = readJson(ROOT + '/current.json', 65536);
-		if (!runtime.matchesBundle(current, activeEntry, machine))
+		if (!runtime.matchesBundle(current, activeEntry, machine, LANE.id))
 			return { ok: false, code: 'runtime_bundle_mismatch' };
-		if (current.version != 2) return { ok: false, code: 'runtime_upgrade_required' };
+		if (current.version != expectedVersion(activeEntry)) return { ok: false, code: 'runtime_upgrade_required' };
 		if (action == 'probe-info-live' &&
 			sprintf('%J', current.config) != sprintf('%J', readJson(ROOT + '/run.json', 65536)))
 			return { ok: false, code: 'runtime_bundle_mismatch' };
 		let identity = current.etag + ':' + current.attempt + ':' + current.profile;
-		if (action == 'probe-info' || action == 'probe-info-live') return {
+		if (action == 'probe-info' || action == 'probe-info-live') return response(current, {
 			ok: true,
 			active_profile: current.profile,
 			selection: current.policy.selection == 'auto' ? 'auto' : 'manual',
 			candidates: current.candidates,
 			identity: identity,
-		};
+		});
 		let requested = ARGV[2];
 		if (index(['vless-reality', 'hysteria2', 'amneziawg'], requested) < 0)
 			return { ok: false, code: 'unsupported_profile' };
@@ -163,31 +191,35 @@ function run() {
 		if (action == 'commit-profile') {
 			let staged = readJson(ROOT + '/failover.json', 65536);
 			let candidate = readJson(ROOT + '/candidate.json', 65536);
-			if (!runtime.matchesBundle(staged, activeEntry, machine) || staged.version != 2 ||
+			if (!runtime.matchesBundle(staged, activeEntry, machine, LANE.id) ||
+				staged.version != expectedVersion(activeEntry) ||
 				staged.profile != requested || staged.policy.selection != 'auto' ||
 				!sameCommitPolicy(current.policy, staged.policy) ||
 				sprintf('%J', staged.config) != sprintf('%J', candidate))
 				return { ok: false, code: 'failover_bundle_mismatch' };
 			if (!writePrivate(ROOT + '/current.json', staged)) return { ok: false, code: 'runtime_write_failed' };
-			return { ok: true, active_profile: staged.profile, capabilities: staged.capabilities };
+			return response(staged, { ok: true, active_profile: staged.profile,
+				capabilities: staged.capabilities });
 		}
-		let selected = runtime.bundle(activeEntry, current.policy, machine, requested);
+		let selected = runtime.bundle(activeEntry, current.policy, machine, requested, LANE.id);
 		if (!selected.ok) return selected;
 		if (!writePrivate(ROOT + '/failover.json', selected.value) ||
 			!writePrivate(ROOT + '/candidate.json', selected.value.config) ||
 			!writePrivate(ROOT + '/zapret.json', selected.value.zapret) ||
 			!writePrivate(ROOT + '/awg.json', selected.value.awg))
 			return { ok: false, code: 'runtime_write_failed' };
-		return { ok: true, active_profile: selected.value.profile, capabilities: selected.value.capabilities };
+		return response(selected.value, { ok: true, active_profile: selected.value.profile,
+			capabilities: selected.value.capabilities });
 	}
 	let entry = action == 'prepare' || action == 'activate' || action == 'verify' ? state.desired : state.applied;
-	if (entry == null) return { ok: true, empty: true };
+	if (entry == null) return emptyResult();
+	if (unsupported(entry)) return emptyResult();
 	let value;
 	if (action == 'prepare') {
 		let current = readJson(ROOT + '/current.json', 65536);
-		let preferred = state.applied != null && runtime.matchesBundle(current, state.applied, machine)
+		let preferred = state.applied != null && runtime.matchesBundle(current, state.applied, machine, LANE.id)
 			? fixedProfile(current) : null;
-		let result = runtime.bundle(entry, policy(), machine, preferred);
+		let result = runtime.bundle(entry, policy(), machine, preferred, LANE.id);
 		if (!result.ok) return result;
 		value = result.value;
 		if (!writePrivate(ROOT + '/prepared.json', value)) return { ok: false, code: 'runtime_write_failed' };
@@ -195,15 +227,15 @@ function run() {
 	else {
 		let file = action == 'activate' ? 'prepared' : 'current';
 		value = readJson(ROOT + '/' + file + '.json', 65536);
-		if (!runtime.matchesBundle(value, entry, machine)) {
+		if (!runtime.matchesBundle(value, entry, machine, LANE.id)) {
 			if (action != 'rollback' && action != 'restore') return { ok: false, code: 'runtime_bundle_mismatch' };
 			value = readJson(ROOT + '/previous.json', 65536);
-			if (!runtime.matchesBundle(value, entry, machine)) return { ok: false, code: 'rollback_bundle_missing' };
+			if (!runtime.matchesBundle(value, entry, machine, LANE.id)) return { ok: false, code: 'rollback_bundle_missing' };
 		}
 		let preferred = null;
 		if (action == 'activate') {
 			let current = readJson(ROOT + '/current.json', 65536);
-			if (state.applied != null && runtime.matchesBundle(current, state.applied, machine))
+			if (state.applied != null && runtime.matchesBundle(current, state.applied, machine, LANE.id))
 				preferred = fixedProfile(current);
 		}
 		let converted = upgrade(value, entry, preferred);
@@ -214,10 +246,11 @@ function run() {
 	}
 	if (action == 'activate') {
 		let current = readJson(ROOT + '/current.json', 65536);
-		if (state.applied != null && runtime.matchesBundle(current, state.applied, machine)) {
+		if (state.applied != null && runtime.matchesBundle(current, state.applied, machine, LANE.id)) {
 			if (!writePrivate(ROOT + '/previous.json', current)) return { ok: false, code: 'runtime_write_failed' };
 		}
-		else if (state.applied != null && !runtime.matchesBundle(readJson(ROOT + '/previous.json', 65536), state.applied, machine))
+		else if (state.applied != null && !unsupported(state.applied) &&
+			!runtime.matchesBundle(readJson(ROOT + '/previous.json', 65536), state.applied, machine, LANE.id))
 			return { ok: false, code: 'rollback_bundle_missing' };
 	}
 	if (action == 'activate' || action == 'rollback' || action == 'restore')
@@ -231,7 +264,7 @@ function run() {
 		if (!writePrivate(ROOT + '/zapret.json', value.zapret))
 			return { ok: false, code: 'runtime_write_failed' };
 	}
-	return { ok: true, active_profile: value.profile, capabilities: value.capabilities };
+	return response(value, { ok: true, active_profile: value.profile, capabilities: value.capabilities });
 }
 
 let result;

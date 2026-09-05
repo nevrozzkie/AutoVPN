@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://autovpn.local/schemas/router-snapshot-v3.json",
-  "title": "AutoVPN router snapshot v3",
+  "$id": "https://autovpn.local/schemas/router-snapshot.json",
+  "title": "AutoVPN router snapshot v3/v4",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,7 @@
     "protocols"
   ],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": { "enum": [3, 4] },
     "router_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
     "revision": { "type": "integer", "minimum": 0 },
     "snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -51,10 +51,14 @@
       "properties": {
         "vless": { "$ref": "#/$defs/vlessSlot" },
         "hysteria2": { "$ref": "#/$defs/hysteriaSlot" },
-        "amneziawg": { "$ref": "#/$defs/awgSlot" }
+        "amneziawg": { "$ref": "#/$defs/awgSlot" },
+        "amneziawg_aux": { "$ref": "#/$defs/awgAuxSlot" }
       }
     }
   },
+  "allOf": [
+    { "if": { "properties": { "schema_version": { "const": 4 } } }, "then": { "properties": { "protocols": { "required": ["vless", "hysteria2", "amneziawg", "amneziawg_aux"] } } }, "else": { "properties": { "protocols": { "not": { "required": ["amneziawg_aux"] } } } } }
+  ],
   "$defs": {
     "tlsServerName": { "type": "string", "minLength": 1, "maxLength": 253 },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
@@ -177,6 +181,20 @@
           "properties": { "enabled": { "const": true }, "profile": { "$ref": "#/$defs/awgProfile" } }
         }
       ]
+    },
+    "awgAuxSlot": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["enabled", "profile"], "properties": { "enabled": { "const": false }, "profile": { "type": "null" } } },
+        { "type": "object", "additionalProperties": false, "required": ["enabled", "profile"], "properties": { "enabled": { "const": true }, "profile": { "$ref": "#/$defs/awgAuxProfile" } } }
+      ]
+    },
+    "awgAuxProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "capabilities", "interface", "peer", "obfuscation", "route_allowed_ips", "install_routes"],
+      "properties": {
+        "protocol_version": { "const": 1 }, "capabilities": { "$ref": "#/$defs/awgProfile/properties/capabilities" }, "interface": { "$ref": "#/$defs/awgProfile/properties/interface" }, "peer": { "$ref": "#/$defs/awgProfile/properties/peer" }, "obfuscation": { "$ref": "#/$defs/awgProfile/properties/obfuscation" }, "route_allowed_ips": { "$ref": "#/$defs/awgProfile/properties/route_allowed_ips" }, "install_routes": { "const": false }
+      }
     },
     "awgProfile": {
       "type": "object",

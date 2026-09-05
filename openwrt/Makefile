@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.10.0
+PKG_VERSION:=0.11.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -29,6 +29,7 @@ define Package/autovpn-controller/conffiles
 /etc/autovpn/credentials
 /etc/autovpn/state/journal.json
 /etc/autovpn/runtime/
+/etc/autovpn/runtime-zapret/
 /etc/autovpn/networks/journal.json
 /etc/autovpn/release.json
 /etc/autovpn/release-signing.pem
@@ -44,7 +45,9 @@ define Package/autovpn-controller/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn $(1)/etc/init.d/autovpn
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn-tunnel $(1)/etc/init.d/autovpn-tunnel
+	$(INSTALL_BIN) ./files/etc/init.d/autovpn-tunnel-zapret $(1)/etc/init.d/autovpn-tunnel-zapret
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn-zapret $(1)/etc/init.d/autovpn-zapret
+	$(INSTALL_BIN) ./files/etc/init.d/autovpn-direct-zapret $(1)/etc/init.d/autovpn-direct-zapret
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn-networks $(1)/etc/init.d/autovpn-networks
 	$(INSTALL_DIR) $(1)/usr/libexec/autovpn
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/controller.uc $(1)/usr/libexec/autovpn/controller.uc
@@ -53,9 +56,11 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/http-adapter $(1)/usr/libexec/autovpn/http-adapter
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/http-helper.uc $(1)/usr/libexec/autovpn/http-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-adapter $(1)/usr/libexec/autovpn/runtime-adapter
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-lane $(1)/usr/libexec/autovpn/runtime-lane
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-helper.uc $(1)/usr/libexec/autovpn/runtime-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/probe-helper.uc $(1)/usr/libexec/autovpn/probe-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-helper.uc $(1)/usr/libexec/autovpn/zapret-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/direct-zapret-helper.uc $(1)/usr/libexec/autovpn/direct-zapret-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-install $(1)/usr/libexec/autovpn/zapret-install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
@@ -69,6 +74,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/sbin/autovpnctl $(1)/usr/sbin/autovpnctl
 	$(INSTALL_DIR) $(1)/usr/share/ucode/autovpn
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/state.uc $(1)/usr/share/ucode/autovpn/state.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/lanes.uc $(1)/usr/share/ucode/autovpn/lanes.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/journal.uc $(1)/usr/share/ucode/autovpn/journal.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/health.uc $(1)/usr/share/ucode/autovpn/health.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/probes.uc $(1)/usr/share/ucode/autovpn/probes.uc
@@ -76,6 +82,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/http.uc $(1)/usr/share/ucode/autovpn/http.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret.uc $(1)/usr/share/ucode/autovpn/zapret.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/direct-zapret.uc $(1)/usr/share/ucode/autovpn/direct-zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/networks.uc $(1)/usr/share/ucode/autovpn/networks.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/network-transaction.uc $(1)/usr/share/ucode/autovpn/network-transaction.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/setup-policy.uc $(1)/usr/share/ucode/autovpn/setup-policy.uc
@@ -84,6 +91,10 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/autovpn/snapshot.schema.json $(1)/usr/share/autovpn/snapshot.schema.json
 	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-open.nft $(1)/usr/share/autovpn/guard-open.nft
 	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-closed.nft $(1)/usr/share/autovpn/guard-closed.nft
+	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-vpn-open.nft $(1)/usr/share/autovpn/guard-vpn-open.nft
+	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-vpn-closed.nft $(1)/usr/share/autovpn/guard-vpn-closed.nft
+	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-vpn_zapret-open.nft $(1)/usr/share/autovpn/guard-vpn_zapret-open.nft
+	$(INSTALL_DATA) ./files/usr/share/autovpn/guard-vpn_zapret-closed.nft $(1)/usr/share/autovpn/guard-vpn_zapret-closed.nft
 	$(INSTALL_DIR) $(1)/usr/share/nftables.d/chain-pre/forward
 	$(INSTALL_DATA) ./files/usr/share/nftables.d/chain-pre/forward/30-autovpn.nft $(1)/usr/share/nftables.d/chain-pre/forward/30-autovpn.nft
 	$(INSTALL_DIR) $(1)/usr/share/nftables.d/chain-pre/input
@@ -109,6 +120,8 @@ define Package/autovpn-controller/postinst
 	mkdir -p /etc/autovpn/state
 	chmod 0700 /etc/autovpn /etc/autovpn/state
 	/etc/init.d/autovpn-networks enable >/dev/null 2>&1 || true
+	/etc/init.d/autovpn enable >/dev/null 2>&1 || true
+	/etc/init.d/autovpn start >/dev/null 2>&1 || true
 	/etc/init.d/rpcd reload >/dev/null 2>&1 || true
 }
 exit 0

@@ -59,7 +59,8 @@ function fixture(t, options = {}) {
 		.replaceAll('/etc/autovpn', path.join(root, 'autovpn'))
 		.replaceAll('/lib/apk/', path.join(root, 'lib-apk') + '/')
 		.replace("INSTALL_TTY='/dev/tty'", `INSTALL_TTY='${tty}'`)
-		.replace("WIFI_HELPER='/usr/libexec/autovpn/install-wifi'", `WIFI_HELPER='${path.join(bin, 'install-wifi')}'`);
+		.replace("WIFI_HELPER='/usr/libexec/autovpn/install-wifi'", `WIFI_HELPER='${path.join(bin, 'install-wifi')}'`)
+		.replace("ZAPRET_INSTALL='/usr/libexec/autovpn/zapret-install'", `ZAPRET_INSTALL='${path.join(bin, 'zapret-install')}'`);
 	const script = path.join(root, 'install.sh');
 	fs.writeFileSync(script, installer);
 	const mock = `#!${process.execPath}
@@ -85,6 +86,11 @@ else if (name === 'uci') {
   output('1');
 }
 else if (name === 'stty') output('fixture-state');
+else if (name === 'zapret-install') {
+  log({name,args});
+  if (env.MOCK_ZAPRET_FAIL === '1') process.exit(1);
+  output({ok:true});
+}
 else if (name === 'install-wifi') {
   log({name,args,hasSecretEnv:Object.values(env).some(value => String(value).includes('fixture-secret-password'))});
   if (env.MOCK_WIFI_HELPER_FAIL === '1') process.exit(1);
@@ -121,7 +127,7 @@ else if (name === 'jsonfilter') {
   }
 } else throw new Error('Unexpected mock tool: ' + name);
 `;
-	for (const name of ['id', 'uname', 'df', 'uci', 'stty', 'install-wifi', 'ubus', 'jsonfilter', 'curl', 'apk']) {
+	for (const name of ['id', 'uname', 'df', 'uci', 'stty', 'install-wifi', 'zapret-install', 'ubus', 'jsonfilter', 'curl', 'apk']) {
 		fs.writeFileSync(path.join(bin, name), mock, { mode: 0o755 });
 	}
 	const logFile = path.join(root, 'calls.jsonl');
@@ -228,10 +234,20 @@ test('first install preflights TTY before commit and runs installed Wi-Fi helper
 	assert.equal(result.status, 0, result.stderr);
 	const commit = result.calls.findIndex(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate'));
 	const helper = result.calls.findIndex(call => call.name === 'install-wifi');
+	const zapret = result.calls.findIndex(call => call.name === 'zapret-install');
+	assert.ok(zapret > commit && helper > zapret);
+	assert.deepEqual(result.calls[zapret].args, ['install']);
 	assert.ok(commit >= 0 && helper > commit);
 	assert.deepEqual(result.calls[helper].args, []);
 	assert.equal(result.calls[helper].hasSecretEnv, false);
 	assert.match(result.stdout, /Primary Wi-Fi confirmed/);
+});
+
+test('zapret installation failure is reported before first Wi-Fi changes', t => {
+	const result = fixture(t).run([], { MOCK_BOOTSTRAP_MISSING: '1', MOCK_ZAPRET_FAIL: '1' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /zapret2 installation failed/);
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
 });
 
 test('upgrade of a legacy paired install without bootstrap marker preserves Wi-Fi', t => {

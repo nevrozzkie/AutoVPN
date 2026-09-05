@@ -89,7 +89,14 @@ function ready(state) {
 		let names = [];
 		for (let i = 0; i < length(radio.interfaces); i++)
 			if (radio.interfaces[i].ifname) push(names, radio.interfaces[i].section);
-		if (index(names, 'avpn_direct_' + state.radios[r]) < 0 || index(names, 'avpn_vpn_' + state.radios[r]) < 0) return false;
+		for (let i = 0; i < length(state.ssids); i++)
+			if (state.ssids[i].enabled && index(names, 'avpn_' + state.ssids[i].mode + '_' + state.radios[r]) < 0) return false;
+	}
+	for (let i = 0; i < length(state.ssids); i++) {
+		let mode = state.ssids[i];
+		if (!mode.enabled || (mode.mode == 'direct' && primaryLan)) continue;
+		let bridge = { direct: 'br-avpnd', vpn: 'br-avpn', zapret: 'br-avpndz', vpn_zapret: 'br-avpnz' }[mode.mode];
+		if (bridge == null || command(['/sbin/ip', 'link', 'show', 'dev', bridge], 4096) == null) return false;
 	}
 	return command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpn'], 4096) != null &&
 		(primaryLan || command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpnd'], 4096) != null);

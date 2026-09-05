@@ -200,8 +200,11 @@ case "$command" in
 	maintenance)
 		maintenance_action "${2:-}"
 		;;
+	direct-tick)
+		/usr/bin/ucode /usr/libexec/autovpn/direct-zapret-helper.uc up
+		;;
 	status|refresh|recover|apply-policy|stop|health-tick|ping-all)
-		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command" "${2:-}"
+		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command" "${2:-}" "${3:-}"
 		;;
 	network-setup|network-tick|network-boot|network-status)
 		umask 077

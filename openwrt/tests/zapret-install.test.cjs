@@ -115,6 +115,18 @@ async function waitForTerminal(env) {
 	assert.fail(`worker did not finish: ${JSON.stringify(status)}`);
 }
 
+test('first-install synchronous action verifies the bundle and is idempotent', t => {
+	const env = fixture(t);
+	const installed = env.run(['install']);
+	assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+	assert.equal(installed.json.installed, true);
+	assert.equal(env.run(['status']).json.phase, 'ready');
+	const again = env.run(['install']);
+	assert.equal(again.status, 0);
+	assert.equal(again.json.already_present, true);
+	assert.equal(again.calls.length, installed.calls.length);
+});
+
 test('source pins one official v1.0.5 arm64 bundle and never runs upstream installers', () => {
 	assert.match(source, /VERSION='v1\.0\.5'/);
 	assert.match(source, /github\.com\/bol-van\/zapret2\/releases\/download\/v1\.0\.5\/zapret2-v1\.0\.5-openwrt-embedded\.tar\.gz/);

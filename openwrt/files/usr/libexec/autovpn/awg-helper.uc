@@ -8,16 +8,20 @@
 import { readfile, writefile, chmod, rename, unlink, access } from 'fs';
 
 const processRunner = require('autovpn.process');
+const lanes = require('autovpn.lanes');
 
-const DEVICE = 'avpnwg0';
-const OWNED = '/etc/autovpn/runtime/awg-owned';
-const ALIAS = 'autovpn-awg-v1';
+const LANE = lanes.get(ARGV[2] == null ? 'vpn' : ARGV[2]);
+const ROOT = LANE != null ? LANE.root : '';
+const DEVICE = LANE != null ? LANE.awg.device : '';
+const OWNED = ROOT + '/awg-owned';
+/* Preserve primary ownership metadata byte-for-byte; secondary is disjoint. */
+const ALIAS = LANE != null && LANE.id == 'vpn_zapret' ? 'autovpn-awg-zapret-v1' : 'autovpn-awg-v1';
 /*
  * Keep a durable intent before creating the device. iproute2 puts the alias
  * and link type in the same RTM_NEWLINK request, so a post-crash cleanup can
  * require marker + alias + type without ever claiming an arbitrary avpnwg0.
  */
-const MARKER = 'autovpn-awg-v1\n';
+const MARKER = ALIAS + '\n';
 const IP = '/sbin/ip';
 const MODPROBE = '/sbin/modprobe';
 
@@ -53,8 +57,12 @@ function ipv4Cidr(value) {
 	return true;
 }
 function valid(profile) {
-	if (!hasExactKeys(profile, ['protocol_version', 'capabilities', 'interface', 'peer', 'obfuscation',
-		'route_allowed_ips', 'install_routes', 'legacy_amnezia_vpn_import_key'])) return false;
+	let expected = LANE != null && LANE.id == 'vpn'
+		? ['protocol_version', 'capabilities', 'interface', 'peer', 'obfuscation',
+			'route_allowed_ips', 'install_routes', 'legacy_amnezia_vpn_import_key']
+		: ['protocol_version', 'capabilities', 'interface', 'peer', 'obfuscation',
+			'route_allowed_ips', 'install_routes'];
+	if (!hasExactKeys(profile, expected)) return false;
 	if (type(profile.interface) != 'object' || type(profile.peer) != 'object' || type(profile.obfuscation) != 'object') return false;
 	if (profile.protocol_version != 1 || profile.install_routes !== false || !key(profile.interface.private_key) ||
 		!ipv4Cidr(profile.interface.address) || !key(profile.peer.public_key) || !key(profile.peer.preshared_key)) return false;
@@ -173,9 +181,11 @@ function up(path) {
 		'AllowedIPs = 0.0.0.0/0\nEndpoint = ' + peer.endpoint.host + ':' + peer.endpoint.port + '\n' +
 		'PersistentKeepalive = ' + peer.persistent_keepalive + '\n';
 	let awg = awgBin();
-	if (awg == null || !privateWrite('/etc/autovpn/runtime/awg.conf', config) ||
-		!command([awg, 'setconf', DEVICE, '/etc/autovpn/runtime/awg.conf']) ||
-		!command([awg, 'set', DEVICE, 'fwmark', '20194']) ||
+	let configPath = ROOT + '/awg.conf';
+	let outerMark = LANE.id == 'vpn_zapret' ? '20214' : '20194';
+	if (awg == null || !privateWrite(configPath, config) ||
+		!command([awg, 'setconf', DEVICE, configPath]) ||
+		!command([awg, 'set', DEVICE, 'fwmark', outerMark]) ||
 		!command([IP, '-4', 'address', 'replace', value.interface.address, 'dev', DEVICE]) ||
 		!command([IP, 'link', 'set', 'dev', DEVICE, 'mtu', '1380']) ||
 		!command([IP, 'link', 'set', 'dev', DEVICE, 'up'])) {
@@ -192,9 +202,9 @@ function check(path) {
 
 let action = ARGV[0];
 let result = false;
-if (action == 'down') result = down();
-else if (action == 'up' && type(ARGV[1]) == 'string' && ARGV[1] == '/etc/autovpn/runtime/awg.json') result = up(ARGV[1]);
-else if (action == 'check' && type(ARGV[1]) == 'string' && ARGV[1] == '/etc/autovpn/runtime/awg.json') result = check(ARGV[1]);
-else if (action == 'available') result = available();
+if (LANE != null && action == 'down') result = down();
+else if (LANE != null && action == 'up' && type(ARGV[1]) == 'string' && ARGV[1] == ROOT + '/awg.json') result = up(ARGV[1]);
+else if (LANE != null && action == 'check' && type(ARGV[1]) == 'string' && ARGV[1] == ROOT + '/awg.json') result = check(ARGV[1]);
+else if (LANE != null && action == 'available') result = available();
 printf('{"ok":%s}\n', result ? 'true' : 'false');
 exit(result ? 0 : 1);

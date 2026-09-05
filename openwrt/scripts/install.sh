@@ -16,6 +16,7 @@ CONTROLLER_JOURNAL="$TRUST_ROOT/state/journal.json"
 CREDENTIAL_FILE="$TRUST_ROOT/credentials"
 INSTALL_TTY='/dev/tty'
 WIFI_HELPER='/usr/libexec/autovpn/install-wifi'
+ZAPRET_INSTALL='/usr/libexec/autovpn/zapret-install'
 
 fail() { printf 'AutoVPN: %s\n' "$*" >&2; exit 1; }
 say() { printf 'AutoVPN: %s\n' "$*"; }
@@ -256,6 +257,9 @@ installed_controller_version=$(field "$WORK/installed-controller.json" '@[0].ver
 	fail 'Installed controller version differs from the signed release manifest.'
 controller_version=$installed_controller_version
 persist_trust
+[ -x "$ZAPRET_INSTALL" ] || fail 'Packages were installed, but the zapret2 installation helper is missing.'
+say 'Installing the pinned zapret2 engine from its official GitHub release.'
+"$ZAPRET_INSTALL" install || fail 'Packages were installed, but zapret2 installation failed. Wi-Fi was not changed by this step; retry this installer or use LuCI Settings.'
 if [ "$WIFI_BOOTSTRAP" = 1 ]; then
 	[ -x "$WIFI_HELPER" ] || fail 'Packages were installed, but the Wi-Fi bootstrap helper is missing. Existing PPPoE and Wi-Fi configuration was not changed.'
 	"$WIFI_HELPER" || fail 'Packages were installed, but primary Wi-Fi setup did not complete. Existing PPPoE was preserved; inspect LuCI before retrying.'
@@ -264,4 +268,4 @@ else
 	say 'Installed. Existing Wi-Fi configuration was preserved. Open LuCI → Services → AutoVPN → Setup.'
 fi
 say 'Enter the site URL and router ID/token in LuCI; further AutoVPN settings are managed there.'
-say 'Optional VPN-transport zapret2 can be installed and enabled in LuCI Settings; separate zapret SSIDs remain disabled.'
+say 'VPN, VPN+zapret and direct-zapret settings are available in LuCI. Protected networks remain closed until their backend is ready.'

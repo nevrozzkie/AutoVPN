@@ -1,0 +1,15 @@
+table inet autovpn_vpn
+flush table inet autovpn_vpn
+table inet autovpn_vpn {
+	chain ownership_autovpn_v1 {}
+	chain forward {
+		type filter hook forward priority -10; policy accept;
+		iifname "br-avpn" counter drop
+		oifname "br-avpn" counter drop
+	}
+	chain input {
+		type filter hook input priority -10; policy accept;
+		iifname "br-avpn" meta nfproto ipv4 udp sport 68 udp dport 67 accept
+		iifname "br-avpn" counter drop
+	}
+}

@@ -21,6 +21,7 @@ TARGET_PARENT='/usr/lib'
 MEMINFO='/proc/meminfo'
 RAM_ROOT='/tmp/autovpn-zapret-install-state'
 ENGINE_SERVICE='/etc/init.d/autovpn-zapret'
+DIRECT_SERVICE='/etc/init.d/autovpn-direct-zapret'
 MAX_ARCHIVE_KIB=5120
 MAX_LICENSE_KIB=16
 MIN_TMP_KIB=7168
@@ -127,7 +128,8 @@ claim_job() {
 }
 
 engine_running() {
-	[ -x "$ENGINE_SERVICE" ] && "$ENGINE_SERVICE" running >/dev/null 2>&1
+	{ [ -x "$ENGINE_SERVICE" ] && "$ENGINE_SERVICE" running >/dev/null 2>&1; } ||
+		{ [ -x "$DIRECT_SERVICE" ] && "$DIRECT_SERVICE" running >/dev/null 2>&1; }
 }
 
 preflight() {
@@ -268,6 +270,14 @@ worker() {
 }
 
 case "${1-}" in
+	install)
+		[ "$#" = 1 ] || fail invalid_arguments
+		preflight
+		claim_job
+		WORKER_MODE=1
+		write_status running || fail status_write_failed
+		install_bundle
+		;;
 	status) [ "$#" = 1 ] || fail invalid_arguments; status ;;
 	queue) [ "$#" = 1 ] || fail invalid_arguments; queue ;;
 	worker) worker "$@" ;;

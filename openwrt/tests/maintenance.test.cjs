@@ -16,7 +16,7 @@ function request(action, extra = {}) {
 
 function helperFixture(overrides = {}) {
 	const files = new Map(Object.entries({
-		'/etc/autovpn': '', '/etc/autovpn/state': '', '/etc/autovpn/runtime': '',
+		'/etc/autovpn': '', '/etc/autovpn/state': '', '/etc/autovpn/runtime': '', '/etc/autovpn/runtime-zapret': '',
 		'/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'confirmed' }),
 		...(overrides.files || {})
 	}));
@@ -82,6 +82,10 @@ test('rebind fail-closes then destroys only owned old state, preserves Wi-Fi/WAN
 		'/etc/autovpn/credentials': 'avrt_oldrouter.' + 'o'.repeat(43) + '\n',
 		'/etc/autovpn/state/journal.json': '{"old":true}', '/etc/autovpn/runtime/current.json': '{"old":true}',
 		'/etc/autovpn/runtime/current.json.new': '{"old_secret":true}',
+		'/etc/autovpn/runtime-zapret/current.json': '{"old":true}',
+		'/etc/autovpn/runtime-zapret/current.json.new': '{"old_secret":true}',
+		'/etc/autovpn/runtime-zapret/awg.conf': 'old private key',
+		'/etc/autovpn/runtime-zapret/foreign.txt': 'must stay',
 		'/etc/autovpn/runtime/foreign.txt': 'must stay'
 	} });
 	const result = env.api.perform(request('rebind', {
@@ -95,7 +99,11 @@ test('rebind fail-closes then destroys only owned old state, preserves Wi-Fi/WAN
 	assert.equal(env.values['wifi.base_ssid'], 'Dorm');
 	assert.equal(env.files.has('/etc/autovpn/state/journal.json'), false);
 	assert.equal(env.files.has('/etc/autovpn/runtime/current.json'), false);
+	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/current.json'), false);
+	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/current.json.new'), false);
+	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/awg.conf'), false);
 	assert.equal(env.files.get('/etc/autovpn/runtime/foreign.txt'), 'must stay');
+	assert.equal(env.files.get('/etc/autovpn/runtime-zapret/foreign.txt'), 'must stay');
 	assert.deepEqual(JSON.parse(env.files.get('/etc/autovpn/state/maintenance.lock')), { schema_version: 1, action: 'rebind', phase: 'ready' });
 	const sync = env.events.findIndex(event => Array.isArray(event) && event[1] === '/bin/sync');
 	const close = env.events.findIndex(event => Array.isArray(event) && event[1] === '/usr/libexec/autovpn/runtime-adapter');
@@ -104,8 +112,16 @@ test('rebind fail-closes then destroys only owned old state, preserves Wi-Fi/WAN
 	assert.equal(env.files.has('/etc/autovpn/runtime/current.json.new'), false);
 });
 
-test('reset requires explicit confirmation, leaves all Wi-Fi/WAN and network transaction data untouched', () => {
-	const env = helperFixture({ files: { '/etc/autovpn/credentials': 'avrt_oldrouter.' + 'o'.repeat(43) + '\n' } });
+test('reset requires explicit confirmation, clears both lanes, and leaves Wi-Fi/WAN and network transaction data untouched', () => {
+	const env = helperFixture({
+		files: {
+			'/etc/autovpn/credentials': 'avrt_oldrouter.' + 'o'.repeat(43) + '\n',
+			'/etc/autovpn/runtime-zapret/run.json': '{"old":true}',
+			'/etc/autovpn/runtime-zapret/zapret.json': '{"old":true}',
+			'/etc/autovpn/runtime-zapret/foreign.txt': 'must stay'
+		},
+		values: { 'runtime.selection': 'hysteria2', 'runtime_zapret.selection': 'amneziawg' }
+	});
 	assert.equal(env.api.perform(request('reset')).code, 'reset_confirmation_required');
 	const result = env.api.perform(request('reset', { confirmation: 'RESET' }));
 	assert.deepEqual(result, { ok: true, reset: true, requires_activation: false });
@@ -114,8 +130,13 @@ test('reset requires explicit confirmation, leaves all Wi-Fi/WAN and network tra
 	assert.equal(env.values['main.base_url'], '');
 	assert.equal(env.values['main.router_id'], '');
 	assert.equal(env.values['main.enabled'], '0');
+	assert.equal(env.values['runtime.selection'], 'auto');
+	assert.equal(env.values['runtime_zapret.selection'], 'auto');
 	assert.equal(env.values['runtime.wan_device'], 'eth0');
 	assert.equal(env.values['wifi.password'], 'wifi-password');
+	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/run.json'), false);
+	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/zapret.json'), false);
+	assert.equal(env.files.get('/etc/autovpn/runtime-zapret/foreign.txt'), 'must stay');
 	assert.deepEqual(JSON.parse(env.files.get('/etc/autovpn/state/maintenance.lock')), { schema_version: 1, action: 'reset', phase: 'ready' });
 });
 

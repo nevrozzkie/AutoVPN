@@ -212,7 +212,11 @@ function restoreRuntime(config, state) {
 	let response = runtimeAction(config, 'restore');
 	if (!response.ok)
 		runtimeAction(config, 'fail-closed');
-	return { ok: response.ok === true, code: response.code || 'runtime_restored', state: state };
+	return {
+		ok: response.ok === true && response.restored !== false,
+		code: response.restored === false ? 'runtime_partially_restored' : response.code || 'runtime_restored',
+		state: state,
+	};
 }
 
 function applyPolicy(config, state) {
@@ -286,6 +290,18 @@ function refresh(config, state) {
 
 function summary(config, state) {
 	let runtime = runtimeAction(config, 'status');
+	let runtimeLanes = {};
+	for (let lane = 0; lane < 2; lane++) {
+		let id = ['vpn', 'vpn_zapret'][lane];
+		let value = runtime.runtime_lanes?.[id];
+		if (type(value) != 'object') continue;
+		runtimeLanes[id] = {
+			ok: value.ok === true, empty: value.empty === true,
+			active_profile: safeActiveProfile(value.active_profile),
+			capabilities: safeCapabilities(value.capabilities || {}),
+			code: type(value.code) == 'string' && match(value.code, /^[a-z0-9_]{1,64}$/) != null ? value.code : null,
+		};
+	}
 	function entry(value) {
 		return value == null ? null : {
 			revision: value.snapshot.revision,
@@ -295,7 +311,14 @@ function summary(config, state) {
 	}
 	return {
 		ok: true,
-		runtime_running: runtime.ok === true,
+		runtime_running: runtime.ok === true && runtime.running !== false,
+		runtime_lanes: runtimeLanes,
+		runtime_direct_zapret: type(runtime.runtime_direct_zapret) != 'object' ? null : {
+			ok: runtime.runtime_direct_zapret.ok === true,
+			enabled: runtime.runtime_direct_zapret.enabled === true,
+			code: type(runtime.runtime_direct_zapret.code) == 'string' &&
+				match(runtime.runtime_direct_zapret.code, /^[a-z0-9_]{1,64}$/) != null ? runtime.runtime_direct_zapret.code : null,
+		},
 		runtime_error: runtime.ok === true ? null : runtime.code,
 		runtime_profile: runtime.ok === true ? safeActiveProfile(runtime.active_profile) : null,
 		runtime_zapret: runtime.ok === true && runtime.capabilities?.zapret === true,
@@ -363,8 +386,10 @@ else if (command == 'health-tick' || command == 'ping-all') {
 		result = { ok: false, code: 'runtime_not_ready' };
 	else if (command == 'ping-all') {
 		let target = ARGV[1] || 'youtube';
+		let lane = ARGV[2] || 'vpn';
 		result = index(['youtube', 'instagram'], target) < 0 ? { ok: false, code: 'invalid_probe_target' } :
-			adapterCall([config.runtime_adapter, 'ping-all', config.state_dir + '/journal.json', target]);
+			index(['vpn', 'vpn_zapret'], lane) < 0 ? { ok: false, code: 'invalid_lane' } :
+			adapterCall([config.runtime_adapter, 'ping-all', config.state_dir + '/journal.json', target, lane]);
 	}
 	else {
 		result = runtimeAction(config, 'health-tick');

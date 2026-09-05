@@ -8,9 +8,10 @@ const processRunner = require('autovpn.process');
 
 const SETUP_RESULT_ROOT = '/etc/autovpn/state/setup-result.';
 
-function callController(command, argument) {
+function callController(command, argument, lane) {
 	let argv = ['/usr/sbin/autovpnctl', command];
 	if (argument != null) push(argv, argument);
+	if (lane != null) push(argv, lane);
 	let process = processRunner.popen(argv, 'r');
 	if (process == null)
 		return { ok: false, code: 'controller_start_failed' };
@@ -33,7 +34,9 @@ function pingAll(request) {
 	let target = request.args.target;
 	if (type(target) != 'string' || (target != 'youtube' && target != 'instagram'))
 		return { ok: false, code: 'invalid_ping_target' };
-	return callController('ping-all', target);
+	let lane = request.args.lane || 'vpn';
+	if (lane != 'vpn' && lane != 'vpn_zapret') return { ok: false, code: 'invalid_lane' };
+	return callController('ping-all', target, lane);
 }
 
 function validSetupNonce(value) {
@@ -189,7 +192,7 @@ return {
 			},
 		},
 		ping_all: {
-			args: { target: '' },
+			args: { target: '', lane: '' },
 			call: function(request) { return pingAll(request); },
 		},
 	},

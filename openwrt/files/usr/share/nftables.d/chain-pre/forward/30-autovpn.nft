@@ -1,6 +1,12 @@
 # Reserved VPN bridges: rules apply before fw4 established/zone handling.
 iifname "br-avpn" meta nfproto ipv4 ip saddr 192.168.30.0/24 oifname "avpn0" accept
 iifname "avpn0" meta nfproto ipv4 oifname "br-avpn" ct state { established, related } accept
+iifname "br-avpnz" meta nfproto ipv4 ip saddr 192.168.32.0/24 oifname "avpn1" accept
+iifname "avpn1" meta nfproto ipv4 oifname "br-avpnz" ct state { established, related } accept
+# Direct-zapret falls through to ordinary fw4 zone rules and its own guard.
+iifname "br-avpndz" meta nfproto ipv6 counter drop
+oifname "br-avpndz" meta nfproto ipv6 counter drop
+iifname "br-avpndz" ip saddr != 192.168.31.0/24 counter drop
 iifname "br-avpnd" meta nfproto ipv6 counter drop
-iifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop
-oifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop
+iifname { "br-avpn", "br-avpnz" } counter drop
+oifname { "br-avpn", "br-avpnz" } counter drop

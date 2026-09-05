@@ -16,6 +16,7 @@ const ROOT = '/etc/autovpn';
 const STATE = ROOT + '/state';
 const CREDENTIAL = ROOT + '/credentials';
 const RUNTIME = ROOT + '/runtime';
+const RUNTIME_ZAPRET = ROOT + '/runtime-zapret';
 const REQUEST_LIMIT = 4096;
 
 function validNonce(value) {
@@ -73,7 +74,9 @@ function privateDirectories() {
 	if (!access(ROOT, 'f') && mkdir(ROOT) == null) return false;
 	if (!access(STATE, 'f') && mkdir(STATE) == null) return false;
 	if (!access(RUNTIME, 'f') && mkdir(RUNTIME) == null) return false;
-	return chmod(ROOT, 0o700) != null && chmod(STATE, 0o700) != null && chmod(RUNTIME, 0o700) != null;
+	if (!access(RUNTIME_ZAPRET, 'f') && mkdir(RUNTIME_ZAPRET) == null) return false;
+	return chmod(ROOT, 0o700) != null && chmod(STATE, 0o700) != null &&
+		chmod(RUNTIME, 0o700) != null && chmod(RUNTIME_ZAPRET, 0o700) != null;
 }
 
 function resultPath(nonce) { return STATE + '/maintenance-result.' + nonce + '.json'; }
@@ -151,7 +154,11 @@ function clearRuntimeState() {
 		RUNTIME + '/prepared.json', RUNTIME + '/current.json', RUNTIME + '/previous.json',
 		RUNTIME + '/failover.json',
 		RUNTIME + '/candidate.json', RUNTIME + '/run.json', RUNTIME + '/awg.json', RUNTIME + '/zapret.json',
-		RUNTIME + '/awg-run.json', RUNTIME + '/awg-owned', RUNTIME + '/awg.conf'
+		RUNTIME + '/awg-run.json', RUNTIME + '/awg-owned', RUNTIME + '/awg.conf',
+		RUNTIME_ZAPRET + '/prepared.json', RUNTIME_ZAPRET + '/current.json', RUNTIME_ZAPRET + '/previous.json',
+		RUNTIME_ZAPRET + '/failover.json',
+		RUNTIME_ZAPRET + '/candidate.json', RUNTIME_ZAPRET + '/run.json', RUNTIME_ZAPRET + '/awg.json', RUNTIME_ZAPRET + '/zapret.json',
+		RUNTIME_ZAPRET + '/awg-run.json', RUNTIME_ZAPRET + '/awg-owned', RUNTIME_ZAPRET + '/awg.conf'
 	];
 	for (let i = 0; i < length(files); i++)
 		if (!removeOwned(files[i]) || !removeOwned(files[i] + '.new')) return false;
@@ -183,6 +190,7 @@ function resetConfig(ctx) {
 		ctx.set('autovpn', 'main', 'connect_timeout', '10') &&
 		ctx.set('autovpn', 'main', 'request_timeout', '30') &&
 		ctx.set('autovpn', 'runtime', 'selection', 'auto') &&
+		ctx.set('autovpn', 'runtime_zapret', 'selection', 'auto') &&
 		ctx.set('autovpn', 'runtime', 'dns_server', '1.1.1.1') &&
 		ctx.set('autovpn', 'runtime', 'direct_domains', ['ru', 'xn--p1ai']) &&
 		(ctx.get('autovpn', 'runtime', 'direct_cidrs') == null || ctx.delete('autovpn', 'runtime', 'direct_cidrs')) &&

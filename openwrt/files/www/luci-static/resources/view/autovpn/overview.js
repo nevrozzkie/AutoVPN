@@ -24,7 +24,7 @@ var callApplyPolicy = rpc.declare({
 var callPingAll = rpc.declare({
 	object: 'luci.autovpn',
 	method: 'ping_all',
-	params: ['target'],
+	params: ['target', 'lane'],
 	timeout: 30000,
 	expect: { '': {} }
 });
@@ -77,9 +77,24 @@ return view.extend({
 	},
 
 	render: function(status) {
+		var lanes = status.runtime_lanes || { vpn: { ok: status.runtime_running, active_profile: status.runtime_profile, code: status.runtime_error } };
+		var laneRows = Object.keys(lanes).map(function(name) {
+			var lane = lanes[name] || {};
+			return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, name === 'vpn_zapret' ? _('VPN + zapret') : _('VPN')), E('td', { 'class': 'td left' }, lane.ok ? valueOrDash(lane.active_profile) : valueOrDash(lane.code))]);
+		});
+		var directZapret = status.runtime_direct_zapret;
+		var directZapretRow = null;
+		if (directZapret) {
+			var directZapretState = directZapret.ok && directZapret.enabled ? _('Active') :
+				directZapret.enabled ? _('Unavailable: %s').format(valueOrDash(directZapret.code)) : _('Disabled (Wi-Fi -з is closed)');
+			directZapretRow = E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left' }, _('Direct zapret (Wi-Fi -з)')),
+				E('td', { 'class': 'td left' }, directZapretState)
+			]);
+		}
 		var table = E('table', { 'class': 'table' }, [
-			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Zapret on current VPN')), E('td', { 'class': 'td left' }, status.runtime_zapret ? _('Active (experimental)') : _('Not active'))]),
-			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('VPN runtime')), E('td', { 'class': 'td left' }, status.runtime_running ? valueOrDash(status.runtime_profile) : valueOrDash(status.runtime_error))]),
+			...laneRows,
+			...(directZapretRow ? [directZapretRow] : []),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Router ID')), E('td', { 'class': 'td left' }, valueOrDash(status.router_id))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Phase')), E('td', { 'class': 'td left' }, valueOrDash(status.phase))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Credential')), E('td', { 'class': 'td left' }, status.credential_configured ? _('configured') : _('not configured'))]),
@@ -113,11 +128,13 @@ return view.extend({
 			E('option', { 'value': 'youtube' }, _('YouTube')),
 			E('option', { 'value': 'instagram' }, _('Instagram'))
 		]);
-		var pingButton = E('button', {
+		function pingSection(lane, heading, label) {
+			var pingOutput = E('div', { 'id': 'autovpn-ping-results-' + lane });
+			var ping = E('button', {
 			'class': 'btn cbi-button cbi-button-action',
 			'click': ui.createHandlerFn(this, function() {
-				pingButton.disabled = true;
-				return callPingAll(target.value).then(function(result) {
+				ping.disabled = true;
+				return callPingAll(target.value, lane).then(function(result) {
 					pingOutput.replaceChildren(
 						E('p', {}, result.ok ? _('Checked at: %s; active profile: %s').format(checkedAt(result.checked_at), valueOrDash(result.active_profile)) : _('Ping all failed: %s').format(valueOrDash(result.code))),
 						result.ok ? pingTable(result) : E('p', {}, _('No candidate results were returned.'))
@@ -125,19 +142,27 @@ return view.extend({
 				}).catch(function() {
 					pingOutput.replaceChildren(E('p', {}, _('Ping all is unavailable or timed out.')));
 				}).finally(function() {
-					pingButton.disabled = false;
+					ping.disabled = false;
 				});
 			})
-		}, _('Ping all'));
-		var pingOutput = E('div', { 'id': 'autovpn-ping-results' });
+			}, label);
+			return E('section', { 'class': 'autovpn-ping-lane' }, [
+				E('h3', {}, heading),
+				ping,
+				pingOutput
+			]);
+		}
 
 		return E('div', { 'class': 'cbi-map', 'id': 'autovpn-status' }, [
 			E('h2', {}, _('AutoVPN controller')),
-			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. Optional zapret2 processes VPN-server connections; configure it in Settings. Separate ZAPRET SSIDs are not active yet.')),
+			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. The one-command router installer installs the pinned zapret2 engine from its official upstream release with verification; it has no automatic updates. Configure its lanes in Settings.')),
 			table,
 			E('p', {}, _('Ping all checks each candidate with HTTPS without changing the active VPN. It measures response latency, not throughput or ICMP reachability.')),
-			E('div', { 'class': 'cbi-page-actions' }, [target, pingButton]),
-			pingOutput,
+			E('div', { 'class': 'cbi-page-actions' }, [target]),
+			E('div', { 'class': 'autovpn-ping-lanes' }, [
+				pingSection('vpn', _('VPN'), _('Ping all: VPN')),
+				pingSection('vpn_zapret', _('VPN + zapret'), _('Ping all: VPN + zapret'))
+			]),
 			E('div', { 'class': 'cbi-page-actions' }, [button, applyButton])
 		]);
 	},

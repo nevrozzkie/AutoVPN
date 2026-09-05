@@ -6,8 +6,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
+const { loadUcodeModule } = require('./ucode-loader.cjs');
+const lanes = loadUcodeModule(path.join(root, 'files/usr/share/ucode/autovpn/lanes.uc'));
 const helper = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/awg-helper.uc'), 'utf8');
-const adapter = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-adapter'), 'utf8');
+const adapter = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-lane'), 'utf8');
 
 function runAwg(action, accessResult, popenResult, readResult = () => null) {
 	let code;
@@ -16,7 +18,8 @@ function runAwg(action, accessResult, popenResult, readResult = () => null) {
 		'type', 'match', 'sort', 'keys', 'join', 'length', 'split', 'int', 'substr', 'json', 'ARGV', 'printf', 'exit', source);
 	invoke(
 		path => readResult(path), () => null, () => true, () => true, () => true, path => accessResult(path),
-		path => popenResult(path), name => name === 'autovpn.process' ? { popen: popenResult } : null,
+		path => popenResult(path), name => name === 'autovpn.process' ? { popen: popenResult }
+			: name === 'autovpn.lanes' ? lanes : null,
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
 		(value, expression) => value.match(expression), value => Array.isArray(value) ? value.slice().sort() : Object.keys(value).sort(), Object.keys,
 		(separator, values) => values.join(separator), value => value.length, (value, separator) => value.split(separator),
@@ -35,9 +38,14 @@ const profile = () => ({
 	route_allowed_ips: ['0.0.0.0/0', '::/0'], install_routes: false, legacy_amnezia_vpn_import_key: 'vpn://opaque'
 });
 
-function awgHarness({ commandFailure, routes = [], marker, link } = {}) {
-	const files = new Map([['/etc/autovpn/runtime/awg.json', JSON.stringify(profile())]]);
-	if (marker != null) files.set('/etc/autovpn/runtime/awg-owned', marker);
+function awgHarness({ commandFailure, routes = [], marker, link, lane = 'vpn', profileValue } = {}) {
+	const descriptor = lanes.get(lane);
+	const runtimeRoot = descriptor.root;
+	const deviceName = descriptor.awg.device;
+	const alias = lane === 'vpn_zapret' ? 'autovpn-awg-zapret-v1' : 'autovpn-awg-v1';
+	const value = profileValue || profile();
+	const files = new Map([[runtimeRoot + '/awg.json', JSON.stringify(value)]]);
+	if (marker != null) files.set(runtimeRoot + '/awg-owned', marker);
 	let device = link || null;
 	const calls = [];
 	let code;
@@ -46,7 +54,7 @@ function awgHarness({ commandFailure, routes = [], marker, link } = {}) {
 		'type', 'match', 'sort', 'keys', 'join', 'length', 'split', 'int', 'substr', 'json', 'ARGV', 'printf', 'exit', source);
 	function access(path) {
 		if (path === '/usr/bin/awg' || path === '/sys/module/amneziawg') return true;
-		if (path === '/sys/class/net/avpnwg0') return device != null;
+		if (path === '/sys/class/net/' + deviceName) return device != null;
 		return files.has(path);
 	}
 	function popen(argv) {
@@ -55,15 +63,15 @@ function awgHarness({ commandFailure, routes = [], marker, link } = {}) {
 			return { read: () => JSON.stringify(routes), close: () => 0 };
 	if (argv.join(' ') === '/sbin/ip -j -4 address show')
 			return { read: () => '[]', close: () => 0 };
-	if (argv.join(' ') === '/sbin/ip -d -j link show dev avpnwg0')
+	if (argv.join(' ') === '/sbin/ip -d -j link show dev ' + deviceName)
 			return { read: () => device == null ? '' : JSON.stringify([{ ifalias: device.alias, linkinfo: { info_kind: device.kind } }]), close: () => device == null ? 1 : 0 };
 		const failing = commandFailure && commandFailure(argv);
 		return {
 			read: () => '',
 			close: () => {
 				if (failing) return 1;
-			if (argv.join(' ') === '/sbin/ip link add dev avpnwg0 alias autovpn-awg-v1 type amneziawg') device = { alias: 'autovpn-awg-v1', kind: 'amneziawg' };
-			if (argv.join(' ') === '/sbin/ip link del dev avpnwg0') device = null;
+			if (argv.join(' ') === '/sbin/ip link add dev ' + deviceName + ' alias ' + alias + ' type amneziawg') device = { alias, kind: 'amneziawg' };
+			if (argv.join(' ') === '/sbin/ip link del dev ' + deviceName) device = null;
 				return 0;
 			}
 		};
@@ -72,24 +80,24 @@ function awgHarness({ commandFailure, routes = [], marker, link } = {}) {
 		(path, limit) => files.has(path) ? files.get(path).slice(0, limit) : null,
 		(path, value) => { files.set(path, value); return value.length; }, () => true,
 		(from, to) => { files.set(to, files.get(from)); files.delete(from); return true; }, path => files.delete(path), access, popen,
-		name => name === 'autovpn.process' ? { popen } : null,
+		name => name === 'autovpn.process' ? { popen } : name === 'autovpn.lanes' ? lanes : null,
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : Number.isInteger(value) ? 'int' : typeof value,
 		(value, expression) => value.match(expression), value => Array.isArray(value) ? value.slice().sort() : Object.keys(value).sort(), Object.keys,
 		(separator, values) => values.join(separator), value => value.length, (value, separator) => value.split(separator),
 		value => Number.parseInt(value, 10), (value, start, length) => value.substr(start, length), JSON.parse,
-		['up', '/etc/autovpn/runtime/awg.json'], () => {}, value => { code = value; }
+		['up', runtimeRoot + '/awg.json', lane], () => {}, value => { code = value; }
 	);
-	return { code, calls, files, device };
+	return { code, calls, files, device, descriptor, alias, profile: value };
 }
 
 test('AWG helper requires an AmneziaWG kernel link and never invokes ordinary wg', () => {
 	assert.match(helper, /IP, 'link', 'add', 'dev', DEVICE, 'alias', ALIAS, 'type', 'amneziawg/);
-	assert.match(helper, /awg, 'setconf', DEVICE, '\/etc\/autovpn\/runtime\/awg\.conf'/);
+	assert.match(helper, /awg, 'setconf', DEVICE, configPath/);
 	assert.doesNotMatch(helper, /['"]wg['"]/);
 	assert.match(helper, /chmod\(path \+ '\.new', 0o600\)/);
 	assert.match(helper, /Never delete an interface that was not created by this controller/);
 	assert.match(helper, /access\(OWNED\) !== true/);
-	assert.match(helper, /const MARKER = 'autovpn-awg-v1\\n'/);
+	assert.match(helper, /const MARKER = ALIAS \+ '\\n'/);
 	assert.match(helper, /item\.ifalias == ALIAS/);
 	assert.match(helper, /item\.linkinfo\.info_kind == 'amneziawg'/);
 	assert.match(helper, /access\('\/sys\/module\/amneziawg'\) === true/);
@@ -111,6 +119,27 @@ test('AWG up makes a durable intent before atomically aliased link creation and 
 	assert.equal(argv.includes(profile().interface.private_key), false);
 	assert.equal(argv.includes(profile().peer.preshared_key), false);
 	assert.equal(env.files.get('/etc/autovpn/runtime/awg.conf').includes(profile().interface.private_key), true);
+});
+
+test('secondary AWG owns a separate root, interface, alias and outer mark without an import key', () => {
+	const secondaryProfile = profile();
+	delete secondaryProfile.legacy_amnezia_vpn_import_key;
+	secondaryProfile.interface.private_key = 'D'.repeat(43) + '=';
+	secondaryProfile.interface.address = '10.66.66.9/32';
+	const env = awgHarness({ lane: 'vpn_zapret', profileValue: secondaryProfile });
+	assert.equal(env.code, 0);
+	assert.equal(env.files.get('/etc/autovpn/runtime-zapret/awg-owned'), 'autovpn-awg-zapret-v1\n');
+	assert.deepEqual(env.device, { alias: 'autovpn-awg-zapret-v1', kind: 'amneziawg' });
+	const calls = env.calls.map(argv => argv.join(' '));
+	assert.ok(calls.includes('/sbin/ip link add dev avpnwg1 alias autovpn-awg-zapret-v1 type amneziawg'));
+	assert.ok(calls.includes('/usr/bin/awg setconf avpnwg1 /etc/autovpn/runtime-zapret/awg.conf'));
+	assert.ok(calls.includes('/usr/bin/awg set avpnwg1 fwmark 20214'));
+	assert.equal(calls.join(' ').includes(secondaryProfile.interface.private_key), false);
+	assert.equal(env.files.get('/etc/autovpn/runtime-zapret/awg.conf').includes(secondaryProfile.interface.private_key), true);
+
+	const wrongShape = awgHarness({ lane: 'vpn_zapret', profileValue: profile() });
+	assert.equal(wrongShape.code, 1);
+	assert.equal(wrongShape.files.has('/etc/autovpn/runtime-zapret/awg-owned'), false);
 });
 
 test('AWG retains its ownership intent when configuration cleanup fails', () => {
@@ -140,9 +169,9 @@ test('AWG refuses an interface address overlapping a main-table route before wri
 });
 
 test('AWG transport has separate inner and outer marks with an unreachable fallback', () => {
-	assert.match(helper, /awg, 'set', DEVICE, 'fwmark', '20194'/);
-	assert.match(adapter, /priority 20193 fwmark 20193 lookup 20193/);
-	assert.match(adapter, /priority 20194 fwmark 20193 unreachable/);
+	assert.match(helper, /let outerMark = LANE\.id == 'vpn_zapret' \? '20214' : '20194'/);
+	assert.match(adapter, /ip -4 rule add priority "\$AWG_PRIORITY" fwmark "\$AWG_TABLE" lookup "\$AWG_TABLE"/);
+	assert.match(adapter, /ip -4 rule add priority "\$AWG_UNREACHABLE_PRIORITY" fwmark "\$AWG_TABLE" unreachable/);
 	assert.match(adapter, /if awg_active && ! awg_up; then/);
 	assert.match(adapter, /helper fallback-awg \|\| return 1/);
 	assert.match(adapter, /helper disable-awg \|\| return 1/);

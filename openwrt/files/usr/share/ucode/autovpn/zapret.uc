@@ -22,9 +22,12 @@ function validPolicy(value) {
 }
 function validPlan(value) {
 	if (value == null) return true;
-	if (!exact(value, ['version', 'wan_device', 'flows', 'repeats']) || value.version != 1 ||
+	let fields = ['version', 'wan_device', 'flows', 'repeats'];
+	if (value.version == 2) push(fields, 'lane');
+	if (!exact(value, fields) || (value.version != 1 && value.version != 2) ||
+		(value.version == 2 && value.lane != 'vpn_zapret') ||
 		type(value.wan_device) != 'string' || match(value.wan_device, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/) == null ||
-		index(['lo', 'br-lan', 'avpn0', 'avpnwg0', 'br-avpn', 'br-avpnz', 'br-avpnd', 'br-avpndz'], value.wan_device) >= 0 ||
+		index(['lo', 'br-lan', 'avpn0', 'avpn1', 'avpnwg0', 'avpnwg1', 'br-avpn', 'br-avpnz', 'br-avpnd', 'br-avpndz'], value.wan_device) >= 0 ||
 		type(value.repeats) != 'int' || value.repeats < 1 || value.repeats > 6 ||
 		type(value.flows) != 'array' || length(value.flows) < 1 || length(value.flows) > 3) return false;
 	let previous = -1;
@@ -33,24 +36,26 @@ function validPlan(value) {
 		if (!exact(flow, ['profile', 'ip', 'port', 'transport', 'mark', 'strategy'])) return false;
 		let position = index(PROFILES, flow.profile);
 		if (position <= previous || !ip(flow.ip) || type(flow.port) != 'int' || flow.port < 1 || flow.port > 65535 ||
-			flow.mark != MARKS[position] || flow.transport != (position == 0 ? 'tcp' : 'udp') ||
+			flow.mark != (value.version == 2 && position == 2 ? 20214 : MARKS[position]) || flow.transport != (position == 0 ? 'tcp' : 'udp') ||
 			flow.strategy != (position == 0 ? 'split' : 'fake')) return false;
 		previous = position;
 	}
 	return true;
 }
-function plan(snapshot, candidates, wan, policy) {
+function plan(snapshot, candidates, wan, policy, lane) {
 	if (policy == null) return null;
+	if (lane != null && lane != 'vpn_zapret') return false;
 	if (!validPolicy(policy)) return false;
 	let value = { version: 1, wan_device: wan, flows: [], repeats: policy.repeats };
+	if (lane == 'vpn_zapret') { value.version = 2; value.lane = lane; }
 	for (let i = 0; i < 3; i++) {
 		let key = ['vless', 'hysteria2', 'amneziawg'][i];
 		if (index(candidates, PROFILES[i]) < 0 || policy[key] == 'off') continue;
-		let slot = snapshot.protocols[key];
+		let slot = snapshot.protocols[lane == 'vpn_zapret' && key == 'amneziawg' ? 'amneziawg_aux' : key];
 		let endpoint = i == 2 ? slot.profile.peer.endpoint : slot.outbound;
 		push(value.flows, { profile: PROFILES[i], ip: i == 2 ? endpoint.host : endpoint.server,
 			port: i == 2 ? endpoint.port : endpoint.server_port,
-			transport: i == 0 ? 'tcp' : 'udp', mark: MARKS[i], strategy: policy[key] });
+			transport: i == 0 ? 'tcp' : 'udp', mark: lane == 'vpn_zapret' && i == 2 ? 20214 : MARKS[i], strategy: policy[key] });
 	}
 	if (length(value.flows) == 0) return null;
 	return validPlan(value) ? value : false;

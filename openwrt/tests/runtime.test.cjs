@@ -9,8 +9,29 @@ const { spawnSync } = require('node:child_process');
 const { loadUcodeModule } = require('./ucode-loader.cjs');
 const root = path.resolve(__dirname, '..');
 const moduleRoot = path.join(root, 'files/usr/share/ucode/autovpn');
-const runtime = loadUcodeModule(path.join(moduleRoot, 'runtime.uc'));
 const machine = loadUcodeModule(path.join(moduleRoot, 'state.uc'));
+const lanes = loadUcodeModule(path.join(moduleRoot, 'lanes.uc'));
+const zapret = loadUcodeModule(path.join(moduleRoot, 'zapret.uc'));
+function loadRuntime() {
+	const source = fs.readFileSync(path.join(moduleRoot, 'runtime.uc'), 'utf8');
+	const factory = new Function('type', 'length', 'keys', 'sort', 'match', 'push', 'substr', 'int',
+		'index', 'replace', 'split', 'lc', 'sprintf', 'json', 'join', 'require', source);
+	return factory(
+		value => value == null ? null : Array.isArray(value) ? 'array' : typeof value === 'boolean' ? 'bool'
+			: Number.isInteger(value) ? 'int' : typeof value,
+		value => typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : value.length,
+		Object.keys, value => value.sort(), (value, expression) => value.match(expression),
+		(array, value) => array.push(value), (value, start, count) => count == null ? value.substring(start) : value.substring(start, start + count),
+		value => Number.parseInt(value, 10), (value, needle) => value.indexOf(needle),
+		(value, expression, replacement) => value.replace(expression, replacement),
+		(value, separator) => value.split(separator), value => value.toLowerCase(),
+		(format, value) => format === '%J' ? JSON.stringify(value) : null, JSON.parse,
+		(separator, value) => value.join(separator),
+		name => ({ 'autovpn.zapret': zapret, 'autovpn.lanes': lanes })[name],
+	);
+}
+const runtime = loadUcodeModule(path.join(moduleRoot, 'runtime.uc'));
+const laneRuntime = loadRuntime();
 const snapshot = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/snapshot-v3.json')));
 const clone = value => JSON.parse(JSON.stringify(value));
 const policy = () => ({ selection: 'auto', wan_device: 'eth1', dns_server: '1.1.1.1', direct_domains: ['ru', 'xn--p1ai'], direct_cidrs: [], hysteria_tls_mode: 'subscription', awg_available: false });
@@ -116,6 +137,16 @@ test('runtime helper uses an absolute modprobe path for stable process dispatch'
 	assert.match(source, /command\(\['\/sbin\/modprobe', 'amneziawg'\]\)/);
 });
 
+test('AWG addresses cannot overlap any managed /24 or either lane TUN subnet', () => {
+	for (const address of ['192.168.29.200/32', '192.168.30.250/32', '192.168.31.254/32',
+		'192.168.32.100/32', '172.30.255.5/32', '172.30.255.7/32']) {
+		const material = withAwg();
+		material.protocols.amneziawg.profile.interface.address = address;
+		assert.equal(runtime.render(material, { ...policy(), awg_available: true, selection: 'amneziawg' }, machine).code,
+			'selected_vpn_unavailable', address);
+	}
+});
+
 test('runtime rejects policy injection, malformed addresses and server global config', () => {
 	for (const override of [
 		{ wan_device: 'eth1;touch /tmp/pwned' }, { wan_device: 'avpn0' },
@@ -200,7 +231,8 @@ function helperHarness() {
 				(from, to) => { storage.set(to, storage.get(from)); storage.delete(from); return true; },
 				file => localAwgAvailable && (file === '/usr/bin/awg' || file === '/sys/module/amneziawg'),
 				() => ({ load() {}, get(_config, section, key) { return section === 'main' ? localRouter : localPolicy[key]; } }),
-				name => ({ 'autovpn.state': machine, 'autovpn.journal': journal, 'autovpn.runtime': runtime })[name],
+				name => ({ 'autovpn.state': machine, 'autovpn.journal': journal,
+					'autovpn.runtime': laneRuntime, 'autovpn.lanes': lanes })[name],
 				value => value.length,
 				(format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''),
 				value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
@@ -293,6 +325,8 @@ test('helper probes all candidates without selection side effects and keeps auto
 		selection: 'auto',
 		candidates: ['vless-reality', 'hysteria2'],
 		identity: entry().etag + ':' + env.state.desired.attempt + ':vless-reality',
+		lane: 'vpn',
+		legacy_transport: true,
 	});
 	assert.deepEqual(runtimeFiles(), beforeInfo);
 	const previous = env.storage.get('/etc/autovpn/runtime/previous.json');
@@ -449,18 +483,19 @@ test('controller restores VPN before fetching and never hides restore failure be
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/controller.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '').split('\nlet config = configuration();')[0];
 	const factory = new Function('require', 'popen', 'access', 'chmod', 'type', 'length', 'match', 'json', 'push', source + '\nreturn refresh;');
-	for (const restoreOk of [true, false]) {
+	for (const restored of [{ ok: true }, { ok: false, code: 'restore_test' }, { ok: true, restored: false }]) {
+		const restoreOk = restored.ok && restored.restored !== false;
 		const calls = [];
 		const refresh = factory(
 			name => name === 'autovpn.process' ? { popen: argv => {
 				calls.push(argv[1]);
-				const response = argv[1] === 'restore' ? { ok: restoreOk, code: 'restore_test' } :
+				const response = argv[1] === 'restore' ? restored :
 					argv[1] === 'fetch' ? { ok: true, status: 304 } : { ok: true };
 				return { read() { return JSON.stringify(response); }, close() { return 0; } };
 			} } : loadUcodeModule(path.join(moduleRoot, name.split('.').pop() + '.uc')),
 			argv => {
 				calls.push(argv[1]);
-				const response = argv[1] === 'restore' ? { ok: restoreOk, code: 'restore_test' } :
+				const response = argv[1] === 'restore' ? restored :
 					argv[1] === 'fetch' ? { ok: true, status: 304 } : { ok: true };
 				return { read() { return JSON.stringify(response); }, close() { return 0; } };
 			},
@@ -476,8 +511,8 @@ test('controller restores VPN before fetching and never hides restore failure be
 			runtime_adapter: '/runtime', http_adapter: '/http' }, state);
 		assert.equal(result.ok, restoreOk);
 		assert.ok(calls.indexOf('restore') < calls.indexOf('fetch'));
-		assert.equal(calls.includes('fail-closed'), !restoreOk);
-		if (!restoreOk) assert.equal(result.code, 'restore_test');
+		assert.equal(calls.includes('fail-closed'), !restored.ok);
+		if (!restoreOk) assert.equal(result.code, restored.restored === false ? 'runtime_partially_restored' : 'restore_test');
 	}
 });
 
@@ -490,10 +525,10 @@ function fixture(t, scenario = '') {
 	fs.mkdirSync(bin);
 	for (const name of ['ip', 'nft', 'uci', 'ucode', 'curl', 'sing-box', 'service', 'jsonfilter'])
 		fs.symlinkSync(path.join(__dirname, 'fake-runtime.cjs'), path.join(bin, name));
-	let source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-adapter'), 'utf8');
-	source = source.replace('ROOT=/etc/autovpn/runtime', 'ROOT=' + work)
+	let source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-lane'), 'utf8');
+	source = source.replace('\t\tROOT=/etc/autovpn/runtime\n', '\t\tROOT=' + work + '\n')
 		.replace('GATE_ROOT=/etc/autovpn/state', 'GATE_ROOT=' + work)
-		.replace('SERVICE=/etc/init.d/autovpn-tunnel', 'SERVICE=' + path.join(bin, 'service'))
+		.replace('\t\tSERVICE=/etc/init.d/autovpn-tunnel\n', '\t\tSERVICE=' + path.join(bin, 'service') + '\n')
 		.replace('chmod 0700 /etc/autovpn "$ROOT"', 'chmod 0700 "$ROOT"');
 	const adapter = path.join(directory, 'adapter');
 	fs.writeFileSync(adapter, source);
@@ -517,7 +552,7 @@ test('health keeps a healthy or transiently failing current VPN without selectio
 		assert.equal(events.some(e => e.includes('select-profile')), false);
 		assert.ok(events.some(e => e.includes('route replace default dev avpn0 table 20191')));
 		if (scenario === 'health-sticky')
-			assert.ok(events.findIndex(e => e.includes('route replace default dev avpn0')) < events.findIndex(e => e.includes('guard-open.nft')));
+			assert.ok(events.findIndex(e => e.includes('route replace default dev avpn0')) < events.findIndex(e => e.includes('guard-vpn-open.nft')));
 	}
 });
 
@@ -534,10 +569,10 @@ test('failover stages and verifies a candidate before durable commit, failures k
 			assert.ok(at('select-profile') < at('service start'));
 			assert.ok(at('service start') < at('probe-helper.uc confirm'));
 			assert.ok(at('probe-helper.uc confirm') < at('commit-profile'));
-			assert.ok(at('commit-profile') < at('guard-open.nft'));
+			assert.ok(at('commit-profile') < at('guard-vpn-open.nft'));
 		} else {
 			assert.equal(fs.existsSync(path.join(env.directory, 'committed-profile')), false);
-			assert.equal(events.some(e => e.includes('guard-open.nft')), false);
+			assert.equal(events.some(e => e.includes('guard-vpn-open.nft')), false);
 		}
 	}
 });
@@ -547,7 +582,22 @@ test('failed route repair stays closed even with healthy local probes', t => {
 	fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
 	fs.writeFileSync(path.join(env.work, 'run.json'), '{"test":"generated"}');
 	assert.equal(env.run('health-tick').status, 1);
-	assert.equal(env.events().some(e => e.join(' ').includes('guard-open.nft')), false);
+	assert.equal(env.events().some(e => e.join(' ').includes('guard-vpn-open.nft')), false);
+});
+
+test('health preflight failure closes an already open lane or reports unconfirmed closure', t => {
+	for (const scenario of ['offload', 'offload-foreign-table']) {
+		const env = fixture(t, scenario);
+		fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+		const result = env.run('health-tick');
+		assert.equal(result.status, 1);
+		assert.equal(JSON.parse(result.stdout).code,
+			scenario === 'offload' ? 'runtime_preflight_failed' : 'fail_closed_unconfirmed');
+		const events = env.events().map(event => event.join(' '));
+		assert.equal(events.some(event => event === 'service stop'), true);
+		assert.equal(events.some(event => event.includes('guard-vpn-open.nft')), false);
+		assert.equal(fs.existsSync(path.join(env.directory, 'service-running')), false);
+	}
 });
 
 test('Ping all never invokes restore, start, profile changes or guard opening', t => {
@@ -555,7 +605,8 @@ test('Ping all never invokes restore, start, profile changes or guard opening', 
 	fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
 	assert.equal(env.run('ping-all').status, 0);
 	const events = env.events().map(e => e.join(' '));
-	assert.equal(events.some(e => /service (start|stop)|guard-open|select-profile|commit-profile|runtime-helper/.test(e)), false);
+	assert.equal(events.some(e => /service (start|stop)|guard-open|select-profile|commit-profile/.test(e)), false);
+	assert.equal(events.filter(e => e.includes('runtime-helper.uc')).every(e => e.includes(' status ')), true);
 	assert.ok(events.some(e => e.includes('probe-helper.uc ping-all')));
 });
 
@@ -577,11 +628,11 @@ test('shell runtime checks candidate, closes guard before restart, opens only af
 	}
 	const events = env.events();
 	const at = text => events.findIndex(event => event.join(' ').includes(text));
-	assert.ok(at('sing-box check') < at('guard-closed.nft'));
-	assert.ok(at('guard-closed.nft') < at('service stop'));
+	assert.ok(at('sing-box check') < at('guard-vpn-closed.nft'));
+	assert.ok(at('guard-vpn-closed.nft') < at('service stop'));
 	assert.ok(at('zapret-helper.uc up') < at('service start'));
 	assert.ok(at('service start') < at('curl --disable'));
-	assert.ok(at('curl --disable') < at('guard-open.nft'));
+	assert.ok(at('curl --disable') < at('guard-vpn-open.nft'));
 	assert.equal(events.filter(event => event[0] === 'curl').length, 2);
 	assert.ok(events.some(event => event.join(' ').includes('priority 20192 iif br-avpn unreachable')));
 });
@@ -601,7 +652,7 @@ test('maintenance gates block every runtime opening path including dangling syml
 			assert.equal(result.status, 1);
 			assert.equal(JSON.parse(result.stdout).code, 'maintenance_locked');
 		}
-		assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
+		assert.equal(env.events().some(event => event.join(' ').includes('guard-vpn-open.nft')), false);
 		assert.equal(env.events().some(event => event.join(' ').includes('service start')), false);
 	}
 });
@@ -610,17 +661,18 @@ test('runtime refuses to activate while SSID transaction needs confirmation', t 
 	const env = fixture(t, 'networks-pending');
 	assert.equal(env.run('activate').status, 1);
 	assert.equal(env.events().some(event => event.join(' ').includes('service start')), false);
-	assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
+	assert.equal(env.events().some(event => event.join(' ').includes('guard-vpn-open.nft')), false);
 });
 
-test('failed HTTPS probe does not open forwarding; fail-closed does not consult runtime journal', t => {
+test('failed HTTPS probe stays closed; fail-closed validates ownership before stopping legacy zapret', t => {
 	const env = fixture(t, 'probe-failed');
 	assert.equal(env.run('activate').status, 0);
 	assert.equal(env.run('verify').status, 1);
-	assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
+	assert.equal(env.events().some(event => event.join(' ').includes('guard-vpn-open.nft')), false);
 	const before = env.events().length;
 	assert.equal(env.run('fail-closed').status, 0);
-	assert.equal(env.events().slice(before).some(event => event[0] === 'ucode' && !event[1].endsWith('/zapret-helper.uc')), false);
+	assert.equal(env.events().slice(before).filter(event => event[1]?.endsWith('/runtime-helper.uc'))
+		.every(event => event[2] === 'status'), true);
 	assert.ok(env.events().slice(before).some(event => event[1]?.endsWith('/zapret-helper.uc') && event[2] === 'down'));
 });
 
@@ -629,7 +681,7 @@ test('foreign nft ownership and route priority collisions are refused without fl
 		const env = fixture(t, scenario);
 		assert.equal(env.run('activate').status, 1);
 		const events = env.events();
-		assert.equal(events.some(event => event.join(' ').includes('guard-open.nft')), false);
+		assert.equal(events.some(event => event.join(' ').includes('guard-vpn-open.nft')), false);
 		assert.equal(events.some(event => event.join(' ').includes('route flush')), false);
 		if (scenario === 'foreign-table') assert.equal(events.some(event => event[0] === 'nft' && event[1] === '-f'), false);
 	}
@@ -689,13 +741,24 @@ test('generated sing-box configuration passes the real binary when configured', 
 		? ['auto', 'vless-reality', 'hysteria2', 'amneziawg']
 		: ['auto', 'vless-reality', 'hysteria2'];
 	for (const selection of selections) {
-		const rendered = runtime.render(material, { ...policy(), awg_available: process.platform === 'linux', selection }, machine);
-		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'autovpn-singbox-check-'));
-		try {
-			const file = path.join(directory, 'config.json');
-			fs.writeFileSync(file, JSON.stringify(rendered.config), { mode: 0o600 });
-			const checked = spawnSync(process.env.AUTOVPN_SING_BOX, ['check', '-c', file], { encoding: 'utf8', timeout: 15000 });
-			assert.equal(checked.status, 0, checked.stderr || String(checked.error));
-		} finally { fs.rmSync(directory, { recursive: true, force: true }); }
+		for (const lane of [null, 'vpn', 'vpn_zapret']) {
+			const snapshot = clone(material);
+			if (lane != null) {
+				snapshot.schema_version = 4;
+				snapshot.protocols.amneziawg_aux = { enabled: true, profile: clone(snapshot.protocols.amneziawg.profile) };
+				snapshot.protocols.amneziawg_aux.profile.interface.private_key = Buffer.alloc(32, 5).toString('base64');
+				snapshot.protocols.amneziawg_aux.profile.interface.address = '10.66.66.9/32';
+				delete snapshot.protocols.amneziawg_aux.profile.legacy_amnezia_vpn_import_key;
+			}
+			const rendered = runtime.render(snapshot, { ...policy(), awg_available: process.platform === 'linux', selection }, machine, null, lane);
+			assert.equal(rendered.ok, true, rendered.code);
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'autovpn-singbox-check-'));
+			try {
+				const file = path.join(directory, 'config.json');
+				fs.writeFileSync(file, JSON.stringify(rendered.config), { mode: 0o600 });
+				const checked = spawnSync(process.env.AUTOVPN_SING_BOX, ['check', '-c', file], { encoding: 'utf8', timeout: 15000 });
+				assert.equal(checked.status, 0, checked.stderr || String(checked.error));
+			} finally { fs.rmSync(directory, { recursive: true, force: true }); }
+		}
 	}
 });

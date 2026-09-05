@@ -17,6 +17,10 @@ root-only сменяемый credential и journal/state отделены от �
 `mediatek/filogic`, profile `cudy_wr3000s-v1`, **только stock layout**. U-Boot-mod
 не поддерживается и не нужен для этого milestone.
 
+Текущий статус: [результаты локальной проверки 0.11.0 и оставшиеся блокеры
+выпуска](docs/validation-0.11.md). Локальные тесты не заменяют SDK-сборку и
+проверку на OpenWrt; готового установочного релиза пока нет.
+
 ## Обслуживание из LuCI (0.7.0)
 
 Страница **Services → AutoVPN → Maintenance** принимает новый токен, перепривязывает
@@ -41,9 +45,11 @@ GitHub Release. После сброса, перепривязки и устан�
 
 При первой установке на чистый роутер скрипт спрашивает базовое имя Wi-Fi и пароль
 WPA2 с повтором и скрытым вводом через терминал (в том числе при `curl … | sh`).
-Основная сеть `x` подключается к существующей LAN; `x-в` предназначена для VPN.
-Имена `x-з` и `x-вз` зарезервированы, но пока выключены. Одинаковые SSID/пароль
-используются на 2.4 и 5 ГГц: диапазон выбирает клиент, активный band steering не ставится.
+Он создаёт на обоих диапазонах четыре SSID с одним WPA2-паролем: `x` (существующая
+LAN/администрирование), `x-в` (VPN), `x-з` (прямой zapret) и `x-вз` (VPN+zapret).
+Диапазон выбирает клиент, активный band steering не ставится. `x` остаётся в
+существующей LAN; три остальные сети изолированы и guarded: при неготовом нужном
+runtime они закрыты, а не переходят на обычный WAN.
 Bootstrap включает оба radio и отключает только распознанные заводские открытые
 профили OpenWrt. PPPoE, адрес LAN, каналы и регион не переписываются.
 Установку лучше запускать по кабелю; за 3 минуты нужно проверить основную сеть
@@ -62,6 +68,18 @@ Settings и Networks с отдельным подтверждением. VPN в�
 LAN: авторизация веб-сессии сама по себе не шифрует HTTP. Мастер не сбрасывает и
 не перепривязывает уже работающую установку.
 
+Сначала обнови сайт до **AutoVPN 2.0** с Router API
+`GET /api/v2/router/snapshot/dual`. Новый controller запрашивает именно этот
+маршрут и не делает автоматический fallback при `404` на legacy `/snapshot`.
+Он умеет безопасно восстановить уже полученный snapshot schema v3 только для
+основной lane; schema v4 нужна для двух lane и auxiliary AmneziaWG.
+
+После установки основной сервис запускает только управляющий loop: даже до
+привязки к сайту он периодически поддерживает отдельный direct-zapret guard.
+Это не создаёт Router, credential или настройку сайта и не открывает `-з` до
+подтверждённой сети и отсутствия maintenance/update marker. При отсутствии
+готового runtime соответствующие guarded SSID остаются закрытыми.
+
 Installer проверяет точный release/target/architecture/kernel ABI, подписи APK,
 SHA256 и бюджет свободного места, затем проверяет план зависимостей APK.
 `sh install.sh --check` скачивает и проверяет релиз без установки пакетов.
@@ -77,16 +95,20 @@ SHA256 и бюджет свободного места, затем провер�
 `fs.access()` с `false`. Проверено по [версии ucode в OpenWrt 25.12.5](https://github.com/openwrt/openwrt/blob/v25.12.5/package/utils/ucode/Makefile)
 и [её реализации fs](https://github.com/jow-/ucode/blob/85922056ef7abeace3cca3ab28bc1ac2d88e31b1/lib/fs.c).
 
-## Ранее реализованный runtime (0.5.0)
+## Реализованный runtime
 
-Добавлен runtime sing-box для VLESS/Hysteria2, auto через HTTPS URLTest, локальные
-direct-исключения, IPv4 TUN routing, DNS через VPN, guard/kill-switch, отдельный
-procd-сервис и применение policy из LuCI. Подробности, ограничения и первый запуск:
+Добавлены два независимых runtime: `vpn` и `vpn_zapret`, каждый с собственными
+sing-box/AWG процессами, маршрутами, guard и выбором `auto`/ручного профиля.
+`Ping all` проверяет кандидаты HTTPS отдельно для каждой lane и не меняет активный
+выбор. Прямой `x-з` обрабатывается своим zapret runtime и остаётся закрытым при
+выключенной или неисправной обработке. Подробности, ограничения и первый запуск:
 [Runtime](docs/runtime.md). Дополнительно реализованы [автосоздание WPA2 SSID](docs/networks.md)
 с пользовательскими базовым именем и паролем, rollback/подтверждением, а также
 [kernel AmneziaWG](docs/amnezia.md) с опциональными пакетами под точный kernel ABI.
-Hysteria2 по умолчанию сохраняет `insecure` из подписки. В 0.9 добавлен опциональный
-[zapret2 на внешнем VPN-транспорте](docs/zapret.md), с установкой и настройкой в LuCI.
+Hysteria2 по умолчанию сохраняет `insecure` из подписки. [Zapret2](docs/zapret.md)
+ставится installer'ом из закреплённого официального upstream asset с проверкой;
+кнопка LuCI только вручную запускает проверку/установку тех же pins и не включает
+автообновление.
 
 - package `Makefile`, UCI defaults, procd init и rpcd/ubus object
   `luci.autovpn` с методами `status` и `refresh`; одна menu-bound ACL-группа даёт
@@ -94,8 +116,10 @@ Hysteria2 по умолчанию сохраняет `insecure` из подпи�
 - read-only по отношению к секретам LuCI JS overview: UI получает только redacted
   status; отдельный мастер принимает новый credential без возможности прочитать его;
 - root-only хранение Bearer credential и snapshot journal;
-- JSON Schema server snapshot v3, совпадающая с текущим
-  `GET /api/v2/router/snapshot`, и исполняемый ucode validator этого subset;
+- legacy JSON Schema snapshot v3 на `GET /api/v2/router/snapshot` сохраняется
+  byte-compatible; `GET /api/v2/router/snapshot/dual` отдаёт schema v4 для двух
+  lane. Второй AWG peer доступен только аутентифицированному Router API и никогда
+  не попадает в обычные client/subscription/Amnezia import ссылки;
 - атомарно заменяемый journal с `desired`, `applied`, `last_good`, rejected state и
   write-ahead фазами `PREPARING` / `PREPARED` / `ACTIVATING` / `VERIFYING` /
   `ROLLING_BACK`;
@@ -149,14 +173,13 @@ host. Проверка Linux networking на самом роутере ещё н
 
 - сборка и измерение реального APK-набора (включая AmneziaWG) и проверка lifecycle
   на устройстве; установочный ABI gate реализован, но не заменяет такую проверку;
-- отдельные zapret-SSID и packet-level проверка маркировки на устройстве;
-  [первый этап outer transport](docs/zapret.md) уже реализован, но результат обхода
-  у конкретного провайдера не проверен;
+- packet-level проверка маркировки и результат обхода у конкретного провайдера;
 - router-side и hardware-in-the-loop тесты.
 
-Текущий server snapshot v3 содержит stable `router_id` и protocol credentials.
-В версии 0.8 `auto` переключает только после отказа текущего VPN. В LuCI добавлена
-ручная диагностика `Ping all` через YouTube/Instagram без изменения выбора.
+Legacy server snapshot v3 содержит stable `router_id` и primary protocol credentials;
+schema v4 `/snapshot/dual` добавляет независимый auxiliary AWG профиль для второй
+lane. `auto` переключает только после отказа текущего профиля в той же lane. В LuCI
+есть две ручные диагностики `Ping all` через YouTube/Instagram без изменения выбора.
 Подробности и ограничения: [runtime](docs/runtime.md).
 Локальная policy хранится в UCI и проходит отдельную строгую проверку перед рендером;
 сервер не может прислать shell-команды или глобальный JSON sing-box.
@@ -174,7 +197,8 @@ host. Проверка Linux networking на самом роутере ещё н
 | `/etc/autovpn/networks/journal.json` | `0600`, parent `0700` | before/after сетевых UCI-конфигов, включая Wi-Fi ключи; не передаётся в RPC/на сайт |
 | `/etc/autovpn/credentials` | `0600`, parent `0700` | одна строка `avrt_<id>.<secret>` |
 | `/etc/autovpn/state/journal.json` | `0600`, parent `0700` | server snapshots, включая protocol secrets, и transactional state |
-| `/etc/autovpn/runtime/` | файлы `0600`, parent `0700` | current/previous/prepared bundles, сгенерированные конфиги для запуска |
+| `/etc/autovpn/runtime/` | файлы `0600`, parent `0700` | current/previous/prepared bundles primary VPN lane |
+| `/etc/autovpn/runtime-zapret/` | файлы `0600`, parent `0700` | соответствующие bundles независимой VPN+zapret lane |
 
 Credential задаётся через stdin, чтобы не попадать в argv процесса на роутере. Для
 интерактивного ввода без сохранения самого токена в истории bash/zsh можно использовать
@@ -234,26 +258,25 @@ production gate никогда не принимает `http://`.
 Каталог имеет форму самостоятельного package source. Его можно поместить, например,
 в `package/autovpn-controller`, затем выбрать
 `Network -> VPN -> autovpn-controller`. В зависимостях явно есть `curl`, `ca-bundle`,
-`busybox`, `sing-box-tiny`, `ip-full`, `firewall4` и `kmod-nft-nat`.
-AWG-пакеты ставятся отдельно под точный kernel ABI; `kmod-nft-queue` пока не включён.
+`busybox`, `sing-box-tiny`, `ip-full`, `firewall4`, `kmod-nft-nat` и
+`kmod-nft-queue`. AWG-пакеты ставятся отдельно под точный kernel ABI.
 
-После установки сервис выключен (`enabled=0`). Перед первым refresh нужно подготовить
-VPN bridge, firewall, WAN device, `base_url`, `router_id` и credential по
-[инструкции первого запуска](docs/runtime.md#первый-запуск-на-устройстве).
+Post-install включает и запускает основной controller loop. До настройки сайта
+`autovpn.main.enabled=0`, поэтому VPN lane не поднимаются; loop нужен только для
+fail-closed lifecycle direct-zapret. После Setup/привязки refresh сам подготовит
+управляемые VPN runtime согласно подтверждённым сетям.
 
 ## Следующие этапы
 
 1. Собрать package в точном OpenWrt 25.12.x SDK/ImageBuilder и выполнить target-side
    `ucode -c` плюс HTTPS smoke tests с реальным CA/DNS/server.
 2. Проверить WPA2 SSID/подтверждение/boot rollback и reset приложения на устройстве.
-3. Добавить policy для `direct_zapret`/`vpn_zapret`; последний означает локальный
-   nfqws2 на отдельном внешнем transport до VPN-сервера (без смешения с обычным VPN SSID).
-4. Проверить коллизии nft/route rules, firewall reload и DNS на реальном устройстве.
-5. Отдельно собрать и проверить AWG под точный kernel ABI; отдельно — zapret и
+3. Проверить коллизии nft/route rules, firewall reload и DNS на реальном устройстве.
+4. Отдельно собрать и проверить AWG под точный kernel ABI; отдельно — zapret и
    outer-packet marking для каждого protocol/endpoint IP/port/WAN candidate.
    Сейчас `Ping all` проверяет каждый VPN с явно выбранной для него zapret-политикой;
    это не отдельные кандидаты с zapret/без него и не автоматический подбор стратегии.
-6. Собрать единый stock-layout image и измерить SquashFS/sysupgrade, затем выполнить
+5. Собрать единый stock-layout image и измерить SquashFS/sysupgrade, затем выполнить
    reboot/power-loss/rollback tests на Cudy WR3000S v1.
 
 Точный adapter ABI описан в [docs/adapter-contract.md](docs/adapter-contract.md), а

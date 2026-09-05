@@ -6,8 +6,8 @@ const CONFIGS = ['network', 'wireless', 'dhcp', 'firewall'];
 const MODES = [
 	{ id: 'direct', bridge: 'br-avpnd', octet: 29, suffix: '', enabled: true },
 	{ id: 'vpn', bridge: 'br-avpn', octet: 30, suffix: '-в', enabled: true },
-	{ id: 'zapret', bridge: 'br-avpndz', octet: 31, suffix: '-з', enabled: false },
-	{ id: 'vpn_zapret', bridge: 'br-avpnz', octet: 32, suffix: '-вз', enabled: false },
+	{ id: 'zapret', bridge: 'br-avpndz', octet: 31, suffix: '-з', enabled: true },
+	{ id: 'vpn_zapret', bridge: 'br-avpnz', octet: 32, suffix: '-вз', enabled: true },
 ];
 function fail(code) { return { ok: false, code: code }; }
 function list(value) { return type(value) == 'array' ? value : type(value) == 'string' ? split(value, ' ') : []; }
@@ -64,7 +64,7 @@ function overlaps(value, mask, primaryLan) {
 		let own = range('192.168.' + MODES[i].octet + '.0/24', null);
 		if (target.start <= own.end && own.start <= target.end) return true;
 	}
-	let tun = range('172.30.255.0/30', null);
+	let tun = range('172.30.255.0/29', null);
 	return target.start <= tun.end && tun.start <= target.end;
 }
 function add(plan, config, name, sectionType, values) {
@@ -177,6 +177,7 @@ function plan(settings, configs, routes) {
 		if (index(ownedBridges, route.dev) >= 0 &&
 			index(['192.168.29.0/24', '192.168.30.0/24', '192.168.31.0/24', '192.168.32.0/24'], route.dst) >= 0) continue;
 		if (route.dev == 'avpn0' && route.dst == '172.30.255.0/30') continue;
+		if (route.dev == 'avpn1' && route.dst == '172.30.255.4/30') continue;
 		if (type(route.dst) != 'string' || overlaps(route.dst, null, primaryLan)) return fail('network_subnet_conflict');
 	}
 	for (let m = 0; m < length(MODES); m++) {
@@ -195,7 +196,7 @@ function plan(settings, configs, routes) {
 			if (mode.enabled)
 				add(result, 'firewall', name + '_dhcp', 'rule', { name: name + '-DHCP', src: name,
 					proto: 'udp', src_port: '68', dest_port: '67', family: 'ipv4', target: 'ACCEPT' });
-			if (mode.id == 'direct') {
+			if (mode.id == 'direct' || mode.id == 'zapret') {
 				add(result, 'firewall', name + '_dns', 'rule', { name: name + '-DNS', src: name,
 					proto: ['tcp', 'udp'], dest_port: '53', family: 'ipv4', target: 'ACCEPT' });
 				add(result, 'firewall', name + '_wan', 'forwarding', { src: name, dest: 'wan', family: 'ipv4' });

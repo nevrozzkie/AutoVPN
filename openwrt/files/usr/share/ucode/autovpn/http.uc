@@ -84,7 +84,7 @@ function endpoint(baseUrl, operation, key) {
 	if (base == null)
 		return null;
 	if (operation == 'snapshot')
-		return base + '/api/v2/router/snapshot';
+		return base + '/api/v2/router/snapshot/dual';
 	if (operation == 'apply-result' && idempotencyKey(key))
 		return base + '/api/v2/router/apply-results/' + key;
 	return null;

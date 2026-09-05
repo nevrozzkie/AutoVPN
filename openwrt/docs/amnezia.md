@@ -23,17 +23,17 @@ When the local helper finds executable `awg` and a loadable kernel module, an en
 
 | item | value |
 | --- | --- |
-| kernel device | `avpnwg0` |
+| kernel device | `avpnwg0` (VPN) / `avpnwg1` (VPN+zapret) |
 | MTU | `1380` |
-| sing-box transport | `direct`, bound to `avpnwg0`, mark `20193` |
-| AWG encrypted UDP socket mark | `20194` |
-| AWG policy table / rule | `20193` / priority `20193` |
-| no-fallback rule | priority `20194`, `unreachable` |
+| sing-box transport | `direct`, bound to `avpnwg0` / `avpnwg1`, mark `20193` / `20213` |
+| AWG encrypted UDP socket mark | `20194` (VPN) / `20214` (VPN+zapret) |
+| AWG policy table / rule | `20193` / priority `20193`; `20213` / priority `20213` |
+| no-fallback rule | priority `20194` / `20214`, `unreachable` |
 
-Thus sing-box sends plaintext into `avpnwg0`; the AWG kernel socket has a
-different mark and exits via the normal WAN routing table. This avoids a route
-loop while retaining the existing `avpn0` TUN, DNS interception and client
-kill switch.
+Thus sing-box sends plaintext into its lane's AWG device; the AWG kernel socket
+has a different mark and exits via the normal WAN routing table. This avoids a
+route loop while retaining the corresponding `avpn0`/`avpn1` TUN, DNS
+interception and client kill switch.
 
 When a later profile does not use AWG, the controller deliberately leaves its
 exact owned `fwmark 20193` lookup and unreachable rules plus table route in

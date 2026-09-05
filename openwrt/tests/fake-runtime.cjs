@@ -36,20 +36,23 @@ if (name === 'ucode') {
 	}
 	if (args[1] === 'select-profile') fs.writeFileSync(path.join(directory, 'selected-profile'), args[3]);
 	if (args[1] === 'commit-profile') fs.writeFileSync(path.join(directory, 'committed-profile'), args[3]);
+	if (['activate', 'restore', 'rollback'].includes(args[1])) fs.writeFileSync(path.join(directory, 'runtime/current.json'), '{"version":2}');
 	fs.writeFileSync(path.join(directory, 'runtime/candidate.json'), '{"test":"generated"}');
 	const selected = fs.existsSync(path.join(directory, 'selected-profile')) ? fs.readFileSync(path.join(directory, 'selected-profile'), 'utf8') :
 		(scenario === 'hard-awg-failed' ? 'amneziawg' : 'vless-reality');
-	process.stdout.write(JSON.stringify({ok:true,active_profile:selected,capabilities:{vless:true,hysteria2:false,amneziawg:false,zapret:false,policy_routing:true}}));
+	process.stdout.write(JSON.stringify({ok:true,active_profile:selected,legacy_transport:true,capabilities:{vless:true,hysteria2:false,amneziawg:false,zapret:false,policy_routing:true}}));
 } else if (name === 'jsonfilter') {
 	const value = JSON.parse(fs.readFileSync(args[args.indexOf('-i') + 1], 'utf8'));
 	process.stdout.write(value[args[args.indexOf('-e') + 1].slice(2)] || '');
-} else if (name === 'nft' && command === 'list table inet autovpn') {
-	process.stdout.write(scenario === 'foreign-table' ? 'table inet autovpn { chain unrelated {} }' : 'table inet autovpn { chain ownership_autovpn_v1 {} }');
+} else if (name === 'nft' && command === 'list table inet autovpn_vpn') {
+	process.stdout.write(['foreign-table', 'offload-foreign-table'].includes(scenario) ? 'table inet autovpn_vpn { chain unrelated {} }' : 'table inet autovpn_vpn { chain ownership_autovpn_v1 {} }');
+} else if (name === 'nft' && command === 'list chain inet autovpn_vpn forward') {
+	process.stdout.write('iifname "br-avpn" oifname "avpn0" accept');
 } else if (name === 'nft' && command === 'list chain inet fw4 forward') {
 	process.stdout.write('iifname "br-avpn" oifname "avpn0" accept');
 } else if (name === 'ip' && command === '-4 rule show') {
 	process.stdout.write(scenario === 'foreign-route' ? '20191: from all lookup 500\n' : '0: from all lookup local\n');
-} else if (name === 'uci' && scenario === 'offload') {
+} else if (name === 'uci' && ['offload', 'offload-foreign-table'].includes(scenario)) {
 	process.stdout.write('1');
 } else if (name === 'curl') {
 	process.stdout.write(scenario === 'probe-failed' ? '503' : '204');

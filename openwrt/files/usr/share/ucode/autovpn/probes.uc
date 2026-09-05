@@ -8,12 +8,19 @@ const TARGETS = {
 	health_cloudflare: 'https://cp.cloudflare.com/generate_204',
 };
 
-function argumentsFor(profile, target) {
+function argumentsFor(profile, target, lane) {
 	let offset = index(PROFILES, profile);
 	if (offset < 0 || TARGETS[target] == null) return null;
+	let port = 1089 + offset;
+	if (lane != null) {
+		let descriptor = require('autovpn.lanes').get(lane);
+		if (descriptor == null || type(descriptor.probe_ports) != 'object') return null;
+		port = descriptor.probe_ports[profile];
+		if (type(port) != 'int' || port < 1 || port > 65535) return null;
+	}
 	return ['/usr/bin/curl', '--disable', '--silent', '--head', '--output', '/dev/null',
 		'--write-out', '%{http_code} %{time_starttransfer}', '--proxy',
-		'socks5h://127.0.0.1:' + (1089 + offset), '--noproxy', '', '--proto', '=https',
+		'socks5h://127.0.0.1:' + port, '--noproxy', '', '--proto', '=https',
 		'--connect-timeout', '3', '--max-time', '5', '--max-redirs', '0', TARGETS[target]];
 }
 

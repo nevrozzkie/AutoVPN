@@ -10,12 +10,16 @@ node --test "$ROOT/tests/probes.test.cjs" "$ROOT/tests/ping-ui.test.cjs"
 node --test "$ROOT/tests/zapret.test.cjs" "$ROOT/tests/zapret-lifecycle.test.cjs" "$ROOT/tests/zapret-install.test.cjs"
 node --test "$ROOT/tests/update-behavior.test.cjs"
 node --test "$ROOT/tests/install-wifi.test.cjs" "$ROOT/tests/wifi-bootstrap.test.cjs"
+node --test "$ROOT/tests/lanes.test.cjs" "$ROOT/tests/lane-runtime.test.cjs" "$ROOT/tests/lane-probes.test.cjs"
+node --test "$ROOT/tests/lane-wrapper.test.cjs" "$ROOT/tests/direct-zapret.test.cjs" "$ROOT/tests/direct-zapret-lifecycle.test.cjs"
 
 for script in \
 	"$ROOT/scripts/install.sh" \
 	"$ROOT/files/etc/init.d/autovpn" \
 	"$ROOT/files/etc/init.d/autovpn-tunnel" \
+	"$ROOT/files/etc/init.d/autovpn-tunnel-zapret" \
 	"$ROOT/files/etc/init.d/autovpn-zapret" \
+	"$ROOT/files/etc/init.d/autovpn-direct-zapret" \
 	"$ROOT/files/usr/libexec/autovpn/zapret-install" \
 	"$ROOT/files/usr/libexec/autovpn/install-wifi" \
 	"$ROOT/files/etc/init.d/autovpn-networks" \
@@ -23,6 +27,7 @@ for script in \
 	"$ROOT/files/usr/libexec/autovpn/loop" \
 	"$ROOT/files/usr/libexec/autovpn/http-adapter" \
 	"$ROOT/files/usr/libexec/autovpn/runtime-adapter" \
+	"$ROOT/files/usr/libexec/autovpn/runtime-lane" \
 	"$ROOT/files/usr/libexec/autovpn/credential.sh" \
 	"$ROOT/files/usr/libexec/autovpn/update-helper" \
 	"$ROOT/files/usr/sbin/autovpnctl"

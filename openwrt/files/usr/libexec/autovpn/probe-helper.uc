@@ -5,7 +5,9 @@ import { readfile, writefile, rename, chmod, mkdir, lstat } from 'fs';
 
 const runner = require('autovpn.process');
 const probes = require('autovpn.probes');
-const HEALTH_DIR = '/var/run/autovpn-health';
+let LANE = null;
+let HEALTH_DIR = null;
+let PROBE_LANE = null;
 
 function call(argv, limit) {
 	let child = runner.popen(argv, 'r');
@@ -15,7 +17,11 @@ function call(argv, limit) {
 	return { raw: length(raw) <= limit ? raw : '', status: status };
 }
 function probe(profile, target) {
-	let response = call(probes.argumentsFor(profile, target), 80);
+	let argv = PROBE_LANE == null
+		? probes.argumentsFor(profile, target)
+		: probes.argumentsFor(profile, target, PROBE_LANE);
+	if (argv == null) return probes.parseResult(profile, target, '', -1);
+	let response = call(argv, 80);
 	return probes.parseResult(profile, target, response.raw, response.status);
 }
 function healthy(profile) {
@@ -44,11 +50,17 @@ function saveHealth(value) {
 function run() {
 	let action = ARGV[0];
 	let target = ARGV[2] || 'youtube';
+	PROBE_LANE = ARGV[3];
+	LANE = PROBE_LANE || 'vpn';
+	if (LANE == 'vpn') HEALTH_DIR = '/var/run/autovpn-health';
+	else if (LANE == 'vpn_zapret') HEALTH_DIR = '/var/run/autovpn-health-zapret';
+	else return { ok: false, code: 'invalid_runtime_lane' };
 	if (index(['ping-all', 'health', 'recover', 'confirm', 'bootstrap'], action) < 0 ||
 		(action == 'ping-all' && index(['youtube', 'instagram'], target) < 0))
 		return { ok: false, code: 'invalid_probe_action' };
 	let response = call(['/usr/bin/ucode', '/usr/libexec/autovpn/runtime-helper.uc',
-		(action == 'confirm' || action == 'bootstrap') ? 'probe-info' : 'probe-info-live', ARGV[1]], 4096);
+		(action == 'confirm' || action == 'bootstrap') ? 'probe-info' : 'probe-info-live',
+		ARGV[1], '', LANE], 4096);
 	let info;
 	try { info = json(response.raw); } catch (e) { return { ok: false, code: 'probe_runtime_invalid' }; }
 	if (response.status != 0 || info.ok !== true) return { ok: false, code: 'probe_runtime_unavailable' };

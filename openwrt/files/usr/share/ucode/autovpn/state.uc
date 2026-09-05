@@ -1,5 +1,7 @@
 'use strict';
 
+const lanes = require('autovpn.lanes');
+
 const CAPABILITY_NAMES = [
 	'vless',
 	'hysteria2',
@@ -108,11 +110,13 @@ function validateHysteria(value, endpoint, errors) {
 		addError(errors, '$.protocols.hysteria2.outbound.obfs', 'invalid_schema');
 }
 
-function validateAwg(value, endpoint, errors) {
-	if (!hasExactKeys(value, [
+function validateAwg(value, endpoint, errors, auxiliary) {
+	let expected = [
 		'protocol_version', 'capabilities', 'interface', 'peer', 'obfuscation',
-		'route_allowed_ips', 'install_routes', 'legacy_amnezia_vpn_import_key',
-	])) {
+		'route_allowed_ips', 'install_routes',
+	];
+	if (!auxiliary) push(expected, 'legacy_amnezia_vpn_import_key');
+	if (!hasExactKeys(value, expected)) {
 		addError(errors, '$.protocols.amneziawg.profile', 'invalid_schema');
 		return;
 	}
@@ -140,7 +144,7 @@ function validateAwg(value, endpoint, errors) {
 		for (let name in value.obfuscation)
 			if (!isInteger(value.obfuscation[name], 0, 4294967295))
 				addError(errors, '$.protocols.amneziawg.profile.obfuscation.' + name, 'invalid_integer');
-	if (!isString(value.legacy_amnezia_vpn_import_key, 1, 16384))
+	if (!auxiliary && !isString(value.legacy_amnezia_vpn_import_key, 1, 16384))
 		addError(errors, '$.protocols.amneziawg.profile.legacy_amnezia_vpn_import_key', 'invalid_string');
 }
 
@@ -165,7 +169,7 @@ function validateSnapshot(snapshot) {
 		addError(errors, '$', 'invalid_schema');
 		return { ok: false, errors: errors };
 	}
-	if (snapshot.schema_version != 3)
+	if (snapshot.schema_version != 3 && snapshot.schema_version != 4)
 		addError(errors, '$.schema_version', 'unsupported_version');
 	if (!matches(snapshot.router_id, /^[A-Za-z0-9_-]{8,64}$/))
 		addError(errors, '$.router_id', 'invalid_router_id');
@@ -181,7 +185,9 @@ function validateSnapshot(snapshot) {
 		addError(errors, '$.client', 'invalid_client');
 	if (!hasExactKeys(snapshot.server, ['endpoint']) || !isString(snapshot.server.endpoint, 1, 253))
 		addError(errors, '$.server', 'invalid_server');
-	if (!hasExactKeys(snapshot.protocols, ['vless', 'hysteria2', 'amneziawg'])) {
+	let protocolKeys = ['vless', 'hysteria2', 'amneziawg'];
+	if (snapshot.schema_version == 4) push(protocolKeys, 'amneziawg_aux');
+	if (!hasExactKeys(snapshot.protocols, protocolKeys)) {
 		addError(errors, '$.protocols', 'invalid_schema');
 		return { ok: false, errors: errors };
 	}
@@ -192,6 +198,14 @@ function validateSnapshot(snapshot) {
 		validateHysteria(snapshot.protocols.hysteria2.outbound, endpoint, errors);
 	if (validateProtocolSlot(snapshot.protocols.amneziawg, 'profile', errors))
 		validateAwg(snapshot.protocols.amneziawg.profile, endpoint, errors);
+	if (snapshot.schema_version == 4) {
+		if (validateProtocolSlot(snapshot.protocols.amneziawg_aux, 'profile', errors))
+			validateAwg(snapshot.protocols.amneziawg_aux.profile, endpoint, errors, true);
+		if (length(errors) == 0) {
+			let pair = lanes.validatePair(snapshot.protocols.amneziawg.profile, snapshot.protocols.amneziawg_aux.profile);
+			if (!pair.ok) addError(errors, '$.protocols.amneziawg_aux.profile', pair.code);
+		}
+	}
 
 	return { ok: length(errors) == 0, errors: errors };
 }

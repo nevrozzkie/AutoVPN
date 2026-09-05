@@ -87,7 +87,7 @@ function fixture(options = {}) {
 		env.calls.push(argv);
 		const output = argv.includes('/sbin/ip') && argv.includes('-j') ? '[]' :
 			argv.includes('/bin/ubus') ? JSON.stringify(Object.fromEntries(['radio0', 'radio1'].map(name => [name, {
-				up: true, interfaces: env.ready ? ['direct', 'vpn'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
+				up: true, interfaces: env.ready ? ['direct', 'vpn', 'zapret', 'vpn_zapret'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
 			}]))) : '';
 		let status = 0;
 		if (argv.includes('/sbin/ip') && argv.includes('link') && argv.includes('dev')) {
@@ -139,7 +139,7 @@ test('network-bootstrap patches the actual stock radios and keeps the primary SS
 	assert.equal(env.exit, 0, JSON.stringify(result));
 	assert.equal(result.phase, 'pending');
 	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в', 'x-з', 'x-вз']);
-	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true, false, false]);
+	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true, true, true]);
 	assert.equal(result.ssids[0].primary_lan, true);
 	const wireless = JSON.parse(env.files.get('/etc/config/wireless'));
 	assert.deepEqual(wireless.find(item => item['.name'] === 'radio0'),

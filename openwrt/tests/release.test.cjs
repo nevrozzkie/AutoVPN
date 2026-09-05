@@ -11,6 +11,12 @@ const test = require('node:test');
 const root = join(__dirname, '..');
 const assembler = join(root, 'scripts', 'prepare-release.py');
 
+test('default release version matches the installed controller package', () => {
+  const version = readFileSync(join(root, 'Makefile'), 'utf8').match(/^PKG_VERSION:=(.+)$/m)[1];
+  const defaultVersion = readFileSync(assembler, 'utf8').match(/^APP_VERSION = "([^"]+)"$/m)[1];
+  assert.equal(defaultVersion, version);
+});
+
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -46,6 +52,7 @@ exit 5
 
 function run(f, output, packages = [f.controller, f.module, f.tools], extra = [], options = {}) {
   const args = [options.repoRoot ? 'openwrt/scripts/prepare-release.py' : assembler,
+    '--app-version', '0.7.0',
     '--apk', f.fakeApk,
     '--release', '25.12.3',
     '--target', 'mediatek/filogic',

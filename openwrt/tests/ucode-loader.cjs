@@ -39,8 +39,8 @@ function loadUcodeModule(path) {
 		value => JSON.parse(value),
 		(separator, value) => value.join(separator),
 		name => {
-			if (name !== 'autovpn.zapret') throw new Error('Unexpected module: ' + name);
-			return loadUcodeModule(require('node:path').join(__dirname, '../files/usr/share/ucode/autovpn/zapret.uc'));
+			if (!['autovpn.zapret', 'autovpn.lanes'].includes(name)) throw new Error('Unexpected module: ' + name);
+			return loadUcodeModule(require('node:path').join(__dirname, '../files/usr/share/ucode/autovpn/' + name.split('.')[1] + '.uc'));
 		}
 	);
 }

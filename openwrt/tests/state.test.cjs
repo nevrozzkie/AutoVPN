@@ -35,6 +35,35 @@ function runtime(activeProfile = 'vless-reality') {
 	};
 }
 
+function schema4WithIndependentAwgLanes() {
+	const snapshot = copy(fixture);
+	const primaryKey = Buffer.alloc(32, 1).toString('base64');
+	const auxiliaryKey = Buffer.alloc(32, 2).toString('base64');
+	function profile(privateKey, address, legacy) {
+		const value = {
+			protocol_version: 1,
+			capabilities: {
+				awg_obfuscation_v1: true,
+				awg2_i_fields: false,
+				obfuscation_fields: ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4']
+			},
+			interface: { private_key: privateKey, address, dns_servers: ['10.66.66.1'] },
+			peer: {
+				public_key: 'server-public-key', preshared_key: 'shared-secret',
+				endpoint: { host: snapshot.server.endpoint, port: 51820 }, persistent_keepalive: 25
+			},
+			obfuscation: { Jc: 4, Jmin: 40, Jmax: 70, S1: 1, S2: 2, H1: 3, H2: 4, H3: 5, H4: 6 },
+			route_allowed_ips: ['0.0.0.0/0', '::/0'], install_routes: false
+		};
+		if (legacy) value.legacy_amnezia_vpn_import_key = 'vpn://primary-import';
+		return value;
+	}
+	snapshot.schema_version = 4;
+	snapshot.protocols.amneziawg = { enabled: true, profile: profile(primaryKey, '10.66.66.2/32', true) };
+	snapshot.protocols.amneziawg_aux = { enabled: true, profile: profile(auxiliaryKey, '10.66.66.3/32', false) };
+	return snapshot;
+}
+
 function driveSuccessfulApply(state, snapshot, snapshotEtag) {
 	assert.equal(stateMachine.receiveSnapshot(state, snapshot, snapshotEtag).ok, true);
 	assert.equal(stateMachine.beginApply(state).ok, true);
@@ -46,7 +75,7 @@ function driveSuccessfulApply(state, snapshot, snapshotEtag) {
 
 test('snapshot v3 fixture is accepted and schema is the same version', () => {
 	const schema = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/autovpn/snapshot.schema.json'), 'utf8'));
-	assert.equal(schema.properties.schema_version.const, 3);
+	assert.deepEqual(schema.properties.schema_version.enum, [3, 4]);
 	assert.deepEqual(stateMachine.validateSnapshot(copy(fixture)), { ok: true, errors: [] });
 });
 
@@ -91,6 +120,40 @@ test('validator accepts the complete current server protocol shape', () => {
 		}
 	};
 	assert.deepEqual(stateMachine.validateSnapshot(snapshot), { ok: true, errors: [] });
+});
+
+test('validator accepts schema 4 with independent valid AWG lane identities', () => {
+	const snapshot = schema4WithIndependentAwgLanes();
+	assert.deepEqual(stateMachine.validateSnapshot(snapshot), { ok: true, errors: [] });
+	assert.notEqual(snapshot.protocols.amneziawg.profile.interface.private_key,
+		snapshot.protocols.amneziawg_aux.profile.interface.private_key);
+	assert.notEqual(snapshot.protocols.amneziawg.profile.interface.address,
+		snapshot.protocols.amneziawg_aux.profile.interface.address);
+	assert.equal('legacy_amnezia_vpn_import_key' in snapshot.protocols.amneziawg_aux.profile, false);
+});
+
+test('schema 4 rejects shared AWG lane identity, auxiliary legacy import, and malformed auxiliary profiles', () => {
+	const sharedKey = schema4WithIndependentAwgLanes();
+	sharedKey.protocols.amneziawg_aux.profile.interface.private_key = sharedKey.protocols.amneziawg.profile.interface.private_key;
+	assert.equal(stateMachine.validateSnapshot(sharedKey).ok, false);
+	const sharedAddress = schema4WithIndependentAwgLanes();
+	sharedAddress.protocols.amneziawg_aux.profile.interface.address = sharedAddress.protocols.amneziawg.profile.interface.address;
+	assert.equal(stateMachine.validateSnapshot(sharedAddress).ok, false);
+	const auxiliaryLegacy = schema4WithIndependentAwgLanes();
+	auxiliaryLegacy.protocols.amneziawg_aux.profile.legacy_amnezia_vpn_import_key = 'vpn://not-allowed';
+	assert.equal(stateMachine.validateSnapshot(auxiliaryLegacy).ok, false);
+	const malformedAuxiliary = schema4WithIndependentAwgLanes();
+	malformedAuxiliary.protocols.amneziawg_aux.profile = { protocol_version: 1 };
+	assert.equal(stateMachine.validateSnapshot(malformedAuxiliary).ok, false);
+});
+
+test('schema 4 requires the auxiliary slot and schema 3 forbids it', () => {
+	const missingAuxiliary = schema4WithIndependentAwgLanes();
+	delete missingAuxiliary.protocols.amneziawg_aux;
+	assert.equal(stateMachine.validateSnapshot(missingAuxiliary).ok, false);
+	const v3ExtraAuxiliary = copy(fixture);
+	v3ExtraAuxiliary.protocols.amneziawg_aux = { enabled: false, profile: null };
+	assert.equal(stateMachine.validateSnapshot(v3ExtraAuxiliary).ok, false);
 });
 
 test('validator returns structured rejection for malformed nested objects', () => {

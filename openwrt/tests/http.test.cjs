@@ -53,7 +53,7 @@ function assertPrivateTemporaryCleanup(directory) {
 
 test('URL normalization accepts only bounded HTTPS URLs without userinfo, query or fragment', () => {
 	assert.equal(http.normalizeBaseUrl('https://vpn.example///'), 'https://vpn.example');
-	assert.equal(http.endpoint('https://vpn.example/prefix/', 'snapshot'), 'https://vpn.example/prefix/api/v2/router/snapshot');
+	assert.equal(http.endpoint('https://vpn.example/prefix/', 'snapshot'), 'https://vpn.example/prefix/api/v2/router/snapshot/dual');
 	assert.equal(http.endpoint('https://vpn.example:8443', 'apply-result', 'boot-1~retry'), 'https://vpn.example:8443/api/v2/router/apply-results/boot-1~retry');
 	for (const invalid of [
 		'http://vpn.example',
@@ -86,7 +86,7 @@ test('fetch keeps secrets and body out of argv/env/stdout and configures strict 
 	assert.equal(fs.readFileSync(path.join(directory, 'config-mode'), 'utf8'), String(0o600));
 	assert.equal(fs.readFileSync(path.join(directory, 'work-dir-mode'), 'utf8'), String(0o700));
 	const config = curlConfig(directory);
-	assert.match(config, /url = "https:\/\/vpn\.example\/root\/api\/v2\/router\/snapshot"/);
+	assert.match(config, /url = "https:\/\/vpn\.example\/root\/api\/v2\/router\/snapshot\/dual"/);
 	assert.match(config, /header = "Authorization: Bearer avrt_/);
 	assert.match(config, /header = "Accept: application\/json"/);
 	assert.doesNotMatch(config, /If-None-Match/);

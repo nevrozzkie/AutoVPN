@@ -1,10 +1,16 @@
-# Optional zapret2 engine installation
+# Pinned zapret2 engine installation
 
-AutoVPN does not bundle or automatically install zapret2. The optional engine is
-installed only after an explicit, authenticated and locally gated action invokes
-`/usr/libexec/autovpn/zapret-install queue` as root. Queueing returns immediately;
-a private copy of the helper performs the bounded download in the background.
-Its absence must leave the direct, VLESS, Hysteria2 and AmneziaWG paths unchanged.
+The released one-command AutoVPN installer queues the pinned zapret2 engine after
+the signed controller APK and official OpenWrt dependencies have installed. The
+engine is fetched directly from the official upstream release, not from the
+AutoVPN site, and no upstream install script is executed. The LuCI button can
+manually check or re-run that same bounded installation; it never discovers a
+new version or enables automatic updates.
+
+Queueing returns immediately; a private copy of the helper performs the bounded
+download in the background. A failed engine installation must leave guarded
+`x-з` and `x-вз` traffic closed rather than turning it into an unprocessed WAN
+bypass.
 
 The helper is intentionally pinned to the official
 [`bol-van/zapret2` v1.0.5 release](https://github.com/bol-van/zapret2/releases/tag/v1.0.5):
@@ -46,7 +52,12 @@ The CLI is deliberately small and writes one sanitized JSON object to stdout:
 ```text
 /usr/libexec/autovpn/zapret-install status
 /usr/libexec/autovpn/zapret-install queue
+/usr/libexec/autovpn/zapret-install install
 ```
+
+`install` is the synchronous first-installer action: it holds the same exclusive
+job lock and returns only after verification and atomic publication. It is
+idempotent for the exact receipt-verified bundle.
 
 `queue` is the RPC-facing action. It atomically claims a root-only job directory
 under `/tmp`, records `queued`, then the copied worker records `running` and
@@ -56,7 +67,8 @@ The completed status is retained in RAM while the worker and its lock directory
 are removed. A second queue request cannot start a concurrent job. The internal
 `worker` action accepts only the root-owned helper copy at the exact claimed job
 path. Neither action changes a running service, and installation is rejected
-while the AutoVPN zapret service reports itself active.
+while either AutoVPN zapret service reports itself active (an already verified
+bundle remains a read-only no-op).
 
 There is no update command or background check. Moving to another zapret2
 version requires review and a new AutoVPN release with updated pins and tests.

@@ -40,11 +40,11 @@ function awgAddress(value) {
 	for (let i = 0; i < 4; i++) number = number * 256 + int(address[i]);
 	/* Do not let a server profile overlap managed Wi-Fi or the sing-box TUN. */
 	let forbidden = [
-		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 29 * 256, 32],
-		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 30 * 256, 32],
-		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 31 * 256, 32],
-		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 32 * 256, 32],
-		[172 * 256 * 256 * 256 + 30 * 256 * 256 + 255 * 256, 4],
+		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 29 * 256, 256],
+		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 30 * 256, 256],
+		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 31 * 256, 256],
+		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 32 * 256, 256],
+		[172 * 256 * 256 * 256 + 30 * 256 * 256 + 255 * 256, 8],
 	];
 	for (let i = 0; i < length(forbidden); i++)
 		if (number >= forbidden[i][0] && number < forbidden[i][0] + forbidden[i][1]) return false;
@@ -76,7 +76,8 @@ function validatePolicy(policy) {
 		return fail('unsupported_selection');
 	if (type(normalized.wan_device) != 'string' ||
 		match(normalized.wan_device, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/) == null ||
-		index(['lo', 'avpn0', 'avpnwg0', 'br-avpn', 'br-avpnz', 'br-avpnd', 'br-avpndz', 'br-lan'], normalized.wan_device) >= 0)
+		index(['lo', 'avpn0', 'avpn1', 'avpnwg0', 'avpnwg1', 'br-avpn', 'br-avpnz',
+			'br-avpnd', 'br-avpndz', 'br-lan'], normalized.wan_device) >= 0)
 		return fail('invalid_wan_device');
 	if (!ipv4(normalized.dns_server)) return fail('invalid_dns_server');
 	if (index(['subscription', 'strict'], normalized.hysteria_tls_mode) < 0 ||
@@ -102,6 +103,15 @@ function validateAwg(profile) {
 	if (profile.obfuscation.Jmin > profile.obfuscation.Jmax) return false;
 	/* state.uc has already checked every key and every obfuscation integer. */
 	return true;
+}
+
+function laneDescriptor(snapshot, lane) {
+	if (lane == null) return null;
+	let descriptor = require('autovpn.lanes').get(lane);
+	if (descriptor == null) return false;
+	if (descriptor.id == 'vpn_zapret' && snapshot.schema_version < 4)
+		return { empty: true, id: descriptor.id };
+	return descriptor;
 }
 
 /* Kept byte-for-byte compatible with version 1 bundle validation. */
@@ -193,8 +203,14 @@ function legacyBundle(entry, policy, machine) {
 	return { ok: true, value: value };
 }
 
-function render(snapshot, policy, machine, preferredProfile) {
+function render(snapshot, policy, machine, preferredProfile, lane) {
 	if (!machine.validateSnapshot(snapshot).ok) return fail('snapshot_validation_failed');
+	let descriptor = laneDescriptor(snapshot, lane);
+	if (descriptor === false) return fail('invalid_lane');
+	if (descriptor != null && descriptor.empty === true)
+		return { ok: true, empty: true, lane: descriptor.id };
+	/* Schema 3 and calls without a lane retain the exact single-runtime contract. */
+	let managedLane = descriptor != null && snapshot.schema_version >= 4;
 	let validated = validatePolicy(policy);
 	if (!validated.ok) return validated;
 	let effective = normalizedPolicy(policy);
@@ -218,12 +234,15 @@ function render(snapshot, policy, machine, preferredProfile) {
 		capabilities[name] = true;
 	}
 	let awg = null;
-	let awgSlot = snapshot.protocols.amneziawg;
+	let awgSlot = managedLane && descriptor.id == 'vpn_zapret'
+		? snapshot.protocols.amneziawg_aux : snapshot.protocols.amneziawg;
 	/* Keep AWG prepared for diagnostics even while another manual profile is active. */
 	if (awgSlot.enabled && effective.awg_available && validateAwg(awgSlot.profile)) {
 		awg = copy(awgSlot.profile);
-		push(outbounds, { type: 'direct', tag: 'amneziawg', bind_interface: 'avpnwg0',
-			routing_mark: 20193, domain_resolver: 'awg-dns' });
+		push(outbounds, { type: 'direct', tag: 'amneziawg',
+			bind_interface: managedLane ? descriptor.awg.device : 'avpnwg0',
+			routing_mark: managedLane ? descriptor.awg.inner_mark : 20193,
+			domain_resolver: 'awg-dns' });
 		push(candidates, 'amneziawg');
 		capabilities.amneziawg = true;
 	}
@@ -233,7 +252,11 @@ function render(snapshot, policy, machine, preferredProfile) {
 	let selected = effective.selection;
 	if (selected == 'auto')
 		selected = index(candidates, preferredProfile) >= 0 ? preferredProfile : candidates[0];
-	let zapret = require('autovpn.zapret').plan(snapshot, candidates, effective.wan_device, effective.zapret);
+	let zapret = null;
+	/* In schema 4 preprocessing belongs only to vpn_zapret. Legacy calls stay unchanged. */
+	if (!managedLane || descriptor.id == 'vpn_zapret')
+		zapret = require('autovpn.zapret').plan(snapshot, candidates, effective.wan_device,
+			effective.zapret, managedLane ? descriptor.id : null);
 	if (zapret === false) return fail('invalid_zapret_plan');
 	if (zapret != null) {
 		for (let i = 0; i < length(zapret.flows); i++) {
@@ -248,12 +271,16 @@ function render(snapshot, policy, machine, preferredProfile) {
 
 	/* Forced probe routes precede DNS interception and every user direct exception. */
 	let rules = [{ inbound: ['health'], action: 'route', outbound: selected }];
+	let tun = managedLane ? descriptor.tun : 'avpn0';
+	let address = managedLane ? descriptor.address : '172.30.255.1/30';
+	let healthPort = managedLane ? descriptor.health_port : 1088;
 	let inbounds = [
-		{ type: 'tun', tag: 'vpn-net', interface_name: 'avpn0', address: ['172.30.255.1/30'], mtu: 1400,
+		{ type: 'tun', tag: 'vpn-net', interface_name: tun, address: [address], mtu: 1400,
 			auto_route: false, auto_redirect: false, stack: 'system' },
-		{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: 1088 },
+		{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: healthPort },
 	];
-	let probePorts = { 'vless-reality': 1089, hysteria2: 1090, amneziawg: 1091 };
+	let probePorts = managedLane ? descriptor.probe_ports
+		: { 'vless-reality': 1089, hysteria2: 1090, amneziawg: 1091 };
 	for (let i = 0; i < length(candidates); i++) {
 		let candidate = candidates[i];
 		let inbound = 'probe-' + candidate;
@@ -285,13 +312,17 @@ function render(snapshot, policy, machine, preferredProfile) {
 	};
 }
 
-function bundle(entry, policy, machine, preferredProfile) {
+function bundle(entry, policy, machine, preferredProfile, lane) {
 	if (entry == null) return fail('snapshot_not_applied');
-	let result = render(entry.snapshot, policy, machine, preferredProfile);
+	let result = render(entry.snapshot, policy, machine, preferredProfile, lane);
 	if (!result.ok) return result;
+	if (result.empty === true) return result;
+	let version = lane != null && entry.snapshot.schema_version >= 4 ? 3 : 2;
 	let value = { version: 2, router_id: entry.snapshot.router_id, etag: entry.etag, attempt: entry.attempt,
 		policy: copy(policy), config: result.config, profile: result.profile, candidates: result.candidates,
 		capabilities: result.capabilities };
+	value.version = version;
+	if (version == 3) value.lane = lane;
 	if (result.awg != null) value.awg = result.awg;
 	if (result.zapret != null) value.zapret = result.zapret;
 	if (length(sprintf('%J', value)) >= 65536) return fail('runtime_bundle_too_large');
@@ -299,12 +330,16 @@ function bundle(entry, policy, machine, preferredProfile) {
 }
 
 /* Re-render before using persistent generated files; reject tampering/corruption. */
-function matchesBundle(value, entry, machine) {
+function matchesBundle(value, entry, machine, lane) {
 	if (type(value) != 'object' || entry == null || value.router_id != entry.snapshot.router_id ||
-		value.etag != entry.etag || value.attempt != entry.attempt || index([1, 2], value.version) < 0) return false;
-	let expected = value.version == 1
-		? legacyBundle(entry, value.policy, machine)
-		: bundle(entry, value.policy, machine, value.profile);
+		value.etag != entry.etag || value.attempt != entry.attempt || index([1, 2, 3], value.version) < 0)
+		return false;
+	if (lane == 'vpn_zapret' && value.version != 3) return false;
+	if (value.version == 3 && (type(value.lane) != 'string' ||
+		(lane != null && value.lane != lane))) return false;
+	let expected = value.version == 1 ? legacyBundle(entry, value.policy, machine)
+		: value.version == 2 ? bundle(entry, value.policy, machine, value.profile)
+		: bundle(entry, value.policy, machine, value.profile, value.lane);
 	return expected.ok && sprintf('%J', expected.value) == sprintf('%J', value);
 }
 

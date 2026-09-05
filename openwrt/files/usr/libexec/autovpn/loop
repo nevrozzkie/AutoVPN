@@ -2,6 +2,8 @@
 
 next_refresh=0
 while :; do
+	# The direct-zapret SSID is independent of pairing/subscription refresh.
+	/usr/sbin/autovpnctl direct-tick >/dev/null 2>&1
 	# An already running procd loop must respect a persistent maintenance pause.
 	if [ "$(uci -q get autovpn.main.enabled)" = 1 ]; then
 		now="$(date +%s)"
