@@ -304,6 +304,33 @@ def build_router_snapshot_response(
     }
 
 
+def build_router_dual_snapshot_response(
+    snapshot: dict[str, Any],
+    config: CapturedVpnConfig,
+    client: VpnClient,
+    published_at: str | None,
+    router_id: str,
+) -> dict[str, Any]:
+    payload = build_router_snapshot_response(snapshot, config, client, published_at, router_id)
+    payload["schema_version"] = 4
+    peer = next(
+        (item for item in config.router_amnezia_peers
+         if item.router_id == router_id and item.client_id == client.id),
+        None,
+    )
+    profile = None
+    if peer is not None and config.amnezia.protocol.enabled:
+        auxiliary = replace(
+            client, amnezia_private_key=peer.private_key,
+            amnezia_public_key=peer.public_key,
+            amnezia_preshared_key=peer.preshared_key, amnezia_ipv4=peer.ipv4,
+        )
+        profile = _amnezia_profile(config, auxiliary)
+        del profile["legacy_amnezia_vpn_import_key"]
+    payload["protocols"]["amneziawg_aux"] = {"enabled": profile is not None, "profile": profile}
+    return payload
+
+
 def canonical_json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -426,6 +453,29 @@ def router_snapshot(request: Request) -> Response:
     )
 
 
+@router.get("/snapshot/dual")
+def router_snapshot_dual(request: Request) -> Response:
+    credential = authorize_router(request, "snapshot:read")
+    snapshot, config, published_at = _load_applied_snapshot()
+    client = _client_from_applied_snapshot(credential, config)
+    if not config.current_ip:
+        raise RouterApiError(
+            503, "snapshot_not_ready", "Applied VPN snapshot has no server endpoint",
+            {"Retry-After": "30"},
+        )
+    payload = build_router_dual_snapshot_response(
+        snapshot, config, client, published_at, credential.router_id
+    )
+    etag = response_etag(payload)
+    conditional = request.headers.get("if-none-match", "")
+    if len(conditional) > MAX_CONDITIONAL_HEADER:
+        raise RouterApiError(400, "invalid_header", "Conditional header is too long")
+    headers = {**API_RESPONSE_HEADERS, "ETag": etag}
+    if conditional == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=canonical_json_bytes(payload), media_type="application/json", headers=headers)
+
+
 @router.get("/amnezia/vpn-zapret")
 def router_auxiliary_amnezia(request: Request) -> Response:
     """Return only this router's second peer from the immutable applied revision.
@@ -532,8 +582,11 @@ async def router_apply_result(request: Request, idempotency_key: str) -> Respons
     snapshot_payload = build_router_snapshot_response(
         snapshot, config, client, published_at, credential.router_id
     )
-    current_etag = response_etag(snapshot_payload)
-    if not hmac.compare_digest(if_match, current_etag):
+    dual_payload = build_router_dual_snapshot_response(
+        snapshot, config, client, published_at, credential.router_id
+    )
+    accepted_etags = [response_etag(snapshot_payload), response_etag(dual_payload)]
+    if not any(hmac.compare_digest(if_match, item) for item in accepted_etags):
         raise RouterApiError(
             412,
             "etag_mismatch",
@@ -552,7 +605,7 @@ async def router_apply_result(request: Request, idempotency_key: str) -> Respons
         )
     try:
         stored = record_router_apply_result(
-            credential.credential_id, validated_key, result, current_etag
+            credential.credential_id, validated_key, result, if_match
         )
     except RouterApplyConflictError as exc:
         if exc.code == "snapshot_not_ready":
@@ -583,5 +636,5 @@ async def router_apply_result(request: Request, idempotency_key: str) -> Respons
     return Response(
         content=canonical_json_bytes(_apply_result_response(stored)),
         media_type="application/json",
-        headers={**API_RESPONSE_HEADERS, "ETag": current_etag},
+        headers={**API_RESPONSE_HEADERS, "ETag": if_match},
     )
