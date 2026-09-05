@@ -9,7 +9,15 @@ const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
 function translate(value) {
-	return { text: value, format: function() { return value; }, toString: function() { return value; } };
+	return {
+		text: value,
+		format: function() {
+			let index = 0;
+			const args = arguments;
+			return value.replace(/%s/g, function() { return String(args[index++]); });
+		},
+		toString: function() { return value; }
+	};
 }
 
 function evaluate(relative, context) {
@@ -91,6 +99,7 @@ function nodeById(node, id) {
 function nodeText(node) {
 	if (node == null) return '';
 	if (typeof node !== 'object') return String(node);
+	if (typeof node.text === 'string') return String(node);
 	return (node.children || []).map(nodeText).join(' ');
 }
 
@@ -99,11 +108,23 @@ test('settings assigns common options to primary runtime and only selection to V
 	fixture.view.render();
 	const sections = Object.fromEntries(fixture.maps[0].sections.map(section => [section.id, section]));
 	assert.deepEqual(sections.runtime.options.map(option => option.name), [
-		'selection', 'hysteria_tls_mode', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
+		'selection', 'hysteria_tls_mode', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs', 'ru_bypass',
 		'_install_zapret', 'zapret_enabled', 'zapret_vless', 'zapret_hysteria2', 'zapret_amneziawg', 'zapret_repeats'
 	]);
 	assert.deepEqual(sections.runtime_zapret.options.map(option => option.name), ['selection']);
 	assert.deepEqual(sections.direct.options.map(option => option.name), ['zapret_enabled']);
+});
+
+test('RU bypass is shared, persisted by default, and does not replace manual rules', () => {
+	const fixture = settingsFixture();
+	fixture.view.render();
+	const section = fixture.maps[0].sections.find(item => item.id === 'runtime');
+	const bypass = section.options.find(item => item.name === 'ru_bypass');
+	assert.ok(bypass);
+	assert.equal(bypass.default, '1');
+	assert.equal(bypass.rmempty, false);
+	assert.match(String(bypass.description), /both VPN networks/);
+	assert.match(String(bypass.description), /manual domain and IPv4 rules are kept/);
 });
 
 test('each Ping all button disables only itself until its pending request settles', async () => {
@@ -164,4 +185,54 @@ test('Ping all lanes retain distinct successful results', async () => {
 	assert.doesNotMatch(nodeText(vpnOutput), /hy2-zapret/);
 	assert.match(nodeText(zapretOutput), /hy2-zapret/);
 	assert.doesNotMatch(nodeText(zapretOutput), /vless-primary/);
+});
+
+test('optional RU database status failure does not prevent overview rendering', async () => {
+	function E(tag, attrs, children) {
+		return { tag, attrs: attrs || {}, children: Array.isArray(children) ? children : [children], replaceChildren: function() {} };
+	}
+	const context = {
+		_: translate, E, Promise, isFinite,
+		window: { setTimeout: function() {}, location: { reload: function() {} } },
+		ui: { createHandlerFn: function(_context, handler) { return handler; }, addNotification: function() {} },
+		view: { extend: function(value) { return value; } },
+		rpc: { declare: function(spec) {
+			if (spec.method === 'ru_db_status') return function() { return Promise.reject(new Error('offline')); };
+			return function() { return Promise.resolve({ ok: true, runtime_lanes: {} }); };
+		} }
+	};
+	const view = evaluate('files/www/luci-static/resources/view/autovpn/overview.js', context);
+	const page = view.render(await view.load());
+	assert.match(nodeText(page), /Russian bypass database/);
+	assert.match(nodeText(page), /Status unavailable/);
+});
+
+test('RU database error text stays DOM text rather than HTML', () => {
+	const view = overviewFixture(function() { return Promise.resolve({ ok: true }); });
+	const injection = '<img src=x onerror=alert(1)>';
+	const page = view.render([{ runtime_lanes: {} }, { ok: false, code: injection, last_attempt: 2, last_success: 1, domains: 1, ipv4_cidrs: 2 }]);
+	assert.match(nodeText(page), /<img src=x onerror=alert\(1\)>/);
+	assert.equal(JSON.stringify(page).includes('innerHTML'), false);
+	assert.equal(JSON.stringify(page.attrs || {}).includes(injection), false);
+});
+
+test('unattempted RU database status is not presented as up to date', () => {
+	const view = overviewFixture(function() { return Promise.resolve({ ok: true }); });
+	const page = view.render([{ runtime_lanes: {} }, { ok: true, code: null, last_attempt: 0, last_success: 0, domains: 0, ipv4_cidrs: 0 }]);
+	assert.match(nodeText(page), /Database has not been checked yet/);
+	assert.doesNotMatch(nodeText(page), /Last database update succeeded/);
+});
+
+test('RU database status error is not hidden by an unattempted timestamp', () => {
+	const view = overviewFixture(function() { return Promise.resolve({ ok: true }); });
+	const page = view.render([{ runtime_lanes: {} }, { ok: false, code: 'invalid_ru_db_status', last_attempt: 0, last_success: 0, domains: 0, ipv4_cidrs: 0 }]);
+	assert.match(nodeText(page), /Database status unavailable: invalid_ru_db_status/);
+	assert.doesNotMatch(nodeText(page), /Database has not been checked yet/);
+});
+
+test('RU database update in progress is distinct from a failed update', () => {
+	const view = overviewFixture(function() { return Promise.resolve({ ok: true }); });
+	const page = view.render([{ runtime_lanes: {} }, { ok: false, code: 'update_in_progress', last_attempt: 2, last_success: 1, domains: 1, ipv4_cidrs: 2 }]);
+	assert.match(nodeText(page), /Database update is in progress/);
+	assert.doesNotMatch(nodeText(page), /Last database update failed/);
 });

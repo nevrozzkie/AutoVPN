@@ -163,6 +163,21 @@ function helperHarness(snapshot, uciValues = {}) {
 	};
 }
 
+test('runtime helper reads one typed RU bypass setting for both lanes', () => {
+	for (const value of [undefined, '0', '1', 'invalid']) {
+		for (const lane of ['vpn', 'vpn_zapret']) {
+			const env = helperHarness(snapshot4(), { ru_bypass: value });
+			const result = env.run(lane);
+			assert.equal(result.ok, value !== 'invalid');
+			if (!result.ok) continue;
+			const directory = lane === 'vpn' ? 'runtime' : 'runtime-zapret';
+			const bundle = JSON.parse(env.storage.get('/etc/autovpn/' + directory + '/prepared.json'));
+			assert.equal(bundle.policy.ru_bypass, value !== '0');
+			assert.equal(Boolean(bundle.config.route.rule_set), value !== '0');
+		}
+	}
+});
+
 test('runtime helper stages independent roots and secondary remains VPN-capable with zapret disabled', () => {
 	const env = helperHarness(snapshot4());
 	const primary = env.run('vpn');

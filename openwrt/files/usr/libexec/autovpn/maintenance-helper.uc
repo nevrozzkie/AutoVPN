@@ -192,6 +192,7 @@ function resetConfig(ctx) {
 		ctx.set('autovpn', 'runtime', 'selection', 'auto') &&
 		ctx.set('autovpn', 'runtime_zapret', 'selection', 'auto') &&
 		ctx.set('autovpn', 'runtime', 'dns_server', '1.1.1.1') &&
+		ctx.set('autovpn', 'runtime', 'ru_bypass', '1') &&
 		ctx.set('autovpn', 'runtime', 'direct_domains', ['ru', 'xn--p1ai']) &&
 		(ctx.get('autovpn', 'runtime', 'direct_cidrs') == null || ctx.delete('autovpn', 'runtime', 'direct_cidrs')) &&
 		ctx.set('autovpn', 'runtime', 'hysteria_tls_mode', 'subscription') &&

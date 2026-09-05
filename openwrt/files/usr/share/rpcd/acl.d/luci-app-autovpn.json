@@ -3,7 +3,7 @@
     "description": "Read AutoVPN status and request a refresh",
     "read": {
       "ubus": {
-        "luci.autovpn": ["status", "network_status", "update_status", "zapret_install_status"]
+        "luci.autovpn": ["status", "ru_db_status", "network_status", "update_status", "zapret_install_status"]
       },
       "uci": ["autovpn"]
     },

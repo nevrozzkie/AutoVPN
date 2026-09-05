@@ -12,6 +12,7 @@ node --test "$ROOT/tests/update-behavior.test.cjs"
 node --test "$ROOT/tests/install-wifi.test.cjs" "$ROOT/tests/wifi-bootstrap.test.cjs"
 node --test "$ROOT/tests/lanes.test.cjs" "$ROOT/tests/lane-runtime.test.cjs" "$ROOT/tests/lane-probes.test.cjs"
 node --test "$ROOT/tests/lane-wrapper.test.cjs" "$ROOT/tests/direct-zapret.test.cjs" "$ROOT/tests/direct-zapret-lifecycle.test.cjs"
+node --test "$ROOT/tests/ru-routing.test.cjs" "$ROOT/tests/ru-db-update.test.cjs" "$ROOT/tests/ru-db-live.test.cjs"
 
 for script in \
 	"$ROOT/scripts/install.sh" \
@@ -25,6 +26,8 @@ for script in \
 	"$ROOT/files/etc/init.d/autovpn-networks" \
 	"$ROOT/files/usr/libexec/autovpn/network-watchdog" \
 	"$ROOT/files/usr/libexec/autovpn/loop" \
+	"$ROOT/files/usr/libexec/autovpn/ru-db-loop" \
+	"$ROOT/files/usr/libexec/autovpn/ru-db-update" \
 	"$ROOT/files/usr/libexec/autovpn/http-adapter" \
 	"$ROOT/files/usr/libexec/autovpn/runtime-adapter" \
 	"$ROOT/files/usr/libexec/autovpn/runtime-lane" \

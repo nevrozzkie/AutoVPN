@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.11.0
+PKG_VERSION:=0.12.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -15,7 +15,7 @@ define Package/autovpn-controller
   SUBMENU:=VPN
   TITLE:=Native AutoVPN controller
   PKGARCH:=all
-  DEPENDS:=+busybox +ca-bundle +curl +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat +kmod-nft-queue
+  DEPENDS:=+busybox +ca-bundle +curl +flock +coreutils-stat +coreutils-timeout +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat +kmod-nft-queue
 endef
 
 define Package/autovpn-controller/description
@@ -30,6 +30,7 @@ define Package/autovpn-controller/conffiles
 /etc/autovpn/state/journal.json
 /etc/autovpn/runtime/
 /etc/autovpn/runtime-zapret/
+/etc/autovpn/routing/ru.json
 /etc/autovpn/networks/journal.json
 /etc/autovpn/release.json
 /etc/autovpn/release-signing.pem
@@ -53,6 +54,11 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/controller.uc $(1)/usr/libexec/autovpn/controller.uc
 	$(INSTALL_DATA) ./files/usr/libexec/autovpn/credential.sh $(1)/usr/libexec/autovpn/credential.sh
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/loop $(1)/usr/libexec/autovpn/loop
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/ru-db-loop $(1)/usr/libexec/autovpn/ru-db-loop
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/ru-db-update $(1)/usr/libexec/autovpn/ru-db-update
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/ru-db-helper.uc $(1)/usr/libexec/autovpn/ru-db-helper.uc
+	$(INSTALL_DIR) $(1)/etc/autovpn/routing
+	$(INSTALL_CONF) ./files/etc/autovpn/routing/ru.json $(1)/etc/autovpn/routing/ru.json
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/http-adapter $(1)/usr/libexec/autovpn/http-adapter
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/http-helper.uc $(1)/usr/libexec/autovpn/http-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-adapter $(1)/usr/libexec/autovpn/runtime-adapter

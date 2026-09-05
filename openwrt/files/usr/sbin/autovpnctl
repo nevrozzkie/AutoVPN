@@ -146,6 +146,9 @@ case "$command" in
 	update-status)
 		exec /usr/libexec/autovpn/update-helper status
 		;;
+	ru-db-status)
+		exec /usr/libexec/autovpn/ru-db-update status
+		;;
 esac
 acquire_lock
 case "$command" in

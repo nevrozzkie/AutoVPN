@@ -52,10 +52,13 @@ function awgAddress(value) {
 }
 /* Accept old persisted policy bundles as-is. New helper output has all fields. */
 function normalizedPolicy(policy) {
+	/* Absent in persisted 0.11 policies: never silently enable it on restore. */
+	let fields = copy(policy);
+	delete fields.ru_bypass;
 	let old = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs']);
 	let current = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
 		'hysteria_tls_mode', 'awg_available']);
-	let names = sort(keys(policy));
+	let names = sort(keys(fields));
 	let withZapret = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
 		'hysteria_tls_mode', 'awg_available', 'zapret']);
 	if (join(',', names) != join(',', old) && join(',', names) != join(',', current) &&
@@ -70,6 +73,8 @@ function validatePolicy(policy) {
 	if (type(policy) != 'object') return fail('invalid_policy');
 	let normalized = normalizedPolicy(policy);
 	if (normalized == null) return fail('invalid_policy');
+	if (index(keys(policy), 'ru_bypass') >= 0 && type(policy.ru_bypass) != 'bool')
+		return fail('invalid_ru_bypass');
 	if (normalized.zapret != null && !require('autovpn.zapret').validPolicy(normalized.zapret))
 		return fail('invalid_zapret_policy');
 	if (index(['auto', 'vless-reality', 'hysteria2', 'amneziawg'], normalized.selection) < 0)
@@ -296,6 +301,12 @@ function render(snapshot, policy, machine, preferredProfile, lane) {
 	if (length(effective.direct_cidrs))
 		push(rules, { ip_cidr: effective.direct_cidrs, action: 'route', outbound: 'direct' });
 
+	if (effective.ru_bypass === true)
+		push(rules, { rule_set: ['autovpn-ru'], action: 'route', outbound: 'direct' });
+	let route = { rules: rules, final: selected, default_domain_resolver: 'tunnel-dns' };
+	if (effective.ru_bypass === true)
+		route.rule_set = [{ type: 'local', tag: 'autovpn-ru', format: 'source',
+			path: '/etc/autovpn/routing/ru.json' }];
 	let dnsServers = [{ type: 'udp', tag: 'tunnel-dns', server: effective.dns_server, server_port: 53, detour: selected }];
 	if (awg != null)
 		push(dnsServers, { type: 'udp', tag: 'awg-dns', server: effective.dns_server, server_port: 53, detour: 'amneziawg' });
@@ -307,7 +318,7 @@ function render(snapshot, policy, machine, preferredProfile, lane) {
 			dns: { servers: dnsServers, final: 'tunnel-dns', strategy: 'ipv4_only', reverse_mapping: true },
 			inbounds: inbounds,
 			outbounds: outbounds,
-			route: { rules: rules, final: selected, default_domain_resolver: 'tunnel-dns' },
+			route: route,
 		},
 	};
 }

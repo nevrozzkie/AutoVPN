@@ -181,6 +181,9 @@ return {
 				return callController('status');
 			},
 		},
+		ru_db_status: {
+			call: function() { return callController('ru-db-status'); },
+		},
 		refresh: {
 			call: function() {
 				return callController('refresh');

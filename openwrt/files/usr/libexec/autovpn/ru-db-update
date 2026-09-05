@@ -1,0 +1,243 @@
+#!/bin/sh
+set -eu
+umask 077
+export LC_ALL=C
+
+GEOSITE_URL='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs'
+GEOIP_URL='https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs'
+HELPER=/usr/libexec/autovpn/ru-db-helper.uc
+ROUTING_PARENT=/etc/autovpn
+ROUTING_DIR=/etc/autovpn/routing
+SOURCE=/etc/autovpn/routing/ru.json
+STATUS=/var/run/autovpn-ru-db-status.json
+LOCK=/var/run/autovpn-ru-db.flock
+STATUS_PARENT=/var/run
+MAX_SRS_BYTES=262144
+MAX_JSON_BYTES=2097152
+DAILY_SECONDS=86400
+COOLDOWN_SECONDS=3600
+WORK=''
+CANDIDATE=''
+STATUS_TMP=''
+HAVE_LOCK=0
+
+cleanup() {
+	if [ -n "$CANDIDATE" ]; then
+		case "$CANDIDATE" in "$ROUTING_DIR"/.ru.json.new.*) rm -f -- "$CANDIDATE" ;; esac
+	fi
+	if [ -n "$STATUS_TMP" ]; then
+		case "$STATUS_TMP" in "$STATUS".new.*) rm -f -- "$STATUS_TMP" ;; esac
+	fi
+	if [ -n "$WORK" ]; then
+		case "$WORK" in /tmp/autovpn-ru-db.*)
+			rm -f -- "$WORK/geosite.srs" "$WORK/geoip.srs" "$WORK/geosite.json" \
+				"$WORK/geoip.json" "$WORK/ru.json" "$WORK/compiled.srs" "$WORK/helper.json"
+			rmdir -- "$WORK" 2>/dev/null || true
+		;; esac
+	fi
+	if [ "$HAVE_LOCK" -eq 1 ]; then
+		flock -u 9 2>/dev/null || true
+		exec 9>&-
+	fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+digits() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
+number() { digits "$1" && { [ "$1" = 0 ] || { [ "${1#0}" = "$1" ] && [ "${#1}" -le 11 ]; }; }; }
+count() { number "$1" && [ "$1" -le "$2" ]; }
+field() { jsonfilter -i "$1" -e "$2" 2>/dev/null || true; }
+code_json() { [ -z "$1" ] && printf null || printf '"%s"' "$1"; }
+valid_code() {
+	case "$1" in
+		''|update_in_progress|geosite_download_failed|geoip_download_failed|source_oversized|decompile_failed|merge_failed|compile_failed|maintenance_locked|ru_bypass_disabled|publish_failed) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+defaults() { LAST_OK=true; LAST_CODE=''; LAST_ATTEMPT=0; LAST_SUCCESS=0; LAST_DOMAINS=0; LAST_CIDRS=0; }
+
+load_status() {
+	defaults
+	[ -e "$STATUS" ] || [ -L "$STATUS" ] || return 0
+	[ -f "$STATUS" ] && [ ! -L "$STATUS" ] && [ "$(stat -c %u "$STATUS" 2>/dev/null)" = 0 ] || return 1
+	bytes=$(wc -c <"$STATUS" 2>/dev/null | tr -d '[:space:]') || return 1
+	number "$bytes" && [ "$bytes" -le 512 ] || return 1
+	grep -Eq '^\{"ok":(true|false),"code":(null|"[a-z_]{1,48}"),"last_attempt":(0|[1-9][0-9]{0,10}),"last_success":(0|[1-9][0-9]{0,10}),"domains":(0|[1-9][0-9]{0,4}),"ipv4_cidrs":(0|[1-9][0-9]{0,4})\}$' "$STATUS" || return 1
+	LAST_OK=$(field "$STATUS" '@.ok')
+	LAST_CODE=$(field "$STATUS" '@.code')
+	[ "$LAST_CODE" != null ] || LAST_CODE=''
+	LAST_ATTEMPT=$(field "$STATUS" '@.last_attempt')
+	LAST_SUCCESS=$(field "$STATUS" '@.last_success')
+	LAST_DOMAINS=$(field "$STATUS" '@.domains')
+	LAST_CIDRS=$(field "$STATUS" '@.ipv4_cidrs')
+	{ [ "$LAST_OK" = true ] || [ "$LAST_OK" = false ]; } && valid_code "$LAST_CODE" && \
+		number "$LAST_ATTEMPT" && number "$LAST_SUCCESS" && count "$LAST_DOMAINS" 20000 && count "$LAST_CIDRS" 30000
+}
+
+emit() {
+	printf '{"ok":%s,"code":%s,"last_attempt":%s,"last_success":%s,"domains":%s,"ipv4_cidrs":%s}\n' \
+		"$1" "$(code_json "$2")" "$3" "$4" "$5" "$6"
+}
+
+write_status() {
+	status_ok=$1 status_code=$2 status_attempt=$3 status_success=$4 status_domains=$5 status_cidrs=$6
+	{ [ "$status_ok" = true ] || [ "$status_ok" = false ]; } && valid_code "$status_code" && \
+		number "$status_attempt" && number "$status_success" && count "$status_domains" 20000 && count "$status_cidrs" 30000 || return 1
+	[ -d "$STATUS_PARENT" ] && [ ! -L "$STATUS_PARENT" ] && [ "$(stat -c %u "$STATUS_PARENT" 2>/dev/null)" = 0 ] || return 1
+	STATUS_TMP="$STATUS.new.$$"
+	[ ! -e "$STATUS_TMP" ] && [ ! -L "$STATUS_TMP" ] || return 1
+	if [ -e "$STATUS" ] || [ -L "$STATUS" ]; then
+		[ -f "$STATUS" ] && [ ! -L "$STATUS" ] && [ "$(stat -c %u "$STATUS" 2>/dev/null)" = 0 ] || return 1
+	fi
+	emit "$status_ok" "$status_code" "$status_attempt" "$status_success" "$status_domains" "$status_cidrs" >"$STATUS_TMP" || return 1
+	chmod 0600 "$STATUS_TMP" || return 1
+	mv -f "$STATUS_TMP" "$STATUS" || return 1
+	STATUS_TMP=''
+}
+
+fail_plain() {
+	code=$1
+	emit false "$code" 0 0 0 0
+	exit 1
+}
+
+fail_attempt() {
+	code=$1
+	write_status false "$code" "$NOW" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS" || fail_plain publish_failed
+	emit false "$code" "$NOW" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"
+	exit 1
+}
+
+enabled() {
+	setting=$(uci -q get autovpn.runtime.ru_bypass 2>/dev/null || true)
+	[ -z "$setting" ] || [ "$setting" = 1 ]
+}
+ungated() {
+	for gate in /etc/autovpn/state/maintenance.lock /etc/autovpn/state/update.lock; do
+		[ ! -e "$gate" ] && [ ! -L "$gate" ] || return 1
+	done
+}
+
+lock_update() {
+	if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
+		[ -f "$LOCK" ] && [ ! -L "$LOCK" ] && [ "$(stat -c %u "$LOCK" 2>/dev/null)" = 0 ] || fail_plain unsafe_ru_db_lock
+	fi
+	exec 9>>"$LOCK" || fail_plain unsafe_ru_db_lock
+	[ -f "$LOCK" ] && [ ! -L "$LOCK" ] && [ "$(stat -c %u "$LOCK" 2>/dev/null)" = 0 ] || fail_plain unsafe_ru_db_lock
+	lock_inode=$(stat -c %i "$LOCK" 2>/dev/null) || fail_plain unsafe_ru_db_lock
+	fd_inode=$(stat -Lc %i "/proc/$$/fd/9" 2>/dev/null) || fail_plain unsafe_ru_db_lock
+	digits "$lock_inode" && [ "$lock_inode" = "$fd_inode" ] || fail_plain unsafe_ru_db_lock
+	chmod 0600 "$LOCK" || fail_plain unsafe_ru_db_lock
+	flock -n 9 || fail_plain ru_db_busy
+	HAVE_LOCK=1
+}
+
+download_attempt() {
+	output=$1 url=$2 proxy=${3:-}
+	rm -f -- "$output"
+	if [ -n "$proxy" ]; then
+		(ulimit -f 520; curl --disable --fail --silent --show-error --proto '=https' \
+			--connect-timeout 3 --max-time 6 --proxy "$proxy" --noproxy '' --output "$output" "$url") >/dev/null 2>&1
+	else
+		(ulimit -f 520; curl --disable --fail --silent --show-error --proto '=https' \
+			--connect-timeout 3 --max-time 6 --output "$output" "$url") >/dev/null 2>&1
+	fi
+}
+
+download() {
+	name=$1 url=$2 code=$3
+	output="$WORK/$name.srs"
+	download_attempt "$output" "$url" || \
+		download_attempt "$output" "$url" 'socks5h://127.0.0.1:1088' || \
+		download_attempt "$output" "$url" 'socks5h://127.0.0.1:1108' || fail_attempt "$code"
+	bytes=$(wc -c <"$output" 2>/dev/null | tr -d '[:space:]') || fail_attempt "$code"
+	number "$bytes" && [ "$bytes" -gt 0 ] && [ "$bytes" -le "$MAX_SRS_BYTES" ] || fail_attempt source_oversized
+}
+
+decompile() {
+	name=$1
+	(ulimit -f 4096; timeout 20 sing-box rule-set decompile -o "$WORK/$name.json" "$WORK/$name.srs") >/dev/null 2>&1 || fail_attempt decompile_failed
+	bytes=$(wc -c <"$WORK/$name.json" 2>/dev/null | tr -d '[:space:]') || fail_attempt decompile_failed
+	number "$bytes" && [ "$bytes" -gt 0 ] && [ "$bytes" -le "$MAX_JSON_BYTES" ] || fail_attempt decompile_failed
+}
+
+prepare_target() {
+	[ -d "$ROUTING_PARENT" ] && [ ! -L "$ROUTING_PARENT" ] && [ "$(stat -c %u "$ROUTING_PARENT" 2>/dev/null)" = 0 ] || return 1
+	if [ ! -e "$ROUTING_DIR" ] && [ ! -L "$ROUTING_DIR" ]; then mkdir "$ROUTING_DIR" || return 1; fi
+	[ -d "$ROUTING_DIR" ] && [ ! -L "$ROUTING_DIR" ] && [ "$(stat -c %u "$ROUTING_DIR" 2>/dev/null)" = 0 ] || return 1
+	chmod 0700 "$ROUTING_DIR" || return 1
+	if [ -e "$SOURCE" ] || [ -L "$SOURCE" ]; then
+		[ -f "$SOURCE" ] && [ ! -L "$SOURCE" ] && [ "$(stat -c %u "$SOURCE" 2>/dev/null)" = 0 ] || return 1
+	fi
+}
+
+tick() {
+	for tool in uci date stat wc tr grep jsonfilter mkdir chmod mktemp rm rmdir flock curl timeout sing-box ucode cmp cp mv sync; do
+		command -v "$tool" >/dev/null 2>&1 || fail_plain missing_required_tool
+	done
+	[ "$GEOSITE_URL" = 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs' ] && \
+		[ "$GEOIP_URL" = 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs' ] || fail_plain invalid_source
+	load_status || fail_plain invalid_ru_db_status
+	enabled || { emit true ru_bypass_disabled "$LAST_ATTEMPT" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"; return 0; }
+	ungated || fail_plain maintenance_locked
+	lock_update || fail_plain unsafe_ru_db_lock
+	load_status || fail_plain invalid_ru_db_status
+	NOW=$(date +%s 2>/dev/null) || fail_plain clock_unavailable
+	number "$NOW" || fail_plain clock_unavailable
+	if [ "$LAST_OK" = false ] && [ "$NOW" -ge "$LAST_ATTEMPT" ] && [ $((NOW - LAST_ATTEMPT)) -lt "$COOLDOWN_SECONDS" ]; then
+		emit true cooldown "$LAST_ATTEMPT" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"
+		return 0
+	fi
+	if [ "$LAST_SUCCESS" -gt 0 ] && [ "$NOW" -ge "$LAST_SUCCESS" ] && [ $((NOW - LAST_SUCCESS)) -lt "$DAILY_SECONDS" ]; then
+		emit true not_due "$LAST_ATTEMPT" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"
+		return 0
+	fi
+	enabled || { emit true ru_bypass_disabled "$LAST_ATTEMPT" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"; return 0; }
+	ungated || fail_plain maintenance_locked
+	write_status false update_in_progress "$NOW" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS" || fail_plain publish_failed
+	WORK=$(mktemp -d /tmp/autovpn-ru-db.XXXXXX) || fail_attempt publish_failed
+	chmod 0700 "$WORK" || fail_attempt publish_failed
+	download geosite "$GEOSITE_URL" geosite_download_failed
+	download geoip "$GEOIP_URL" geoip_download_failed
+	decompile geosite
+	decompile geoip
+	ucode "$HELPER" merge "$WORK" >"$WORK/helper.json" 2>/dev/null || fail_attempt merge_failed
+	bytes=$(wc -c <"$WORK/helper.json" 2>/dev/null | tr -d '[:space:]') || fail_attempt merge_failed
+	number "$bytes" && [ "$bytes" -le 512 ] || fail_attempt merge_failed
+	[ "$(field "$WORK/helper.json" '@.ok')" = true ] || fail_attempt merge_failed
+	domains=$(field "$WORK/helper.json" '@.domains')
+	cidrs=$(field "$WORK/helper.json" '@.ipv4_cidrs')
+	number "$domains" && [ "$domains" -gt 0 ] && [ "$domains" -le 20000 ] || fail_attempt merge_failed
+	number "$cidrs" && [ "$cidrs" -gt 0 ] && [ "$cidrs" -le 30000 ] || fail_attempt merge_failed
+	(ulimit -f 4096; timeout 20 sing-box rule-set compile -o "$WORK/compiled.srs" "$WORK/ru.json") >/dev/null 2>&1 || fail_attempt compile_failed
+	[ -s "$WORK/compiled.srs" ] && [ "$(wc -c <"$WORK/compiled.srs")" -le "$MAX_JSON_BYTES" ] || fail_attempt compile_failed
+	enabled || fail_attempt ru_bypass_disabled
+	ungated || fail_attempt maintenance_locked
+	prepare_target || fail_attempt publish_failed
+	if [ -f "$SOURCE" ] && cmp -s "$WORK/ru.json" "$SOURCE"; then
+		write_status true '' "$NOW" "$NOW" "$domains" "$cidrs" || fail_plain publish_failed
+		emit true '' "$NOW" "$NOW" "$domains" "$cidrs"
+		return 0
+	fi
+	CANDIDATE="$ROUTING_DIR/.ru.json.new.$$"
+	[ ! -e "$CANDIDATE" ] && [ ! -L "$CANDIDATE" ] || fail_attempt publish_failed
+	cp "$WORK/ru.json" "$CANDIDATE" || fail_attempt publish_failed
+	chmod 0600 "$CANDIDATE" || fail_attempt publish_failed
+	sync
+	mv "$CANDIDATE" "$SOURCE" || fail_attempt publish_failed
+	CANDIDATE=''
+	sync
+	write_status true '' "$NOW" "$NOW" "$domains" "$cidrs" || fail_plain publish_failed
+	emit true '' "$NOW" "$NOW" "$domains" "$cidrs"
+}
+
+case "${1:-}" in
+	status)
+		[ "$#" -eq 1 ] || fail_plain invalid_arguments
+		load_status || fail_plain invalid_ru_db_status
+		emit "$LAST_OK" "$LAST_CODE" "$LAST_ATTEMPT" "$LAST_SUCCESS" "$LAST_DOMAINS" "$LAST_CIDRS"
+		;;
+	tick) [ "$#" -eq 1 ] || fail_plain invalid_arguments; tick ;;
+	*) fail_plain invalid_arguments ;;
+esac

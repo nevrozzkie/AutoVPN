@@ -29,6 +29,12 @@ var callPingAll = rpc.declare({
 	expect: { '': {} }
 });
 
+var callRuDbStatus = rpc.declare({
+	object: 'luci.autovpn',
+	method: 'ru_db_status',
+	expect: { '': {} }
+});
+
 function valueOrDash(value) {
 	return value === null || value === undefined || value === '' ? '—' : String(value);
 }
@@ -71,12 +77,37 @@ function pingTable(response) {
 	return E('table', { 'class': 'table' }, rows);
 }
 
+function countOrDash(value) {
+	return typeof value === 'number' && isFinite(value) && value >= 0 ? String(value) : '—';
+}
+
+function ruDatabaseText(status) {
+	if (!status || typeof status !== 'object') return _('Status unavailable');
+	if (status.code === 'update_in_progress')
+		return _('Database update is in progress. Last success: %s.').format(checkedAt(status.last_success));
+	if (status.ok === false && status.code)
+		return _('Database status unavailable: %s.').format(valueOrDash(status.code));
+	if (typeof status.last_attempt !== 'number' || !isFinite(status.last_attempt) || status.last_attempt <= 0)
+		return _('Database has not been checked yet.');
+	var lastSuccess = checkedAt(status.last_success);
+	var details = _('Last attempt: %s; last success: %s; domains: %s; IPv4 CIDRs: %s').format(
+		checkedAt(status.last_attempt), lastSuccess, countOrDash(status.domains), countOrDash(status.ipv4_cidrs));
+	return status.ok === true ? _('Last database update succeeded. %s').format(details) :
+		_('Last database update failed: %s. %s').format(valueOrDash(status.code), details);
+}
+
 return view.extend({
 	load: function() {
-		return callStatus();
+		return Promise.all([
+			callStatus(),
+			callRuDbStatus().catch(function() { return null; })
+		]);
 	},
 
-	render: function(status) {
+	render: function(data) {
+		var status = Array.isArray(data) ? data[0] : data;
+		var ruDatabase = Array.isArray(data) ? data[1] : null;
+		status = status || {};
 		var lanes = status.runtime_lanes || { vpn: { ok: status.runtime_running, active_profile: status.runtime_profile, code: status.runtime_error } };
 		var laneRows = Object.keys(lanes).map(function(name) {
 			var lane = lanes[name] || {};
@@ -102,6 +133,11 @@ return view.extend({
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Applied revision')), E('td', { 'class': 'td left' }, revision(status.applied))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Last-good revision')), E('td', { 'class': 'td left' }, revision(status.last_good))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Last error')), E('td', { 'class': 'td left' }, valueOrDash(status.last_error))])
+		]);
+		var ruDatabaseRow = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, _('Russian bypass database')),
+			E('p', {}, ruDatabaseText(ruDatabase)),
+			E('p', {}, _('This is update status only, not a VPN readiness or policy-application result. Automatic bypass is shared by VPN and VPN + zapret; manual Russian rules remain active when the database option is disabled.'))
 		]);
 
 		var button = E('button', {
@@ -157,6 +193,7 @@ return view.extend({
 			E('h2', {}, _('AutoVPN controller')),
 			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. The one-command router installer installs the pinned zapret2 engine from its official upstream release with verification; it has no automatic updates. Configure its lanes in Settings.')),
 			table,
+			ruDatabaseRow,
 			E('p', {}, _('Ping all checks each candidate with HTTPS without changing the active VPN. It measures response latency, not throughput or ICMP reachability.')),
 			E('div', { 'class': 'cbi-page-actions' }, [target]),
 			E('div', { 'class': 'autovpn-ping-lanes' }, [

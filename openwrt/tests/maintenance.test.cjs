@@ -118,7 +118,8 @@ test('reset requires explicit confirmation, clears both lanes, and leaves Wi-Fi/
 			'/etc/autovpn/credentials': 'avrt_oldrouter.' + 'o'.repeat(43) + '\n',
 			'/etc/autovpn/runtime-zapret/run.json': '{"old":true}',
 			'/etc/autovpn/runtime-zapret/zapret.json': '{"old":true}',
-			'/etc/autovpn/runtime-zapret/foreign.txt': 'must stay'
+			'/etc/autovpn/runtime-zapret/foreign.txt': 'must stay',
+			'/etc/autovpn/routing/ru.json': '{"public":"database"}'
 		},
 		values: { 'runtime.selection': 'hysteria2', 'runtime_zapret.selection': 'amneziawg' }
 	});
@@ -132,6 +133,8 @@ test('reset requires explicit confirmation, clears both lanes, and leaves Wi-Fi/
 	assert.equal(env.values['main.enabled'], '0');
 	assert.equal(env.values['runtime.selection'], 'auto');
 	assert.equal(env.values['runtime_zapret.selection'], 'auto');
+	assert.equal(env.values['runtime.ru_bypass'], '1');
+	assert.equal(env.files.get('/etc/autovpn/routing/ru.json'), '{"public":"database"}');
 	assert.equal(env.values['runtime.wan_device'], 'eth0');
 	assert.equal(env.values['wifi.password'], 'wifi-password');
 	assert.equal(env.files.has('/etc/autovpn/runtime-zapret/run.json'), false);

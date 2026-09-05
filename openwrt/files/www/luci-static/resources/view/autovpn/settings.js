@@ -59,6 +59,10 @@ return view.extend({
 		option.description = _('Domain suffixes, one per entry, without URLs or wildcards. Use punycode for Cyrillic names. The ru suffix does not include every Russian website.');
 		option = section.option(form.DynamicList, 'direct_cidrs', _('IPv4 networks without VPN'));
 		option.description = _('CIDR notation, for example 203.0.113.0/24.');
+		option = section.option(form.Flag, 'ru_bypass', _('Automatic Russian bypass'));
+		option.default = '1';
+		option.rmempty = false;
+		option.description = _('Applies the downloaded community SagerNet Russian domain and IPv4 database to both VPN networks. It is refreshed daily, is not guaranteed to cover every Russian site, and GeoIP entries can include foreign co-hosted services. Your manual domain and IPv4 rules are kept; disabling this excludes only the downloaded database, not manual rules.');
 		option = section.option(form.Button, '_install_zapret', _('Zapret2 engine'));
 		option.inputtitle = _('Install / check installation');
 		option.inputstyle = 'action';

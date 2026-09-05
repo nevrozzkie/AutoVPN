@@ -48,6 +48,9 @@ function policy() {
 		/* Optional package: never make VLESS/Hysteria depend on it. */
 		awg_available: awgAvailable(),
 	};
+	let ruBypass = uci.get('autovpn', 'runtime', 'ru_bypass');
+	if (ruBypass != null && ruBypass != '0' && ruBypass != '1') return {};
+	result.ru_bypass = ruBypass == null || ruBypass == '1';
 	let enabled = uci.get('autovpn', 'runtime', 'zapret_enabled');
 	if (enabled != null && enabled != '0' && enabled != '1') return {};
 	if (enabled == '1') {
