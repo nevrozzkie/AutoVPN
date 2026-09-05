@@ -187,6 +187,11 @@ binary before it can be considered an install candidate.
 
 ## Reproducible release gate
 
+Publication status: the owner requested downloadable binaries and a one-command
+installer for their first device test. [Preview r2](installer-release-r2.md) is
+therefore an explicitly hardware-unvalidated **pre-release**. The target canary
+below is still pending; this exception does not approve a stable AWG release.
+
 The only established controller build target is
 `make package/autovpn-controller/compile V=s` after adding `openwrt/` to the
 exact SDK and installing the SDK's pinned feeds. A future Linux build script
