@@ -15,11 +15,13 @@ SERVICE=/etc/init.d/autovpn-tunnel
 SHARE=/usr/share/autovpn
 AWG_HELPER=/usr/libexec/autovpn/awg-helper.uc
 PROBE_HELPER=/usr/libexec/autovpn/probe-helper.uc
+ZAPRET_HELPER=/usr/libexec/autovpn/zapret-helper.uc
 
 error() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
 ok() { printf '%s\n' '{"ok":true}'; }
 
 guard() {
+	if [ "$1" = open ]; then zapret check || return 1; fi
 	# Never replace an unrelated table with the same name.
 	if nft list table inet autovpn >"$SCRATCH/table.txt" 2>/dev/null; then
 		grep -q 'chain ownership_autovpn_v1' "$SCRATCH/table.txt" || return 1
@@ -32,13 +34,15 @@ closed() {
 	guard closed && guard_ok=1
 	"$SERVICE" stop >/dev/null 2>&1 || return 1
 	[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down >/dev/null 2>&1 || return 1
+	ucode "$ZAPRET_HELPER" down >/dev/null 2>&1 || return 1
 	[ "$guard_ok" -eq 1 ]
 }
 helper() {
 	ucode "$HELPER" "$1" "$JOURNAL" "${2:-}" 2>/dev/null >"$SCRATCH/result.json"
 }
 empty() { grep -Eq '"empty"[[:space:]]*:[[:space:]]*true' "$SCRATCH/result.json"; }
-check() { sing-box check -c "$ROOT/candidate.json" >/dev/null 2>&1; }
+zapret() { ucode "$ZAPRET_HELPER" "$1" "$ROOT/zapret.json" >/dev/null 2>&1; }
+check() { sing-box check -c "$ROOT/candidate.json" >/dev/null 2>&1 && zapret validate; }
 awg_active() { grep -q '"private_key"' "$ROOT/awg.json" 2>/dev/null; }
 selected_awg() { grep -Eq '"active_profile"[[:space:]]*:[[:space:]]*"amneziawg"' "$SCRATCH/result.json"; }
 awg_up() { ucode "$AWG_HELPER" up "$ROOT/awg.json" >/dev/null 2>&1; }
@@ -96,6 +100,8 @@ routes() {
 start() {
 	local hard_awg_failure=0 fallback_profile
 	closed || return 1
+	# The scoped queue/listener must exist before AWG or sing-box send a handshake.
+	zapret up || return 1
 	if awg_active && ! awg_up; then
 		[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down >/dev/null 2>&1 || return 1
 		if selected_awg; then
@@ -107,6 +113,7 @@ start() {
 			helper disable-awg || return 1
 		fi
 		check || return 1
+		zapret up || return 1
 	fi
 	if awg_active; then
 		cp "$ROOT/awg.json" "$ROOT/awg-run.json.new" || return 1
@@ -215,7 +222,7 @@ case "${1:-}" in
 		helper status || { cat "$SCRATCH/result.json"; exit 1; }
 		if "$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1 && \
 			nft list chain inet autovpn forward 2>/dev/null | grep -q avpn0 && \
-			{ ! selected_awg || awg_healthy; }; then
+			{ ! selected_awg || awg_healthy; } && zapret check; then
 			cat "$SCRATCH/result.json"
 		else
 			printf '%s\n' '{"ok":false,"code":"runtime_not_running"}'
@@ -248,6 +255,7 @@ case "${1:-}" in
 	verify)
 		helper verify || { cat "$SCRATCH/result.json"; exit 1; }
 		empty && error snapshot_not_applied
+		zapret check || { closed || true; error zapret_unavailable; }
 		probe && probe || monitor recover || error vpn_probe_failed
 		guard open || error firewall_activation_failed
 		helper verify || { closed || true; error runtime_bundle_mismatch; }
@@ -263,7 +271,7 @@ case "${1:-}" in
 		preflight || error runtime_preflight_failed
 		check || error sing_box_check_failed
 		if [ "$1" = restore ] && cmp -s "$ROOT/candidate.json" "$ROOT/run.json" && \
-			{ ! selected_awg || awg_healthy; } && \
+			{ ! selected_awg || awg_healthy; } && zapret check && \
 			"$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1; then
 			routes || error route_restore_failed
 			# Reusing a committed runtime must not bypass failure hysteresis or
@@ -285,7 +293,7 @@ case "${1:-}" in
 		empty && error snapshot_not_applied
 		if ! cmp -s "$ROOT/candidate.json" "$ROOT/run.json" || \
 			! "$SERVICE" running >/dev/null 2>&1 || ! ip link show dev avpn0 >/dev/null 2>&1 || \
-			{ selected_awg && ! awg_healthy; }; then
+			{ selected_awg && ! awg_healthy; } || ! zapret check; then
 			# Restore the same persisted choice before considering alternatives.
 			helper restore || error runtime_bundle_mismatch
 			empty && error snapshot_not_applied
@@ -301,6 +309,7 @@ case "${1:-}" in
 		case "${3:-youtube}" in youtube|instagram) ;; *) error invalid_probe_target ;; esac
 		# Read-only with respect to runtime/UCI/health; no start/restore/select.
 		"$SERVICE" running >/dev/null 2>&1 || error runtime_not_running
+		zapret check || error zapret_unavailable
 		ucode "$PROBE_HELPER" ping-all "$JOURNAL" "${3:-youtube}"
 		;;
 	*) error unknown_runtime_action ;;

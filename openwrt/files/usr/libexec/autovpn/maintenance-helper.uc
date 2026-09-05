@@ -150,7 +150,7 @@ function clearRuntimeState() {
 		STATE + '/journal.json',
 		RUNTIME + '/prepared.json', RUNTIME + '/current.json', RUNTIME + '/previous.json',
 		RUNTIME + '/failover.json',
-		RUNTIME + '/candidate.json', RUNTIME + '/run.json', RUNTIME + '/awg.json',
+		RUNTIME + '/candidate.json', RUNTIME + '/run.json', RUNTIME + '/awg.json', RUNTIME + '/zapret.json',
 		RUNTIME + '/awg-run.json', RUNTIME + '/awg-owned', RUNTIME + '/awg.conf'
 	];
 	for (let i = 0; i < length(files); i++)
@@ -187,6 +187,11 @@ function resetConfig(ctx) {
 		ctx.set('autovpn', 'runtime', 'direct_domains', ['ru', 'xn--p1ai']) &&
 		(ctx.get('autovpn', 'runtime', 'direct_cidrs') == null || ctx.delete('autovpn', 'runtime', 'direct_cidrs')) &&
 		ctx.set('autovpn', 'runtime', 'hysteria_tls_mode', 'subscription') &&
+		ctx.set('autovpn', 'runtime', 'zapret_enabled', '0') &&
+		ctx.set('autovpn', 'runtime', 'zapret_vless', 'split') &&
+		ctx.set('autovpn', 'runtime', 'zapret_hysteria2', 'fake') &&
+		ctx.set('autovpn', 'runtime', 'zapret_amneziawg', 'off') &&
+		ctx.set('autovpn', 'runtime', 'zapret_repeats', '2') &&
 		ctx.set('autovpn', 'health', 'probe_url', 'https://connectivitycheck.gstatic.com/generate_204') &&
 		ctx.set('autovpn', 'health', 'failure_threshold', '3') &&
 		ctx.set('autovpn', 'health', 'success_threshold', '2') &&

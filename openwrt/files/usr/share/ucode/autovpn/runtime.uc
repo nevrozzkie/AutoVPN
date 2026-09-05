@@ -56,7 +56,10 @@ function normalizedPolicy(policy) {
 	let current = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
 		'hysteria_tls_mode', 'awg_available']);
 	let names = sort(keys(policy));
-	if (join(',', names) != join(',', old) && join(',', names) != join(',', current)) return null;
+	let withZapret = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
+		'hysteria_tls_mode', 'awg_available', 'zapret']);
+	if (join(',', names) != join(',', old) && join(',', names) != join(',', current) &&
+		join(',', names) != join(',', withZapret)) return null;
 	let result = copy(policy);
 	/* Old 0.4 bundles used strict Hysteria validation. Do not reinterpret them. */
 	if (result.hysteria_tls_mode == null) result.hysteria_tls_mode = 'strict';
@@ -67,6 +70,8 @@ function validatePolicy(policy) {
 	if (type(policy) != 'object') return fail('invalid_policy');
 	let normalized = normalizedPolicy(policy);
 	if (normalized == null) return fail('invalid_policy');
+	if (normalized.zapret != null && !require('autovpn.zapret').validPolicy(normalized.zapret))
+		return fail('invalid_zapret_policy');
 	if (index(['auto', 'vless-reality', 'hysteria2', 'amneziawg'], normalized.selection) < 0)
 		return fail('unsupported_selection');
 	if (type(normalized.wan_device) != 'string' ||
@@ -228,6 +233,17 @@ function render(snapshot, policy, machine, preferredProfile) {
 	let selected = effective.selection;
 	if (selected == 'auto')
 		selected = index(candidates, preferredProfile) >= 0 ? preferredProfile : candidates[0];
+	let zapret = require('autovpn.zapret').plan(snapshot, candidates, effective.wan_device, effective.zapret);
+	if (zapret === false) return fail('invalid_zapret_plan');
+	if (zapret != null) {
+		for (let i = 0; i < length(zapret.flows); i++) {
+			let flow = zapret.flows[i];
+			for (let n = 0; n < length(outbounds); n++)
+				if (outbounds[n].tag == flow.profile && flow.profile != 'amneziawg')
+					outbounds[n].routing_mark = flow.mark;
+			if (flow.profile == selected) capabilities.zapret = true;
+		}
+	}
 	push(outbounds, { type: 'direct', tag: 'direct', bind_interface: effective.wan_device });
 
 	/* Forced probe routes precede DNS interception and every user direct exception. */
@@ -258,7 +274,7 @@ function render(snapshot, policy, machine, preferredProfile) {
 		push(dnsServers, { type: 'udp', tag: 'awg-dns', server: effective.dns_server, server_port: 53, detour: 'amneziawg' });
 	capabilities.policy_routing = true;
 	return {
-		ok: true, profile: selected, candidates: candidates, capabilities: capabilities, awg: awg,
+		ok: true, profile: selected, candidates: candidates, capabilities: capabilities, awg: awg, zapret: zapret,
 		config: {
 			log: { disabled: true },
 			dns: { servers: dnsServers, final: 'tunnel-dns', strategy: 'ipv4_only', reverse_mapping: true },
@@ -277,6 +293,7 @@ function bundle(entry, policy, machine, preferredProfile) {
 		policy: copy(policy), config: result.config, profile: result.profile, candidates: result.candidates,
 		capabilities: result.capabilities };
 	if (result.awg != null) value.awg = result.awg;
+	if (result.zapret != null) value.zapret = result.zapret;
 	if (length(sprintf('%J', value)) >= 65536) return fail('runtime_bundle_too_large');
 	return { ok: true, value: value };
 }

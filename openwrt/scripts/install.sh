@@ -233,4 +233,4 @@ controller_version=$installed_controller_version
 persist_trust
 say 'Installed. Open LuCI → Services → AutoVPN → Setup.'
 say 'Enter the site URL, router ID/token, Wi-Fi name and WPA2 password there. LAN/SSID settings are not changed by this installer.'
-say 'Zapret transport is not implemented in this release; its prepared SSIDs remain disabled.'
+say 'Optional VPN-transport zapret2 can be installed and enabled in LuCI Settings; separate zapret SSIDs remain disabled.'

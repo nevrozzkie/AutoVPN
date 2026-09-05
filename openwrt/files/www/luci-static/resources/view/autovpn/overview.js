@@ -78,6 +78,7 @@ return view.extend({
 
 	render: function(status) {
 		var table = E('table', { 'class': 'table' }, [
+			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Zapret on current VPN')), E('td', { 'class': 'td left' }, status.runtime_zapret ? _('Active (experimental)') : _('Not active'))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('VPN runtime')), E('td', { 'class': 'td left' }, status.runtime_running ? valueOrDash(status.runtime_profile) : valueOrDash(status.runtime_error))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Router ID')), E('td', { 'class': 'td left' }, valueOrDash(status.router_id))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Phase')), E('td', { 'class': 'td left' }, valueOrDash(status.phase))]),
@@ -132,7 +133,7 @@ return view.extend({
 
 		return E('div', { 'class': 'cbi-map', 'id': 'autovpn-status' }, [
 			E('h2', {}, _('AutoVPN controller')),
-			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. Create Wi-Fi on the Networks page. Zapret integration is not yet active.')),
+			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. Optional zapret2 processes VPN-server connections; configure it in Settings. Separate ZAPRET SSIDs are not active yet.')),
 			table,
 			E('p', {}, _('Ping all checks each candidate with HTTPS without changing the active VPN. It measures response latency, not throughput or ICMP reachability.')),
 			E('div', { 'class': 'cbi-page-actions' }, [target, pingButton]),

@@ -2,6 +2,11 @@
 'require view';
 'require form';
 'require uci';
+'require rpc';
+'require ui';
+
+var installZapret = rpc.declare({ object: 'luci.autovpn', method: 'zapret_install', expect: { '': {} } });
+var zapretStatus = rpc.declare({ object: 'luci.autovpn', method: 'zapret_install_status', expect: { '': {} } });
 
 return view.extend({
 	load: function() { return uci.load('autovpn'); },
@@ -43,6 +48,46 @@ return view.extend({
 		option.description = _('Domain suffixes, one per entry, without URLs or wildcards. Use punycode for Cyrillic names. The ru suffix does not include every Russian website.');
 		option = section.option(form.DynamicList, 'direct_cidrs', _('IPv4 networks without VPN'));
 		option.description = _('CIDR notation, for example 203.0.113.0/24.');
+		option = section.option(form.Button, '_install_zapret', _('Zapret2 engine'));
+		option.inputtitle = _('Install / check installation');
+		option.inputstyle = 'action';
+		option.description = _('Downloads a pinned official bol-van/zapret2 release with SHA-256 verification. Does not enable zapret or change your VPN. No automatic engine updates.');
+		option.onclick = function() {
+			return installZapret().then(function(result) {
+				if (!result.ok) throw new Error(result.code || 'installation_failed');
+				var attempts = 0;
+				function check() {
+					return zapretStatus().then(function(state) {
+						if ((state.phase === 'queued' || state.phase === 'running') && attempts++ < 100)
+							return new Promise(function(resolve) { window.setTimeout(resolve, 2000); }).then(check);
+						ui.addNotification(null, E('p', {}, _('Zapret installation: %s').format(state.code || state.phase || 'unknown')));
+					});
+				}
+				return check();
+			}).catch(function(error) {
+				ui.addNotification(null, E('p', {}, _('Zapret installation failed: %s').format(error.message)));
+			});
+		};
+		option = section.option(form.Flag, 'zapret_enabled', _('Zapret on VPN transport'));
+		option.rmempty = false;
+		option.description = _('Processes only AutoVPN connections to VPN servers, before the encrypted tunnel reaches the provider. Applies to the current VPN SSID and candidate probes; direct exceptions are not processed. Separate ZAPRET SSIDs remain disabled in this stage.');
+		option = section.option(form.ListValue, 'zapret_vless', _('VLESS zapret strategy'));
+		option.depends('zapret_enabled', '1');
+		option.value('split', _('TLS ClientHello split (experimental)'));
+		option.value('off', _('Off'));
+		option.default = 'split';
+		['hysteria2', 'amneziawg'].forEach(function(protocol) {
+			var strategy = section.option(form.ListValue, 'zapret_' + protocol, protocol + ' zapret');
+			strategy.depends('zapret_enabled', '1');
+			strategy.value('off', _('Off'));
+			strategy.value('fake', _('UDP fake packets (experimental, provider-dependent)'));
+			strategy.default = protocol === 'hysteria2' ? 'fake' : 'off';
+		});
+		option = section.option(form.Value, 'zapret_repeats', _('UDP fake repeats'));
+		option.depends('zapret_enabled', '1');
+		option.datatype = 'range(1,6)';
+		option.default = '2';
+		option.description = _('No automatic strategy selection. Save and apply the VPN settings, then check Ping all. A disabled strategy leaves that VPN candidate unmodified.');
 		section = map.section(form.NamedSection, 'wifi', 'wifi', _('Managed Wi-Fi networks'));
 		section.addremove = false;
 		option = section.option(form.Value, 'base_ssid', _('Base Wi-Fi name'));

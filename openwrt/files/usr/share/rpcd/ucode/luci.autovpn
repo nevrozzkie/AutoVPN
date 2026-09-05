@@ -125,6 +125,8 @@ function maintain(request) {
 
 return {
 	'luci.autovpn': {
+		zapret_install: { call: function() { return callController('zapret-install'); } },
+		zapret_install_status: { call: function() { return callController('zapret-install-status'); } },
 		maintenance_action: {
 			args: { nonce: '', action: '', base_url: '', router_id: '', credential: '', confirmation: '' },
 			call: function(request) { return maintain(request); },

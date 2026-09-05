@@ -19,7 +19,7 @@ function loadUcodeModule(path) {
 	const factory = new Function(
 		'type', 'length', 'keys', 'sort', 'match', 'push', 'substr', 'int',
 		'index', 'replace', 'split', 'lc', 'sprintf',
-		'json', 'join',
+		'json', 'join', 'require',
 		source
 	);
 	return factory(
@@ -37,7 +37,11 @@ function loadUcodeModule(path) {
 		value => value.toLowerCase(),
 		(format, value) => format === '%J' ? JSON.stringify(value) : (() => { throw new Error(`unsupported format ${format}`); })(),
 		value => JSON.parse(value),
-		(separator, value) => value.join(separator)
+		(separator, value) => value.join(separator),
+		name => {
+			if (name !== 'autovpn.zapret') throw new Error('Unexpected module: ' + name);
+			return loadUcodeModule(require('node:path').join(__dirname, '../files/usr/share/ucode/autovpn/zapret.uc'));
+		}
 	);
 }
 

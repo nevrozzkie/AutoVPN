@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.8.0
+PKG_VERSION:=0.9.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -15,7 +15,7 @@ define Package/autovpn-controller
   SUBMENU:=VPN
   TITLE:=Native AutoVPN controller
   PKGARCH:=all
-  DEPENDS:=+busybox +ca-bundle +curl +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat
+  DEPENDS:=+busybox +ca-bundle +curl +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat +kmod-nft-queue
 endef
 
 define Package/autovpn-controller/description
@@ -44,6 +44,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn $(1)/etc/init.d/autovpn
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn-tunnel $(1)/etc/init.d/autovpn-tunnel
+	$(INSTALL_BIN) ./files/etc/init.d/autovpn-zapret $(1)/etc/init.d/autovpn-zapret
 	$(INSTALL_BIN) ./files/etc/init.d/autovpn-networks $(1)/etc/init.d/autovpn-networks
 	$(INSTALL_DIR) $(1)/usr/libexec/autovpn
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/controller.uc $(1)/usr/libexec/autovpn/controller.uc
@@ -54,6 +55,8 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-adapter $(1)/usr/libexec/autovpn/runtime-adapter
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-helper.uc $(1)/usr/libexec/autovpn/runtime-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/probe-helper.uc $(1)/usr/libexec/autovpn/probe-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-helper.uc $(1)/usr/libexec/autovpn/zapret-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-install $(1)/usr/libexec/autovpn/zapret-install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/setup-helper.uc $(1)/usr/libexec/autovpn/setup-helper.uc
@@ -70,6 +73,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/orchestration.uc $(1)/usr/share/ucode/autovpn/orchestration.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/http.uc $(1)/usr/share/ucode/autovpn/http.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret.uc $(1)/usr/share/ucode/autovpn/zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/networks.uc $(1)/usr/share/ucode/autovpn/networks.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/network-transaction.uc $(1)/usr/share/ucode/autovpn/network-transaction.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/setup-policy.uc $(1)/usr/share/ucode/autovpn/setup-policy.uc

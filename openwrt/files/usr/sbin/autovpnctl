@@ -149,6 +149,18 @@ case "$command" in
 esac
 acquire_lock
 case "$command" in
+	zapret-install)
+		for gate in /etc/autovpn/state/maintenance.lock /etc/autovpn/state/update.lock; do
+			if [ -e "$gate" ] || [ -L "$gate" ]; then
+				printf '%s\n' '{"ok":false,"code":"maintenance_locked"}'
+				exit 1
+			fi
+		done
+		/usr/libexec/autovpn/zapret-install queue
+		;;
+	zapret-install-status)
+		/usr/libexec/autovpn/zapret-install status
+		;;
 	set-credential)
 		set_credential
 		;;
@@ -177,7 +189,7 @@ case "$command" in
 		/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc "$command" "${2:-}"
 		;;
 	*)
-		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|health-tick|ping-all [youtube|instagram]|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
+		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|health-tick|ping-all [youtube|instagram]|zapret-install|zapret-install-status|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
 		exit 64
 		;;
 esac

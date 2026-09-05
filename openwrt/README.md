@@ -75,7 +75,8 @@ procd-сервис и применение policy из LuCI. Подробнос�
 [Runtime](docs/runtime.md). Дополнительно реализованы [автосоздание WPA2 SSID](docs/networks.md)
 с пользовательскими базовым именем и паролем, rollback/подтверждением, а также
 [kernel AmneziaWG](docs/amnezia.md) с опциональными пакетами под точный kernel ABI.
-Hysteria2 по умолчанию сохраняет `insecure` из подписки. Zapret пока не запускается.
+Hysteria2 по умолчанию сохраняет `insecure` из подписки. В 0.9 добавлен опциональный
+[zapret2 на внешнем VPN-транспорте](docs/zapret.md), с установкой и настройкой в LuCI.
 
 - package `Makefile`, UCI defaults, procd init и rpcd/ubus object
   `luci.autovpn` с методами `status` и `refresh`; одна menu-bound ACL-группа даёт
@@ -138,11 +139,9 @@ host. Проверка Linux networking на самом роутере ещё н
 
 - сборка и измерение реального APK-набора (включая AmneziaWG) и проверка lifecycle
   на устройстве; установочный ABI gate реализован, но не заменяет такую проверку;
-- полный reset приложения;
-- локальный zapret outer VPN transport и проверка маркировки пакетов. `nfqws` должен
-  касаться только WAN flow к endpoint IP/port конкретного VPN-кандидата: TCP для
-  VLESS, UDP для Hysteria2 и AWG. Capability каждого протокола с zapret остаётся
-  `unavailable` до отдельного packet-level теста;
+- отдельные zapret-SSID и packet-level проверка маркировки на устройстве;
+  [первый этап outer transport](docs/zapret.md) уже реализован, но результат обхода
+  у конкретного провайдера не проверен;
 - router-side и hardware-in-the-loop тесты.
 
 Текущий server snapshot v3 содержит stable `router_id` и protocol credentials.
@@ -236,15 +235,14 @@ VPN bridge, firewall, WAN device, `base_url`, `router_id` и credential по
 
 1. Собрать package в точном OpenWrt 25.12.x SDK/ImageBuilder и выполнить target-side
    `ucode -c` плюс HTTPS smoke tests с реальным CA/DNS/server.
-2. Проверить WPA2 SSID/подтверждение/boot rollback на устройстве; добавить reset приложения.
+2. Проверить WPA2 SSID/подтверждение/boot rollback и reset приложения на устройстве.
 3. Добавить policy для `direct_zapret`/`vpn_zapret`; последний означает локальный
-   nfqws на внешнем transport до VPN-сервера.
+   nfqws2 на отдельном внешнем transport до VPN-сервера (без смешения с обычным VPN SSID).
 4. Проверить коллизии nft/route rules, firewall reload и DNS на реальном устройстве.
 5. Отдельно собрать и проверить AWG под точный kernel ABI; отдельно — zapret и
-   outer-packet marking для каждого protocol/endpoint IP/port/WAN candidate. Auto
-   должен проверять VLESS, VLESS+zapret, Hysteria2, Hysteria2+zapret, AWG и
-   AWG+zapret реальным HTTPS probe, а не ping. До прохождения теста соответствующие
-   варианты остаются unavailable.
+   outer-packet marking для каждого protocol/endpoint IP/port/WAN candidate.
+   Сейчас `Ping all` проверяет каждый VPN с явно выбранной для него zapret-политикой;
+   это не отдельные кандидаты с zapret/без него и не автоматический подбор стратегии.
 6. Собрать единый stock-layout image и измерить SquashFS/sysupgrade, затем выполнить
    reboot/power-loss/rollback tests на Cudy WR3000S v1.
 

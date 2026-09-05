@@ -184,7 +184,7 @@ function helperHarness() {
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-helper.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
 	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'access', 'cursor', 'require',
-		'length', 'sprintf', 'type', 'match', 'index', 'json', 'ARGV', 'printf', 'exit', source);
+		'length', 'sprintf', 'type', 'match', 'index', 'json', 'ARGV', 'printf', 'exit', 'int', source);
 	return {
 		state, storage,
 		setPolicy(value) { localPolicy = value; },
@@ -205,7 +205,7 @@ function helperHarness() {
 				(format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''),
 				value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
 				(value, expression) => value.match(expression), (values, value) => values.indexOf(value), JSON.parse,
-				[action, '/etc/autovpn/state/journal.json', selectedProfile], (_format, value) => { output = value; }, () => {}
+				[action, '/etc/autovpn/state/journal.json', selectedProfile], (_format, value) => { output = value; }, () => {}, Number
 			);
 			return output;
 		},
@@ -238,6 +238,30 @@ test('helper rollback after activation restores the old policy, including same-E
 	// Power loss before verify/commit: journal still identifies the old applied entry.
 	assert.equal(env.run('rollback').ok, true);
 	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), previous);
+});
+
+test('zapret settings persist with the VPN bundle, survive auto selection and roll back together', () => {
+	const env = helperHarness();
+	const local = { ...policy(), zapret_enabled: '1', zapret_repeats: '3' };
+	env.setPolicy(local);
+	env.begin(withHysteria(false));
+	assert.equal(env.run('prepare').ok, true);
+	assert.equal(env.activate().ok, true);
+	env.commit();
+	const previous = env.storage.get('/etc/autovpn/runtime/current.json');
+	const plan = JSON.parse(env.storage.get('/etc/autovpn/runtime/zapret.json'));
+	assert.equal(plan.repeats, 3);
+	assert.deepEqual(plan.flows.map(f => f.profile), ['vless-reality', 'hysteria2']);
+	assert.equal(env.run('select-profile', 'hysteria2').ok, true);
+	assert.equal(env.run('commit-profile', 'hysteria2').ok, true);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json')).policy.zapret.repeats, 3);
+	env.run('select-profile', 'vless-reality'); env.run('commit-profile', 'vless-reality');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), previous);
+	env.setPolicy({ ...local, zapret_repeats: '1' });
+	env.begin(withHysteria(false)); env.run('prepare'); env.activate();
+	assert.equal(env.run('rollback').ok, true);
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), previous);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/zapret.json')).repeats, 3);
 });
 
 test('helper refuses foreign router and failed backup without replacing the current bundle', () => {
@@ -555,10 +579,18 @@ test('shell runtime checks candidate, closes guard before restart, opens only af
 	const at = text => events.findIndex(event => event.join(' ').includes(text));
 	assert.ok(at('sing-box check') < at('guard-closed.nft'));
 	assert.ok(at('guard-closed.nft') < at('service stop'));
+	assert.ok(at('zapret-helper.uc up') < at('service start'));
 	assert.ok(at('service start') < at('curl --disable'));
 	assert.ok(at('curl --disable') < at('guard-open.nft'));
 	assert.equal(events.filter(event => event[0] === 'curl').length, 2);
 	assert.ok(events.some(event => event.join(' ').includes('priority 20192 iif br-avpn unreachable')));
+});
+
+test('zapret failure prevents activation and cannot open or select a different VPN', t => {
+	const env = fixture(t, 'zapret-failed');
+	assert.equal(env.run('activate').status, 1);
+	const events = env.events().map(e => e.join(' '));
+	assert.equal(events.some(e => /service start|guard-open|select-profile/.test(e)), false);
 });
 test('maintenance gates block every runtime opening path including dangling symlinks', t => {
 	for (const gate of ['maintenance.lock', 'update.lock']) {
@@ -581,14 +613,15 @@ test('runtime refuses to activate while SSID transaction needs confirmation', t 
 	assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
 });
 
-test('failed HTTPS probe does not open forwarding; fail-closed does not consult journal/helper', t => {
+test('failed HTTPS probe does not open forwarding; fail-closed does not consult runtime journal', t => {
 	const env = fixture(t, 'probe-failed');
 	assert.equal(env.run('activate').status, 0);
 	assert.equal(env.run('verify').status, 1);
 	assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
 	const before = env.events().length;
 	assert.equal(env.run('fail-closed').status, 0);
-	assert.equal(env.events().slice(before).some(event => event[0] === 'ucode'), false);
+	assert.equal(env.events().slice(before).some(event => event[0] === 'ucode' && !event[1].endsWith('/zapret-helper.uc')), false);
+	assert.ok(env.events().slice(before).some(event => event[1]?.endsWith('/zapret-helper.uc') && event[2] === 'down'));
 });
 
 test('foreign nft ownership and route priority collisions are refused without flushing', t => {

@@ -298,6 +298,7 @@ function summary(config, state) {
 		runtime_running: runtime.ok === true,
 		runtime_error: runtime.ok === true ? null : runtime.code,
 		runtime_profile: runtime.ok === true ? safeActiveProfile(runtime.active_profile) : null,
+		runtime_zapret: runtime.ok === true && runtime.capabilities?.zapret === true,
 		router_id: config.router_id,
 		phase: state.phase,
 		sequence: state.sequence,

@@ -35,7 +35,7 @@ function awgAvailable() {
 function policy() {
 	let uci = cursor();
 	uci.load('autovpn');
-	return {
+	let result = {
 		selection: uci.get('autovpn', 'runtime', 'selection') || 'auto',
 		wan_device: uci.get('autovpn', 'runtime', 'wan_device') || '',
 		dns_server: uci.get('autovpn', 'runtime', 'dns_server') || '1.1.1.1',
@@ -46,6 +46,18 @@ function policy() {
 		/* Optional package: never make VLESS/Hysteria depend on it. */
 		awg_available: awgAvailable(),
 	};
+	let enabled = uci.get('autovpn', 'runtime', 'zapret_enabled');
+	if (enabled != null && enabled != '0' && enabled != '1') return {};
+	if (enabled == '1') {
+		let repeats = uci.get('autovpn', 'runtime', 'zapret_repeats') || '2';
+		result.zapret = {
+			vless: uci.get('autovpn', 'runtime', 'zapret_vless') || 'split',
+			hysteria2: uci.get('autovpn', 'runtime', 'zapret_hysteria2') || 'fake',
+			amneziawg: uci.get('autovpn', 'runtime', 'zapret_amneziawg') || 'off',
+			repeats: match(repeats, /^[1-6]$/) != null ? int(repeats) : 0,
+		};
+	}
+	return result;
 }
 function fixedProfile(value) {
 	if (type(value) == 'object' && index(['vless-reality', 'hysteria2', 'amneziawg'], value.profile) >= 0)
@@ -120,6 +132,7 @@ function run() {
 			return { ok: false, code: 'selected_vpn_unavailable' };
 		if (!writePrivate(ROOT + '/candidate.json', fallback.value.config) ||
 			!writePrivate(ROOT + '/awg.json', null) ||
+			!writePrivate(ROOT + '/zapret.json', fallback.value.zapret) ||
 			!writePrivate(ROOT + '/' + file + '.json', fallback.value))
 			return { ok: false, code: 'runtime_write_failed' };
 		return { ok: true, active_profile: fallback.value.profile, capabilities: fallback.value.capabilities };
@@ -162,6 +175,7 @@ function run() {
 		if (!selected.ok) return selected;
 		if (!writePrivate(ROOT + '/failover.json', selected.value) ||
 			!writePrivate(ROOT + '/candidate.json', selected.value.config) ||
+			!writePrivate(ROOT + '/zapret.json', selected.value.zapret) ||
 			!writePrivate(ROOT + '/awg.json', selected.value.awg))
 			return { ok: false, code: 'runtime_write_failed' };
 		return { ok: true, active_profile: selected.value.profile, capabilities: selected.value.capabilities };
@@ -213,6 +227,8 @@ function run() {
 			return { ok: false, code: 'runtime_write_failed' };
 		/* This holds private keys and is only ever consumed by awg-apply. */
 		if (!writePrivate(ROOT + '/awg.json', value.awg))
+			return { ok: false, code: 'runtime_write_failed' };
+		if (!writePrivate(ROOT + '/zapret.json', value.zapret))
 			return { ok: false, code: 'runtime_write_failed' };
 	}
 	return { ok: true, active_profile: value.profile, capabilities: value.capabilities };

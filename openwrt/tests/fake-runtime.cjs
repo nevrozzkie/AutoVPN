@@ -10,6 +10,9 @@ fs.appendFileSync(path.join(directory, 'events'), JSON.stringify([name, ...args]
 const command = args.join(' ');
 if (name === 'ip' && command === '-4 route replace default dev avpn0 table 20191' && scenario === 'route-failed') process.exit(1);
 if (name === 'ucode') {
+	if (args[0].endsWith('/zapret-helper.uc')) {
+		process.exit(scenario === 'zapret-failed' && args[1] !== 'down' ? 1 : 0);
+	}
 	if (args[1] === 'network-gate') process.exit(scenario === 'networks-pending' ? 1 : 0);
 	if (args[0].endsWith('/awg-helper.uc') && ['up', 'check'].includes(args[1]) && ['optional-awg-failed', 'hard-awg-failed'].includes(scenario)) process.exit(1);
 	if (args[1] === 'disable-awg') fs.writeFileSync(path.join(directory, 'runtime/awg.json'), 'null');
