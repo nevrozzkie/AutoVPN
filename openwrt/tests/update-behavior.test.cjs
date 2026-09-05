@@ -13,7 +13,11 @@ function fixture(t, options = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autovpn-update-test-'));
 	t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
 	const bin = path.join(dir, 'bin'), root = path.join(dir, 'autovpn'), assets = path.join(dir, 'assets');
-	for (const directory of [bin, root, assets, path.join(root, 'state')]) fs.mkdirSync(directory);
+	const etcApk = path.join(dir, 'etc-apk'), libApk = path.join(dir, 'lib-apk');
+	for (const directory of [bin, root, assets, etcApk, libApk, path.join(root, 'state')]) fs.mkdirSync(directory);
+	if (!options.noArchFile) {
+		fs.writeFileSync(path.join(options.libArchFile ? libApk : etcApk, 'arch'), options.archFile || 'aarch64_cortex-a53\n');
+	}
 	for (const name of ['apk', 'curl', 'jsonfilter', 'ubus', 'uname', 'df', 'lock', 'sync', 'uci', 'ucode', 'runtime']) {
 		fs.copyFileSync(path.join(__dirname, 'fake-update.cjs'), path.join(bin, name));
 		fs.chmodSync(path.join(bin, name), 0o755);
@@ -35,6 +39,7 @@ function fixture(t, options = {}) {
 	fs.writeFileSync(uptime, '100.00 20.00\n');
 	const rewritten = source.replaceAll('/etc/autovpn', root)
 		.replaceAll('/var/lock', path.join(dir, 'locks')).replaceAll('/proc/uptime', uptime)
+		.replaceAll('/etc/apk/arch', path.join(etcApk, 'arch')).replaceAll('/lib/apk/arch', path.join(libApk, 'arch'))
 		.replaceAll('/usr/bin/ucode', path.join(bin, 'ucode'))
 		.replaceAll('/usr/libexec/autovpn/runtime-adapter', path.join(bin, 'runtime'));
 	const helper = path.join(dir, 'helper');
@@ -90,6 +95,26 @@ test('check-worker accepts APK v3 noarch metadata for the controller', t => {
 	const id = f.check();
 	assert.match(id, /^100-[0-9a-f]{12}$/);
 	assert.equal(f.status().phase, 'checked');
+});
+
+test('check-worker uses configured package architecture, including the /lib fallback', t => {
+	for (const options of [{}, {libArchFile: true}]) {
+		const f = fixture(t, options);
+		f.check();
+		assert.equal(f.calls().some(call => call.name === 'apk' && call.args.includes('--print-arch')), false);
+	}
+});
+
+test('missing or kernel-mismatched configured architecture is rejected before downloads', t => {
+	for (const [options, env] of [
+		[{noArchFile: true}, {}],
+		[{}, {FAKE_KERNEL_ARCH: 'aarch64'}],
+	]) {
+		const f = fixture(t, options);
+		const result = f.run(['check-worker', 'v0.8.0'], env);
+		assert.notEqual(result.status, 0);
+		assert.equal(f.calls().some(call => call.name === 'curl'), false);
+	}
 });
 
 test('unsafe dependency plan is rejected by worker before package commit', t => {

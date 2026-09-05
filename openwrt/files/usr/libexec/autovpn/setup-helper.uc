@@ -12,7 +12,7 @@ const processRunner = require('autovpn.process');
 
 const ROOT = '/etc/autovpn';
 const REQUEST_LIMIT = 4096;
-const setupPolicy = require('autovpn.setup-policy');
+const setupPolicy = require('autovpn.setup_policy');
 
 function validRouterId(value) {
 	return type(value) == 'string' && match(value, /^[A-Za-z0-9_-]{8,64}$/) != null;

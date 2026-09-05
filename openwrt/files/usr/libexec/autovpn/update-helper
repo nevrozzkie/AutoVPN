@@ -95,9 +95,16 @@ board() {
 	ubus call system board >"$WORK/board.json" || return 1
 	release=$(field "$WORK/board.json" '@.release.version') || return 1
 	target=$(field "$WORK/board.json" '@.release.target') || return 1
-	architecture=$(apk --print-arch) || return 1
+	# APK's --print-arch is its generic build arch (for example aarch64), not
+	# OpenWrt's configured package ABI (aarch64_cortex-a53 on this target).
+	# Mirror the first-install guard so update manifests select the same ABI.
+	arch_file=/etc/apk/arch
+	[ -f "$arch_file" ] || arch_file=/lib/apk/arch
+	architecture=$(awk 'NF { if (NF != 1 || ++n != 1) exit 1; value=$1 } END { if (n != 1) exit 1; print value }' "$arch_file") || return 1
 	kernel_release=$(uname -r) || return 1
-	apk query --installed --match name --fields name,version --format json kernel >"$WORK/kernel.json" || return 1
+	apk query --installed --match name --fields name,version,arch --format json kernel >"$WORK/kernel.json" || return 1
+	[ "$(field "$WORK/kernel.json" '@[0].name')" = kernel ] || return 1
+	[ "$(field "$WORK/kernel.json" '@[0].arch')" = "$architecture" ] || return 1
 	kernel_package=$(field "$WORK/kernel.json" '@[0].version') || return 1
 	printf '%s\n' "$release" | grep -Eq '^25\.12\.[0-9]+$' || return 1
 	printf '%s\n' "$target" | grep -Eq '^[a-z0-9_]+/[a-z0-9_-]+$' || return 1

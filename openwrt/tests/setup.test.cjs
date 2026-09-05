@@ -10,7 +10,7 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const { loadUcodeModule } = require('./ucode-loader.cjs');
-const policy = loadUcodeModule(path.join(root, 'files/usr/share/ucode/autovpn/setup-policy.uc'));
+const policy = loadUcodeModule(path.join(root, 'files/usr/share/ucode/autovpn/setup_policy.uc'));
 
 function helperFixture(overrides = {}) {
 	const files = new Map(Object.entries(overrides.files || {}));
@@ -36,7 +36,7 @@ function helperFixture(overrides = {}) {
 	};
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/setup-helper.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import .*?;\s*$/gm, '')
-		.replace("const setupPolicy = require('autovpn.setup-policy');", 'const setupPolicy = injectedPolicy;')
+		.replace("const setupPolicy = require('autovpn.setup_policy');", 'const setupPolicy = injectedPolicy;')
 		.replace("const processRunner = require('autovpn.process');", 'const processRunner = injectedProcess;')
 		.replace(/let action = ARGV\[0\];[\s\S]*$/, 'return { configure, activate, resume, saveResult };');
 	const api = new Function('access', 'chmod', 'fsError', 'lstat', 'mkdir', 'readfile', 'rename', 'stat', 'unlink', 'writefile', 'cursor',

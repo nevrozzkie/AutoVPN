@@ -5,15 +5,16 @@
 
 ## Что уже готово и что ещё нельзя считать проверенным
 
-Controller 0.14.0, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
+Controller 0.14.1, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`. Требуемый пакет kernel:
 `6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1`.
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Опубликован [предварительный установочный релиз r3](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r3).
-Он исправляет определение APK-архитектуры на штатном OpenWrt и сам устанавливает
-`coreutils-stty`, необходимый для скрытого ввода Wi-Fi-пароля. APK совпадают с r2.
+Доступен [предварительный установочный релиз 0.14.1](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.1-openwrt-25.12.5-r1).
+Он исправляет загрузку ucode-модулей и синтаксис сетевого helper, а также
+определение APK-архитектуры при обновлении из LuCI. AmneziaWG APK не изменены.
+Установщик по-прежнему устанавливает `coreutils-stty` для скрытого ввода пароля.
 Команда ниже загружает готовый установщик из него. Нельзя просто
 запустить исходный `openwrt/scripts/install.sh`: это шаблон, который откажется
 работать без закреплённых manifest, хеша и публичного ключа. Не подставляйте
@@ -57,7 +58,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.0-openwrt-25.12.5-r3/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.1-openwrt-25.12.5-r1/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -68,7 +69,7 @@ df -h /overlay /tmp
 скачивания возможна уже после установки APK, до изменения Wi-Fi. В таком случае
 сохраните вывод ошибки; не отключайте проверку подписей и не переустанавливайте прошивку.
 
-Для r3 требуется минимум **38 МиБ свободного `/overlay` и 64 МиБ `/tmp`**.
+Для чистой установки требуется минимум **38 МиБ свободного `/overlay` и 64 МиБ `/tmp`**.
 Порог рассчитан по размерам файлов и зависимостей с запасом, а не по результату
 установки на устройство. [Проверки релиза и бюджет](installer-release-r2.md).
 Дополнительный `coreutils-stty` занимает 73 925 байт файлов и 34 538 байт APK
@@ -101,6 +102,27 @@ band steering не устанавливается. Это не гарантия 
 SSH, проверьте подключение к `x` другим устройством и подтвердите результат
 в терминале. Без подтверждения применяется откат сетевых изменений. VPN-сети
 до готовности соответствующего подключения закрыты и не подменяются обычным WAN.
+
+### Если 0.14.0 установил пакеты, но остановился до настройки Wi-Fi
+
+Не запускайте полную установку заново и не удаляйте trust/journal-файлы.
+Для ошибки `No module named 'autovpn.network-transaction'` предусмотрен
+отдельный ремонт **ещё не настроенного** контроллера:
+
+```sh
+(autovpn_repair="$(mktemp /tmp/autovpn-repair-bootstrap.XXXXXX)" &&
+  trap 'rm -f "$autovpn_repair"' EXIT &&
+  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.1-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
+  sh "$autovpn_repair")
+```
+
+Скрипт проверяет существующий ключ доверия, закреплённые SHA-256 и подпись APK,
+заменяет только controller и затем запускает установленный мастер Wi-Fi.
+Ядро, AmneziaWG, WAN и настройки сайта не переустанавливаются. Существующие
+настройки сохраняются; мастер Wi-Fi отдельно запросит имя, WPA2-пароль и
+подтверждение сетевых изменений. Для уже привязанного к сайту роутера или
+незавершённой сетевой транзакции этот узкий repair откажется работать:
+сохраните ошибку, не сбрасывайте конфигурацию вручную.
 
 ## 3. Привязка сайта в LuCI
 

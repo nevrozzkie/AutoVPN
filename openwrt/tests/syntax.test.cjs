@@ -18,7 +18,7 @@ const sources = [
 	'files/usr/libexec/autovpn/ru-db-helper.uc',
 	'files/usr/libexec/autovpn/zapret-helper.uc',
 	'files/usr/libexec/autovpn/direct-zapret-helper.uc',
-	'files/usr/share/ucode/autovpn/direct-zapret.uc',
+	'files/usr/share/ucode/autovpn/direct_zapret.uc',
 	'files/usr/share/ucode/autovpn/zapret.uc',
 	'files/usr/share/ucode/autovpn/orchestration.uc',
 	'files/usr/share/ucode/autovpn/http.uc',
@@ -31,8 +31,8 @@ const sources = [
 	'files/usr/libexec/autovpn/wifi-bootstrap.uc',
 	'files/usr/libexec/autovpn/maintenance-helper.uc',
 	'files/usr/share/ucode/autovpn/networks.uc',
-	'files/usr/share/ucode/autovpn/network-transaction.uc',
-	'files/usr/share/ucode/autovpn/setup-policy.uc',
+	'files/usr/share/ucode/autovpn/network_transaction.uc',
+	'files/usr/share/ucode/autovpn/setup_policy.uc',
 	'files/usr/libexec/autovpn/http-helper.uc'
 ];
 
@@ -43,6 +43,41 @@ test('ucode sources stay inside the host-parseable ECMAScript subset', () => {
 			.replace(/^import\s+.*?;\s*$/gm, '');
 		assert.doesNotThrow(() => new Function(source), relative);
 	}
+});
+
+test('raw ucode requires use loadable module names and reference packaged files', () => {
+	const moduleNamePattern = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/;
+	const requirePattern = /require\s*\(\s*(['"])(autovpn\.[^'"]+)\1\s*\)/g;
+	const pending = [
+		'files/usr/libexec/autovpn',
+		'files/usr/share/ucode',
+		'files/usr/share/rpcd/ucode'
+	];
+	let requireCount = 0;
+
+	assert.equal(moduleNamePattern.test('autovpn.invalid-name'), false);
+	while (pending.length > 0) {
+		const relative = pending.pop();
+		const absolute = path.join(root, relative);
+		const stat = fs.statSync(absolute);
+		if (stat.isDirectory()) {
+			for (const entry of fs.readdirSync(absolute)) pending.push(path.join(relative, entry));
+			continue;
+		}
+		const source = fs.readFileSync(absolute, 'utf8');
+		assert.doesNotMatch(source, /\bthrow\b/, relative);
+		for (const match of source.matchAll(requirePattern)) {
+			const moduleName = match[2];
+			requireCount++;
+			assert.match(moduleName, moduleNamePattern, `${relative}: ${moduleName}`);
+			assert.equal(
+				fs.existsSync(path.join(root, 'files/usr/share/ucode', ...moduleName.split('.')) + '.uc'),
+				true,
+				`${relative}: missing ${moduleName}`
+			);
+		}
+	}
+	assert.ok(requireCount > 0, 'expected at least one autovpn module require');
 });
 
 test('controller uses bounded timeout argv helpers without shell interpolation', () => {

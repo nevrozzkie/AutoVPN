@@ -6,7 +6,7 @@ const test = require('node:test');
 const { loadUcodeModule } = require('./ucode-loader.cjs');
 
 const direct = loadUcodeModule(path.join(__dirname,
-	'../files/usr/share/ucode/autovpn/direct-zapret.uc'));
+	'../files/usr/share/ucode/autovpn/direct_zapret.uc'));
 
 test('direct zapret plan has one fixed typed WAN input and safe defaults', () => {
 	assert.deepEqual(direct.plan('pppoe-wan', true), { version: 1, wan_device: 'pppoe-wan' });

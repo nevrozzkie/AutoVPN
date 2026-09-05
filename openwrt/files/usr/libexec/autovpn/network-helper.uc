@@ -5,7 +5,7 @@ import { readfile, writefile, chmod, rename, error } from 'fs';
 import { cursor } from 'uci';
 
 const planner = require('autovpn.networks');
-const transaction = require('autovpn.network-transaction');
+const transaction = require('autovpn.network_transaction');
 const processRunner = require('autovpn.process');
 const ROOT = '/etc/autovpn/networks';
 const CONFIGS = planner.configs;
@@ -105,7 +105,7 @@ const io = {
 	now: function() { return time(); },
 	uptime: function() {
 		let raw = readfile('/proc/uptime', 128);
-		if (type(raw) != 'string' || match(raw, /^[0-9]+\.[0-9]+ /) == null) throw 'uptime_unavailable';
+		if (type(raw) != 'string' || match(raw, /^[0-9]+\.[0-9]+ /) == null) die('uptime_unavailable');
 		return int(split(raw, ' ')[0]);
 	},
 	load: function() {
