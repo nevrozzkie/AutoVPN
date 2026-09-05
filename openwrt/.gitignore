@@ -1,0 +1,11 @@
+# OpenWrt SDK/build products, not the package source under files/.
+/bin/
+/build_dir/
+/staging_dir/
+/dl/
+/.tmp/
+/release/
+/releases/
+*.apk
+# Never commit release signing private keys.
+*.key

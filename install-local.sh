@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+APP_DIR_EXPLICIT="${APP_DIR:+1}"
 APP_DIR="${APP_DIR:-$HOME/AutoVPN}"
+DATA_DIR="${DATA_DIR:-}"
 DEFAULT_REPO_URL="https://github.com/nevrozzkie/AutoVPN.git"
 REPO_URL="${AUTOVPN_REPO_URL:-$DEFAULT_REPO_URL}"
 APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-8000}"
+DATABASE_PATH=""
+BACKUP_DIR=""
+LEGACY_DATABASE=""
+SOURCE_DIR=""
+STAGING_DIR=""
 
 usage() {
   cat <<EOF
@@ -45,6 +52,7 @@ parse_args() {
       --app-dir)
         require_arg "$@"
         APP_DIR="$2"
+        APP_DIR_EXPLICIT=1
         shift 2
         ;;
       --eu-host|--eu-ip)
@@ -226,24 +234,88 @@ require_command() {
   fi
 }
 
+cleanup_staging() {
+  if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+    rm -rf -- "$STAGING_DIR"
+  fi
+}
+
 prepare_source() {
   if [ -f "pyproject.toml" ] && [ -d "app" ]; then
-    APP_DIR="$(pwd)"
-    return
+    SOURCE_DIR="$(pwd)"
+    if [ -z "${APP_DIR_EXPLICIT:-}" ]; then
+      APP_DIR="$SOURCE_DIR"
+      LEGACY_DATABASE="$APP_DIR/data/autovpn.sqlite3"
+    fi
+  else
+    echo "[autovpn] preparing source from $REPO_URL"
+    STAGING_DIR="$(mktemp -d)"
+    SOURCE_DIR="$STAGING_DIR/source"
+    git clone "$REPO_URL" "$SOURCE_DIR"
   fi
 
-  if [ -d "$APP_DIR/.git" ]; then
-    echo "[autovpn] updating $APP_DIR"
-    git -C "$APP_DIR" pull --ff-only
-  else
-    echo "[autovpn] cloning $REPO_URL to $APP_DIR"
-    git clone "$REPO_URL" "$APP_DIR"
+  if [ ! -f "$SOURCE_DIR/pyproject.toml" ] || [ ! -d "$SOURCE_DIR/app" ] || \
+      [ ! -f "$SOURCE_DIR/tools/prepare_data.py" ]; then
+    echo "[autovpn] prepared source failed preflight" >&2
+    exit 1
   fi
+}
+
+prepare_persistent_data() {
+  echo "[autovpn] backing up and preparing persistent data"
+  install -d -m 0700 "$DATA_DIR" "$BACKUP_DIR"
+  python3 "$SOURCE_DIR/tools/prepare_data.py" \
+    --database "$DATABASE_PATH" \
+    --backup-dir "$BACKUP_DIR" \
+    --legacy-database "$LEGACY_DATABASE"
+}
+
+deploy_source() {
+  if [ "$SOURCE_DIR" = "$APP_DIR" ]; then
+    return
+  fi
+  echo "[autovpn] updating application source in $APP_DIR"
+  mkdir -p "$APP_DIR"
+  rsync -a --delete \
+    --exclude ".git" \
+    --exclude ".venv" \
+    --exclude "__pycache__" \
+    --exclude "data" \
+    --exclude ".env" \
+    "$SOURCE_DIR/" "$APP_DIR/"
+}
+
+preserve_existing_env() {
+  local env_backup env_tmp line saw_database
+  env_backup="$BACKUP_DIR/autovpn.env.pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)"
+  install -m 0600 "$APP_DIR/.env" "$env_backup"
+  env_tmp="$(mktemp "$APP_DIR/.autovpn.env.XXXXXX")"
+  saw_database=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      DATABASE_PATH=*)
+        env_line DATABASE_PATH "$DATABASE_PATH"
+        saw_database=1
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$APP_DIR/.env" >"$env_tmp"
+  if [ "$saw_database" -eq 0 ]; then
+    env_line DATABASE_PATH "$DATABASE_PATH" >>"$env_tmp"
+  fi
+  install -m 0600 "$env_tmp" "$APP_DIR/.env"
+  rm -f "$env_tmp"
+  export AUTOVPN_INITIAL_CURRENT_IP=""
+  echo "[autovpn] preserved existing environment; backup: $env_backup"
 }
 
 write_env_file() {
   echo
   echo "[autovpn] writing configuration. Open Setup in the browser to finish configuration."
+  if [ -f "$APP_DIR/.env" ]; then
+    preserve_existing_env
+    return
+  fi
   local admin_username admin_password current_ip
   local aeza_token aeza_service_id aeza_domain
   local eu_ssh_host eu_ssh_user eu_ssh_port eu_ssh_key_path eu_ssh_password
@@ -271,11 +343,10 @@ write_env_file() {
     eu_ssh_key_path=""
   fi
 
-  mkdir -p "$APP_DIR/data"
   {
     env_line APP_HOST "$APP_HOST"
     env_line APP_PORT "$APP_PORT"
-    env_line DATABASE_PATH "$APP_DIR/data/autovpn.sqlite3"
+    env_line DATABASE_PATH "$DATABASE_PATH"
     env_line ADMIN_USERNAME "$admin_username"
     # ADMIN_PASSWORD is intentionally NOT written here. It is stored as a
     # salted scrypt hash in the database by init_local_db().
@@ -293,6 +364,8 @@ write_env_file() {
     env_line EU_SSH_KEY_PATH "$eu_ssh_key_path"
     env_line EU_SSH_PASSWORD "$eu_ssh_password"
     env_line SSH_CONNECT_TIMEOUT_SECONDS "15"
+    env_line VPN_DEPLOY_TIMEOUT_SECONDS "1800"
+    env_line VPN_LEASE_HEARTBEAT_SECONDS "30"
     echo
     env_line VLESS_PORT "443"
     env_line VLESS_REALITY_TARGET "ok.ru:443"
@@ -372,40 +445,53 @@ init_local_db() {
   done < "$APP_DIR/.env"
   "$APP_DIR/.venv/bin/python" - <<'PY'
 import os
-from app.db import init_db, set_setting
+from app.db import get_setting, init_db, set_setting
 from app.security import hash_password
 
 init_db()
 current_ip = os.getenv("AUTOVPN_INITIAL_CURRENT_IP", "")
 if current_ip:
     set_setting("current_ip", current_ip)
-set_setting("config.admin_username", os.environ.get("ADMIN_USERNAME") or "admin")
+if not get_setting("config.admin_username"):
+    set_setting("config.admin_username", os.environ.get("ADMIN_USERNAME") or "admin")
 admin_password = os.environ.get("ADMIN_PASSWORD", "")
-if admin_password:
+if admin_password and not get_setting("config.admin_password"):
     set_setting("config.admin_password", hash_password(admin_password))
 PY
+  chmod 0700 "$DATA_DIR" "$BACKUP_DIR"
+  chmod 0600 "$DATABASE_PATH"
 }
 
 main() {
+  trap cleanup_staging EXIT
   parse_args "$@"
+  DATA_DIR="${DATA_DIR:-$HOME/.local/share/autovpn}"
+  DATABASE_PATH="$DATA_DIR/autovpn.sqlite3"
+  BACKUP_DIR="$DATA_DIR/backups"
+  LEGACY_DATABASE="$APP_DIR/data/autovpn.sqlite3"
   echo "[autovpn] local installer"
   require_command git "Install git first."
   require_command python3 "Install Python 3.12+ first."
+  require_command rsync "Install rsync first."
   collect_admin_credentials
   prepare_source
+  prepare_persistent_data
+  deploy_source
   cd "$APP_DIR"
   write_env_file
 
   echo "[autovpn] creating virtualenv"
   python3 -m venv "$APP_DIR/.venv"
   "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
-  "$APP_DIR/.venv/bin/python" -m pip install -e "$APP_DIR"
+  "$APP_DIR/.venv/bin/python" -m pip install \
+    -c "$APP_DIR/constraints-runtime.txt" -e "$APP_DIR"
   init_local_db
   write_run_script
 
   echo
   echo "AutoVPN local install is ready."
   echo "App dir: $APP_DIR"
+  echo "Data dir: $DATA_DIR"
   echo "Config: $APP_DIR/.env"
   echo "Run: $APP_DIR/run-local.sh"
   echo "Open: http://$APP_HOST:$APP_PORT/admin"

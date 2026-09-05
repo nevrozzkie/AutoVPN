@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Токен роутера {{ router_label or router_id }}</h1>
+
+<section class="panel warning">
+  <strong>Скопируйте токен сейчас.</strong>
+  После ухода с этой страницы AutoVPN не сможет показать его повторно. Новый выпуск
+  не отключает другие credentials этого роутера; замена токена делает старое значение
+  недействительным немедленно.
+</section>
+
+<div class="label">Router ID</div>
+<p><code>{{ router_id }}</code></p>
+<div class="label">Credential ID</div>
+<p><code>{{ credential_id }}</code></p>
+<div class="label">Bearer token</div>
+<pre id="router-token">{{ token }}</pre>
+
+<div class="label">Запись токена на OpenWrt через скрытый ввод, без токена в argv и shell history</div>
+<pre>ssh root@router autovpnctl set-router-id '{{ router_id }}'
+read -rs AUTOVPN_ROUTER_TOKEN
+printf '\n'
+printf '%s\n' "$AUTOVPN_ROUTER_TOKEN" | ssh root@router autovpnctl set-credential
+unset AUTOVPN_ROUTER_TOKEN</pre>
+
+<p><a class="button" href="/admin/routers">Я сохранил токен</a></p>
+{% endblock %}

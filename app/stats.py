@@ -4,8 +4,21 @@ import json
 import re
 from typing import Any
 
-from app.db import get_client_stats, list_clients, now_iso, set_setting, upsert_client_stats
+from app.db import (
+    get_client_stats,
+    list_clients,
+    list_router_amnezia_public_keys,
+    now_iso,
+    set_setting,
+    upsert_client_stats,
+)
 from app.eu_install import resolve_eu_host, run_remote_command, xray_client_email
+from app.runtime_config import (
+    aeza_token,
+    eu_ssh_password,
+    server_command_timeout_seconds,
+)
+from app.secret_sanitization import sanitize_error
 
 
 XRAY_STATS_COMMAND = (
@@ -65,6 +78,22 @@ def format_bytes(value: int | None) -> str:
     return f"{size:.1f} TB"
 
 
+def _aggregate_amnezia_stats(
+    public_keys: list[str], parsed: dict[str, dict[str, int]]
+) -> dict[str, int]:
+    values = {"rx": 0, "tx": 0, "latest_handshake": 0}
+    for public_key in dict.fromkeys(public_keys):
+        peer = parsed.get(public_key)
+        if peer is None:
+            continue
+        values["rx"] += peer["rx"]
+        values["tx"] += peer["tx"]
+        values["latest_handshake"] = max(
+            values["latest_handshake"], peer["latest_handshake"]
+        )
+    return values
+
+
 async def refresh_client_stats() -> dict[str, Any]:
     host = resolve_eu_host()
     if not host:
@@ -72,22 +101,44 @@ async def refresh_client_stats() -> dict[str, Any]:
 
     errors: list[str] = []
 
+    command_timeout = float(server_command_timeout_seconds())
     xray_parsed: dict[str, dict[str, int]] = {}
-    xray_exit_code, xray_output = await run_remote_command(host, XRAY_STATS_COMMAND)
+    try:
+        xray_exit_code, xray_output = await run_remote_command(
+            host, XRAY_STATS_COMMAND, timeout=command_timeout
+        )
+    except Exception as exc:
+        xray_exit_code, xray_output = -1, ""
+        errors.append(
+            f"Xray stats failed: {sanitize_error(exc, aeza_token(), eu_ssh_password())}"
+        )
     if xray_exit_code == 0:
         xray_parsed = parse_xray_stats_output(xray_output)
-    else:
+    elif xray_output:
         errors.append(
-            f"Xray stats failed with exit code {xray_exit_code}: {xray_output[-2000:]}"
+            "Xray stats failed with exit code "
+            f"{xray_exit_code}: "
+            f"{sanitize_error(xray_output[-2000:], aeza_token(), eu_ssh_password())}"
         )
 
     amnezia_parsed: dict[str, dict[str, int]] = {}
-    amnezia_exit_code, amnezia_output = await run_remote_command(host, AMNEZIA_STATS_COMMAND)
+    try:
+        amnezia_exit_code, amnezia_output = await run_remote_command(
+            host, AMNEZIA_STATS_COMMAND, timeout=command_timeout
+        )
+    except Exception as exc:
+        amnezia_exit_code, amnezia_output = -1, ""
+        errors.append(
+            "AmneziaWG stats failed: "
+            f"{sanitize_error(exc, aeza_token(), eu_ssh_password())}"
+        )
     if amnezia_exit_code == 0:
         amnezia_parsed = parse_amnezia_dump_output(amnezia_output)
-    else:
+    elif amnezia_output:
         errors.append(
-            f"AmneziaWG stats failed with exit code {amnezia_exit_code}: {amnezia_output[-2000:]}"
+            "AmneziaWG stats failed with exit code "
+            f"{amnezia_exit_code}: "
+            f"{sanitize_error(amnezia_output[-2000:], aeza_token(), eu_ssh_password())}"
         )
 
     if errors and xray_exit_code != 0 and amnezia_exit_code != 0:
@@ -95,36 +146,53 @@ async def refresh_client_stats() -> dict[str, Any]:
 
     refreshed = 0
     seen_at = now_iso()
+    router_keys_by_client: dict[int, list[str]] = {}
+    for peer in list_router_amnezia_public_keys():
+        router_keys_by_client.setdefault(int(peer["client_id"]), []).append(
+            str(peer["public_key"])
+        )
     for client in list_clients():
         email = xray_client_email(client)
-        xray_values = xray_parsed.get(email, {"uplink": 0, "downlink": 0})
-        amnezia_values = amnezia_parsed.get(
-            client.get("amnezia_public_key") or "",
-            {"rx": 0, "tx": 0, "latest_handshake": 0},
-        )
         previous = get_client_stats(int(client["id"]))
+        previous_xray = {
+            "uplink": int(previous["vless_uplink"]) if previous else 0,
+            "downlink": int(previous["vless_downlink"]) if previous else 0,
+        }
+        previous_amnezia = {
+            "rx": int(previous["amnezia_rx"]) if previous else 0,
+            "tx": int(previous["amnezia_tx"]) if previous else 0,
+            "latest_handshake": int(previous["amnezia_latest_handshake"])
+            if previous
+            else 0,
+        }
+        xray_values = (
+            xray_parsed.get(email, {"uplink": 0, "downlink": 0})
+            if xray_exit_code == 0
+            else previous_xray
+        )
+        amnezia_keys = [client.get("amnezia_public_key") or ""]
+        amnezia_keys.extend(router_keys_by_client.get(int(client["id"]), []))
+        amnezia_values = (
+            _aggregate_amnezia_stats(amnezia_keys, amnezia_parsed)
+            if amnezia_exit_code == 0
+            else previous_amnezia
+        )
         uplink = xray_values["uplink"]
         downlink = xray_values["downlink"]
         amnezia_rx = amnezia_values["rx"]
         amnezia_tx = amnezia_values["tx"]
         amnezia_latest_handshake = amnezia_values["latest_handshake"]
         last_seen_at = None
-        if previous is None:
-            if (
-                uplink > 0
-                or downlink > 0
-                or amnezia_rx > 0
-                or amnezia_tx > 0
-                or amnezia_latest_handshake > 0
-            ):
-                last_seen_at = seen_at
-        elif (
-            uplink > previous["vless_uplink"]
-            or downlink > previous["vless_downlink"]
-            or amnezia_rx > previous["amnezia_rx"]
-            or amnezia_tx > previous["amnezia_tx"]
-            or amnezia_latest_handshake > previous["amnezia_latest_handshake"]
-        ):
+        xray_seen = xray_exit_code == 0 and (
+            uplink > previous_xray["uplink"]
+            or downlink > previous_xray["downlink"]
+        )
+        amnezia_seen = amnezia_exit_code == 0 and (
+            amnezia_rx > previous_amnezia["rx"]
+            or amnezia_tx > previous_amnezia["tx"]
+            or amnezia_latest_handshake > previous_amnezia["latest_handshake"]
+        )
+        if xray_seen or amnezia_seen:
             last_seen_at = seen_at
         upsert_client_stats(
             int(client["id"]),

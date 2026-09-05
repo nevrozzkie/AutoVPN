@@ -123,6 +123,50 @@ def ssh_connect_timeout_seconds() -> int:
     return config_int("ssh_connect_timeout_seconds", 15)
 
 
+def server_status_timeout_seconds() -> int:
+    return config_int("server_status_timeout_seconds", 15)
+
+
+def server_reboot_timeout_seconds() -> int:
+    return config_int("server_reboot_timeout_seconds", 300)
+
+
+def server_poll_interval_seconds() -> int:
+    return config_int("server_poll_interval_seconds", 5)
+
+
+def server_ssh_probe_timeout_seconds() -> int:
+    return config_int("server_ssh_probe_timeout_seconds", 5)
+
+
+def server_command_timeout_seconds() -> int:
+    return config_int("server_command_timeout_seconds", 30)
+
+
+def vpn_deploy_timeout_seconds() -> int:
+    return config_int("vpn_deploy_timeout_seconds", 1800)
+
+
+def vpn_lease_heartbeat_seconds() -> int:
+    return config_int("vpn_lease_heartbeat_seconds", 30)
+
+
+def transactional_vpn_apply_enabled() -> bool:
+    return config_bool(
+        "enable_transactional_vpn_apply", settings.enable_transactional_vpn_apply
+    )
+
+
+def safe_aeza_ip_rotation_enabled() -> bool:
+    return config_bool(
+        "enable_safe_aeza_ip_rotation", settings.enable_safe_aeza_ip_rotation
+    )
+
+
+def router_api_enabled() -> bool:
+    return config_bool("enable_router_api", settings.enable_router_api)
+
+
 def vless_port() -> int | None:
     return protocol_port("vless", settings.vless_port, True)
 

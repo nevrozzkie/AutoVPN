@@ -16,6 +16,13 @@ def _get_csv(name: str, default: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _get_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: str = os.getenv("DATABASE_PATH", "./data/autovpn.sqlite3")
@@ -39,6 +46,24 @@ class Settings:
     eu_ssh_key_path: str = os.getenv("EU_SSH_KEY_PATH", "")
     eu_ssh_password: str = os.getenv("EU_SSH_PASSWORD", "")
     ssh_connect_timeout_seconds: int = _get_int("SSH_CONNECT_TIMEOUT_SECONDS", 15)
+    server_status_timeout_seconds: int = _get_int("SERVER_STATUS_TIMEOUT_SECONDS", 15)
+    server_reboot_timeout_seconds: int = _get_int("SERVER_REBOOT_TIMEOUT_SECONDS", 300)
+    server_poll_interval_seconds: int = _get_int("SERVER_POLL_INTERVAL_SECONDS", 5)
+    server_ssh_probe_timeout_seconds: int = _get_int(
+        "SERVER_SSH_PROBE_TIMEOUT_SECONDS", 5
+    )
+    server_command_timeout_seconds: int = _get_int("SERVER_COMMAND_TIMEOUT_SECONDS", 30)
+    vpn_deploy_timeout_seconds: int = _get_int("VPN_DEPLOY_TIMEOUT_SECONDS", 1800)
+    vpn_lease_heartbeat_seconds: int = _get_int(
+        "VPN_LEASE_HEARTBEAT_SECONDS", 30
+    )
+    enable_transactional_vpn_apply: bool = _get_bool(
+        "ENABLE_TRANSACTIONAL_VPN_APPLY", True
+    )
+    enable_safe_aeza_ip_rotation: bool = _get_bool(
+        "ENABLE_SAFE_AEZA_IP_ROTATION", True
+    )
+    enable_router_api: bool = _get_bool("ENABLE_ROUTER_API", True)
 
     vless_port: int = _get_int("VLESS_PORT", 443)
     vless_reality_target: str = os.getenv("VLESS_REALITY_TARGET", "ok.ru:443")

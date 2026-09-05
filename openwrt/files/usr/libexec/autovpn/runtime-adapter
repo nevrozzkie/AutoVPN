@@ -1,0 +1,313 @@
+#!/bin/sh
+set -eu
+umask 077
+
+LANE_BIN=/usr/libexec/autovpn/runtime-lane
+DIRECT_BIN=/usr/libexec/autovpn/direct-zapret-helper.uc
+SHARE=/usr/share/autovpn
+JOURNAL="${2:-/etc/autovpn/state/journal.json}"
+TARGET="${3:-}"
+COLLECTION_FAILED=0
+SCRATCH="$(mktemp -d /tmp/autovpn-runtime-wrapper.XXXXXX)" || exit 1
+cleanup() {
+	rm -f "$SCRATCH/vpn.json" "$SCRATCH/vpn_zapret.json" \
+		"$SCRATCH/vpn-restore.json" "$SCRATCH/vpn_zapret-restore.json" \
+		"$SCRATCH/direct.json" "$SCRATCH/autovpn_direct_zapret.txt" \
+		"$SCRATCH/tables.txt" "$SCRATCH/autovpn.txt" \
+		"$SCRATCH/autovpn_vpn.txt" "$SCRATCH/autovpn_vpn_zapret.txt"
+	rmdir "$SCRATCH"
+}
+trap cleanup EXIT
+
+error() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
+field() { jsonfilter -i "$1" -e "$2" 2>/dev/null || true; }
+boolean() { [ "$(field "$1" "$2")" = true ] && printf true || printf false; }
+profile() {
+	value="$(field "$1" '@.active_profile')"
+	case "$value" in vless-reality|hysteria2|amneziawg) printf '"%s"' "$value" ;; *) printf null ;; esac
+}
+error_code() {
+	value="$(field "$1" '@.code')"
+	case "$value" in ''|*[!a-z0-9_]*) printf lane_failed ;; *) printf '%s' "$value" ;; esac
+}
+code_json() {
+	value="$(field "$1" '@.code')"
+	case "$value" in '') printf null ;; *[!a-z0-9_]*) printf '"lane_failed"' ;; *) printf '"%s"' "$value" ;; esac
+}
+direct_code_json() {
+	value="$(field "$1" '@.code')"
+	case "$value" in '') printf null ;; direct_zapret_unavailable|direct_invalid_response) printf '"%s"' "$value" ;; *) printf '"direct_zapret_unavailable"' ;; esac
+}
+capabilities() {
+	file=$1
+	printf '{"vless":%s,"hysteria2":%s,"amneziawg":%s,"zapret":%s,"policy_routing":%s}' \
+		"$(boolean "$file" '@.capabilities.vless')" \
+		"$(boolean "$file" '@.capabilities.hysteria2')" \
+		"$(boolean "$file" '@.capabilities.amneziawg')" \
+		"$(boolean "$file" '@.capabilities.zapret')" \
+		"$(boolean "$file" '@.capabilities.policy_routing')"
+}
+lane_capability() {
+	cap_file=$1
+	cap_name=$2
+	[ "$(field "$cap_file" '@.ok')" = true ] && \
+		[ "$(field "$cap_file" '@.empty')" != true ] && \
+		[ "$(field "$cap_file" "@.capabilities.$cap_name")" = true ] && printf true || printf false
+}
+aggregate_capabilities() {
+	primary_cap=$1
+	secondary_cap=$2
+	printf '{"vless":%s,"hysteria2":%s,"amneziawg":%s,"zapret":%s,"policy_routing":%s}' \
+		"$( { [ "$(lane_capability "$primary_cap" vless)" = true ] || [ "$(lane_capability "$secondary_cap" vless)" = true ]; } && printf true || printf false)" \
+		"$( { [ "$(lane_capability "$primary_cap" hysteria2)" = true ] || [ "$(lane_capability "$secondary_cap" hysteria2)" = true ]; } && printf true || printf false)" \
+		"$( { [ "$(lane_capability "$primary_cap" amneziawg)" = true ] || [ "$(lane_capability "$secondary_cap" amneziawg)" = true ]; } && printf true || printf false)" \
+		"$( { [ "$(lane_capability "$primary_cap" zapret)" = true ] || [ "$(lane_capability "$secondary_cap" zapret)" = true ]; } && printf true || printf false)" \
+		"$( { [ "$(lane_capability "$primary_cap" policy_routing)" = true ] || [ "$(lane_capability "$secondary_cap" policy_routing)" = true ]; } && printf true || printf false)"
+}
+running() {
+	[ "$(field "$1" '@.ok')" = true ] && [ "$(field "$1" '@.empty')" != true ] && printf true || printf false
+}
+safe_lane() {
+	file=$1
+	lane_running="$(running "$file")"
+	printf '{"ok":%s,"running":%s,"empty":%s,"active_profile":%s,"code":%s,"capabilities":%s}' \
+		"$(boolean "$file" '@.ok')" "$lane_running" "$(boolean "$file" '@.empty')" \
+		"$(profile "$file")" "$(code_json "$file")" "$(capabilities "$file")"
+}
+safe_direct() {
+	file=$1
+	direct_ok="$(boolean "$file" '@.ok')"
+	direct_enabled="$(field "$file" '@.enabled')"
+	case "$direct_enabled" in true|false) ;; *) direct_enabled=null ;; esac
+	[ "$direct_ok" = true ] && [ "$direct_enabled" = true ] && direct_running=true || direct_running=false
+	printf '{"ok":%s,"enabled":%s,"running":%s,"code":%s}' \
+		"$direct_ok" "$direct_enabled" "$direct_running" "$(direct_code_json "$file")"
+}
+valid_result() {
+	file=$1
+	bytes="$(wc -c <"$file" | tr -d '[:space:]')"
+	case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$bytes" -le 4096 ] || return 1
+	value="$(field "$file" '@.ok')"
+	[ "$value" = true ] || [ "$value" = false ]
+}
+call_lane() {
+	lane=$1
+	action=$2
+	target=${3:-}
+	file="$SCRATCH/$lane.json"
+	status=0
+	"$LANE_BIN" "$action" "$JOURNAL" "$target" "$lane" >"$file" 2>/dev/null || status=$?
+	if ! valid_result "$file"; then
+		printf '%s\n' '{"ok":false,"code":"lane_invalid_response"}' >"$file"
+		COLLECTION_FAILED=1
+		return 1
+	fi
+	[ "$status" -eq 0 ] && [ "$(field "$file" '@.ok')" = true ]
+}
+call_direct() {
+	direct_action=$1
+	direct_file="$SCRATCH/direct.json"
+	direct_status=0
+	"$DIRECT_BIN" "$direct_action" >"$direct_file" 2>/dev/null || direct_status=$?
+	if ! valid_result "$direct_file"; then
+		printf '%s\n' '{"ok":false,"code":"direct_invalid_response"}' >"$direct_file"
+		return 1
+	fi
+	[ "$direct_status" -eq 0 ] && [ "$(field "$direct_file" '@.ok')" = true ]
+}
+direct_fragment() {
+	[ -f "$SCRATCH/direct.json" ] || return 0
+	printf ',"runtime_direct_zapret":%s' "$(safe_direct "$SCRATCH/direct.json")"
+}
+emit() {
+	overall=$1
+	failure=${2:-$SCRATCH/vpn.json}
+	primary="$SCRATCH/vpn.json"
+	primary_profile="$(profile "$primary")"
+	primary_caps="$(aggregate_capabilities "$primary" "$SCRATCH/vpn_zapret.json")"
+	vpn="$(safe_lane "$primary")"
+	vpn_zapret="$(safe_lane "$SCRATCH/vpn_zapret.json")"
+	if [ "$overall" = true ]; then
+		printf '{"ok":true,"active_profile":%s,"capabilities":%s,"runtime_lanes":{"vpn":%s,"vpn_zapret":%s}%s}\n' \
+			"$primary_profile" "$primary_caps" "$vpn" "$vpn_zapret" "$(direct_fragment)"
+	else
+		printf '{"ok":false,"code":"%s","active_profile":%s,"capabilities":%s,"runtime_lanes":{"vpn":%s,"vpn_zapret":%s}%s}\n' \
+			"$(error_code "$failure")" "$primary_profile" "$primary_caps" "$vpn" "$vpn_zapret" "$(direct_fragment)"
+	fi
+}
+emit_collected() {
+	primary="$SCRATCH/vpn.json"
+	vpn="$(safe_lane "$primary")"
+	vpn_zapret="$(safe_lane "$SCRATCH/vpn_zapret.json")"
+	printf '{"ok":true,"running":%s,"active_profile":%s,"capabilities":%s,"runtime_lanes":{"vpn":%s,"vpn_zapret":%s}%s}\n' \
+		"$(running "$primary")" "$(profile "$primary")" \
+		"$(aggregate_capabilities "$primary" "$SCRATCH/vpn_zapret.json")" "$vpn" "$vpn_zapret" "$(direct_fragment)"
+}
+emit_restore() {
+	restored=$1
+	primary="$SCRATCH/vpn.json"
+	vpn="$(safe_lane "$primary")"
+	vpn_zapret="$(safe_lane "$SCRATCH/vpn_zapret.json")"
+	printf '{"ok":true,"restored":%s,"active_profile":%s,"capabilities":%s,"runtime_lanes":{"vpn":%s,"vpn_zapret":%s}%s}\n' \
+		"$restored" "$(profile "$primary")" "$(aggregate_capabilities "$primary" "$SCRATCH/vpn_zapret.json")" \
+		"$vpn" "$vpn_zapret" "$(direct_fragment)"
+}
+
+table_state() {
+	table=$1
+	marker=${2:-ownership_autovpn_v1}
+	file="$SCRATCH/$table.txt"
+	if ! grep -q "^table inet $table$" "$SCRATCH/tables.txt"; then
+		printf missing
+		return 0
+	fi
+	nft list table inet "$table" >"$file" 2>/dev/null || return 1
+	grep -q "chain $marker" "$file" || return 1
+	printf present
+}
+migrate_guards() {
+	nft list tables >"$SCRATCH/tables.txt" 2>/dev/null || return 1
+	primary="$(table_state autovpn_vpn)" || return 1
+	secondary="$(table_state autovpn_vpn_zapret)" || return 1
+	legacy="$(table_state autovpn)" || return 1
+	direct_table="$(table_state autovpn_direct_zapret ownership_autovpn_direct_zapret_v1)" || return 1
+	[ "$primary" = present ] || nft -f "$SHARE/guard-vpn-closed.nft" >/dev/null 2>&1 || return 1
+	[ "$secondary" = present ] || nft -f "$SHARE/guard-vpn_zapret-closed.nft" >/dev/null 2>&1 || return 1
+	if [ "$legacy" = present ]; then
+		# Closing direct-zapret also proves ownership of its combined guard before
+		# the legacy all-network drop is removed.
+		call_direct down || return 1
+	elif [ "$direct_table" = missing ]; then
+		call_direct down || return 1
+	fi
+	# Migration state is not a runtime status; only check exposes enabled safely.
+	rm -f "$SCRATCH/direct.json"
+	# Remove the all-lanes legacy drop only after all scoped guards are safe.
+	[ "$legacy" = missing ] || nft delete table inet autovpn >/dev/null 2>&1 || return 1
+}
+
+action="${1:-}"
+case "$action" in
+	prepare|activate)
+		migrate_guards || error guard_migration_failed
+		if ! call_lane vpn "$action" "$TARGET"; then
+			printf '%s\n' '{"ok":false,"code":"not_run"}' >"$SCRATCH/vpn_zapret.json"
+			emit false "$SCRATCH/vpn.json"
+			exit 1
+		fi
+		if ! call_lane vpn_zapret "$action" "$TARGET"; then
+			emit false "$SCRATCH/vpn_zapret.json"
+			exit 1
+		fi
+		emit true
+		;;
+	verify)
+		migrate_guards || error guard_migration_failed
+		vpn_ok=0; secondary_ok=0
+		call_lane vpn verify "$TARGET" && vpn_ok=1
+		if [ "$vpn_ok" -eq 1 ]; then
+			call_lane vpn_zapret verify "$TARGET" && secondary_ok=1
+		else
+			printf '%s\n' '{"ok":false,"code":"not_run"}' >"$SCRATCH/vpn_zapret.json"
+		fi
+		# Direct-zapret has its own fail-closed guard and never changes a lane result.
+		call_direct up || true
+		call_direct check || true
+		if [ "$vpn_ok" -eq 1 ] && [ "$secondary_ok" -eq 1 ]; then emit true; exit 0; fi
+		if [ "$vpn_ok" -ne 1 ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+		emit false "$failure"
+		exit 1
+		;;
+	rollback)
+		migrate_guards || error guard_migration_failed
+		vpn_ok=0; secondary_ok=0
+		call_lane vpn rollback "$TARGET" && vpn_ok=1
+		call_lane vpn_zapret rollback "$TARGET" && secondary_ok=1
+		if [ "$vpn_ok" -eq 1 ] && [ "$secondary_ok" -eq 1 ]; then emit true; exit 0; fi
+		if [ "$vpn_ok" -ne 1 ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+		emit false "$failure"
+		exit 1
+		;;
+	restore)
+		migrate_guards || error guard_migration_failed
+		vpn_ok=0; secondary_ok=0; close_ok=1
+		call_lane vpn restore "$TARGET" && vpn_ok=1
+		cp "$SCRATCH/vpn.json" "$SCRATCH/vpn-restore.json"
+		call_lane vpn_zapret restore "$TARGET" && secondary_ok=1
+		cp "$SCRATCH/vpn_zapret.json" "$SCRATCH/vpn_zapret-restore.json"
+		# A failed restore owns only its lane. Confirm its scoped guard before
+		# reporting a collected partial result; never restart or close the peer.
+		if [ "$vpn_ok" -ne 1 ]; then call_lane vpn fail-closed "$TARGET" || close_ok=0; fi
+		if [ "$secondary_ok" -ne 1 ]; then call_lane vpn_zapret fail-closed "$TARGET" || close_ok=0; fi
+		mv "$SCRATCH/vpn-restore.json" "$SCRATCH/vpn.json"
+		mv "$SCRATCH/vpn_zapret-restore.json" "$SCRATCH/vpn_zapret.json"
+		call_direct up || true
+		call_direct check || true
+		[ "$close_ok" -eq 1 ] || error fail_closed_unconfirmed
+		if [ "$COLLECTION_FAILED" -eq 1 ]; then
+			if [ "$(field "$SCRATCH/vpn.json" '@.code')" = lane_invalid_response ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+			emit false "$failure"; exit 1
+		fi
+		if [ "$vpn_ok" -eq 1 ] && [ "$secondary_ok" -eq 1 ]; then emit_restore true; else emit_restore false; fi
+		;;
+	fail-closed)
+		migration_ok=0; vpn_ok=0; secondary_ok=0; direct_ok=0
+		migrate_guards && migration_ok=1
+		call_lane vpn fail-closed "$TARGET" && vpn_ok=1
+		call_lane vpn_zapret fail-closed "$TARGET" && secondary_ok=1
+		call_direct down && direct_ok=1
+		[ "$direct_ok" -eq 1 ] || error direct_fail_closed_unconfirmed
+		[ "$migration_ok" -eq 1 ] || error guard_migration_failed
+		if [ "$vpn_ok" -eq 1 ] && [ "$secondary_ok" -eq 1 ]; then emit true; exit 0; fi
+		if [ "$vpn_ok" -ne 1 ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+		emit false "$failure"
+		exit 1
+		;;
+	health-tick)
+		migration_ok=0
+		migrate_guards && migration_ok=1
+		call_lane vpn health-tick || true
+		call_lane vpn_zapret health-tick || true
+		call_direct up || true
+		call_direct check || true
+		[ "$migration_ok" -eq 1 ] || error guard_migration_failed
+		if [ "$COLLECTION_FAILED" -eq 1 ]; then
+			if [ "$(field "$SCRATCH/vpn.json" '@.code')" = lane_invalid_response ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+			emit false "$failure"; exit 1
+		fi
+		# Both calls always run. A failed lane remains closed by runtime-lane and
+		# never causes this wrapper to stop or roll back the healthy peer lane.
+		emit_collected
+		;;
+	status)
+		call_lane vpn status || true
+		call_lane vpn_zapret status || true
+		call_direct check || true
+		if [ "$COLLECTION_FAILED" -eq 1 ]; then
+			if [ "$(field "$SCRATCH/vpn.json" '@.code')" = lane_invalid_response ]; then failure="$SCRATCH/vpn.json"; else failure="$SCRATCH/vpn_zapret.json"; fi
+			emit false "$failure"; exit 1
+		fi
+		emit_collected
+		;;
+	capabilities)
+		call_lane vpn capabilities || error runtime_capabilities_failed
+		call_lane vpn_zapret capabilities || error runtime_capabilities_failed
+		vpn="$(safe_lane "$SCRATCH/vpn.json")"
+		vpn_zapret="$(safe_lane "$SCRATCH/vpn_zapret.json")"
+		printf '{"ok":true,"capabilities":{"vless":%s,"hysteria2":%s,"amneziawg":%s,"zapret":%s,"policy_routing":%s},"runtime_lanes":{"vpn":%s,"vpn_zapret":%s}}\n' \
+			"$( { [ "$(field "$SCRATCH/vpn.json" '@.capabilities.vless')" = true ] || [ "$(field "$SCRATCH/vpn_zapret.json" '@.capabilities.vless')" = true ]; } && printf true || printf false)" \
+			"$( { [ "$(field "$SCRATCH/vpn.json" '@.capabilities.hysteria2')" = true ] || [ "$(field "$SCRATCH/vpn_zapret.json" '@.capabilities.hysteria2')" = true ]; } && printf true || printf false)" \
+			"$( { [ "$(field "$SCRATCH/vpn.json" '@.capabilities.amneziawg')" = true ] || [ "$(field "$SCRATCH/vpn_zapret.json" '@.capabilities.amneziawg')" = true ]; } && printf true || printf false)" \
+			"$( { [ "$(field "$SCRATCH/vpn.json" '@.capabilities.zapret')" = true ] || [ "$(field "$SCRATCH/vpn_zapret.json" '@.capabilities.zapret')" = true ]; } && printf true || printf false)" \
+			"$( { [ "$(field "$SCRATCH/vpn.json" '@.capabilities.policy_routing')" = true ] || [ "$(field "$SCRATCH/vpn_zapret.json" '@.capabilities.policy_routing')" = true ]; } && printf true || printf false)" \
+			"$vpn" "$vpn_zapret"
+		;;
+	ping-all)
+		lane="${4:-vpn}"
+		case "$lane" in vpn|vpn_zapret) ;; *) error invalid_runtime_lane ;; esac
+		call_lane "$lane" ping-all "${TARGET:-youtube}" || { cat "$SCRATCH/$lane.json"; exit 1; }
+		cat "$SCRATCH/$lane.json"
+		;;
+	*) error unknown_runtime_action ;;
+esac

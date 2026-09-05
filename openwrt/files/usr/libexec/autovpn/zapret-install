@@ -1,0 +1,285 @@
+#!/bin/sh
+# Install the one audited zapret2 bundle used by AutoVPN. This is deliberately
+# separate from controller updates: no upstream installer is executed and no
+# release discovery, automatic update, custom URL or caller-supplied path exists.
+set -eu
+umask 077
+export LC_ALL=C
+
+VERSION='v1.0.5'
+ARCHIVE='zapret2-v1.0.5-openwrt-embedded.tar.gz'
+ARCHIVE_URL='https://github.com/bol-van/zapret2/releases/download/v1.0.5/zapret2-v1.0.5-openwrt-embedded.tar.gz'
+ARCHIVE_SHA256='40040fef1747012a68f2dd5892b9a0bece91846e9bce37b59e35b641fdcb2a4e'
+LICENSE_URL='https://raw.githubusercontent.com/bol-van/zapret2/v1.0.5/docs/LICENSE.txt'
+LICENSE_SHA256='d089978dd77d53cb6aa5dff51cfdbff617e52dd44af1ac44a6df02c6644f17d5'
+NFQWS_SHA256='23267ff6d8fb3a68fdd91cf9bbd9616701e797a8ba832d77b3cfef91bcace3e4'
+LIB_SHA256='b67a470f23b00a8d6e732c4e5135a39b224511e0b71809d5f4616adf62674980'
+ANTIDPI_SHA256='31c9dd75b0bd55e98e5306293f2be81e9d2ecadcbbf9157394ff37dcff7dc85a'
+PREFIX='zapret2-v1.0.5'
+TARGET='/usr/lib/autovpn-zapret'
+TARGET_PARENT='/usr/lib'
+MEMINFO='/proc/meminfo'
+RAM_ROOT='/tmp/autovpn-zapret-install-state'
+ENGINE_SERVICE='/etc/init.d/autovpn-zapret'
+DIRECT_SERVICE='/etc/init.d/autovpn-direct-zapret'
+MAX_ARCHIVE_KIB=5120
+MAX_LICENSE_KIB=16
+MIN_TMP_KIB=7168
+MIN_OVERLAY_KIB=2048
+MIN_MEMORY_KIB=16384
+WORK=''
+STAGE=''
+JOB=''
+OWN_JOB=0
+WORKER_MODE=0
+
+RECEIPT='{"schema_version":1,"owner":"autovpn","version":"v1.0.5","archive_sha256":"40040fef1747012a68f2dd5892b9a0bece91846e9bce37b59e35b641fdcb2a4e","nfqws2_sha256":"23267ff6d8fb3a68fdd91cf9bbd9616701e797a8ba832d77b3cfef91bcace3e4","zapret_lib_sha256":"b67a470f23b00a8d6e732c4e5135a39b224511e0b71809d5f4616adf62674980","zapret_antidpi_sha256":"31c9dd75b0bd55e98e5306293f2be81e9d2ecadcbbf9157394ff37dcff7dc85a","license_sha256":"d089978dd77d53cb6aa5dff51cfdbff617e52dd44af1ac44a6df02c6644f17d5"}'
+
+reply() { printf '%s\n' "$1"; }
+fail() {
+	[ "$WORKER_MODE" = 0 ] || write_status failed "$1" >/dev/null 2>&1 || true
+	reply "{\"ok\":false,\"code\":\"$1\"}"
+	exit "${2:-1}"
+}
+cleanup() {
+	case "$STAGE" in "$TARGET_PARENT"/.autovpn-zapret-v1.0.5.*) rm -rf -- "$STAGE" ;; esac
+	case "$WORK" in /tmp/autovpn-zapret-install.*) rm -rf -- "$WORK" ;; esac
+	if [ "$OWN_JOB" = 1 ]; then
+		case "$JOB" in "$RAM_ROOT"/job) rm -f -- "$JOB/worker"; rmdir -- "$JOB/claimed" 2>/dev/null || true; rmdir -- "$JOB" 2>/dev/null || true ;; esac
+	fi
+}
+trap cleanup EXIT
+trap 'fail interrupted 130' INT
+trap 'fail interrupted 143' TERM
+
+hash_is() {
+	actual=$(sha256sum "$1" 2>/dev/null) || return 1
+	[ "${actual%% *}" = "$2" ]
+}
+
+existing_state() {
+	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then return 1; fi
+	[ -d "$TARGET" ] && [ ! -L "$TARGET" ] || return 2
+	for name in nfqws2 zapret-lib.lua zapret-antidpi.lua LICENSE.txt receipt.json; do
+		[ -f "$TARGET/$name" ] && [ ! -L "$TARGET/$name" ] || return 2
+	done
+	lines=$(wc -l <"$TARGET/receipt.json" 2>/dev/null | awk '{ print $1 }') || return 2
+	[ "$lines" = 1 ] || return 2
+	grep -Fqx "$RECEIPT" "$TARGET/receipt.json" 2>/dev/null || return 2
+	hash_is "$TARGET/nfqws2" "$NFQWS_SHA256" || return 2
+	hash_is "$TARGET/zapret-lib.lua" "$LIB_SHA256" || return 2
+	hash_is "$TARGET/zapret-antidpi.lua" "$ANTIDPI_SHA256" || return 2
+	hash_is "$TARGET/LICENSE.txt" "$LICENSE_SHA256" || return 2
+	return 0
+}
+
+number() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
+free_kib() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+
+ensure_ram_root() {
+	if [ ! -e "$RAM_ROOT" ] && [ ! -L "$RAM_ROOT" ]; then
+		mkdir "$RAM_ROOT" 2>/dev/null || true
+	fi
+	[ -d "$RAM_ROOT" ] && [ ! -L "$RAM_ROOT" ] || return 1
+	[ "$(stat -c %u "$RAM_ROOT" 2>/dev/null)" = 0 ] || return 1
+	if [ ! -e "$RAM_ROOT/owner" ] && [ ! -L "$RAM_ROOT/owner" ]; then
+		[ ! -e "$RAM_ROOT/owner.new.$$" ] && [ ! -L "$RAM_ROOT/owner.new.$$" ] || return 1
+		printf '%s\n' autovpn-zapret-install-v1 >"$RAM_ROOT/owner.new.$$" 2>/dev/null || return 1
+		chmod 0600 "$RAM_ROOT/owner.new.$$" 2>/dev/null || return 1
+		mv "$RAM_ROOT/owner.new.$$" "$RAM_ROOT/owner" 2>/dev/null || return 1
+	fi
+	[ -f "$RAM_ROOT/owner" ] && [ ! -L "$RAM_ROOT/owner" ] || return 1
+	[ "$(stat -c %u "$RAM_ROOT/owner" 2>/dev/null)" = 0 ] || return 1
+	grep -Fqx autovpn-zapret-install-v1 "$RAM_ROOT/owner" 2>/dev/null || return 1
+	chmod 0700 "$RAM_ROOT" 2>/dev/null || return 1
+}
+
+write_status() {
+	phase=$1 code=${2:-}
+	case "$phase" in queued|running|ready) [ -z "$code" ] || return 1;; failed) printf '%s\n' "$code" | grep -Eq '^[a-z_]{1,64}$' || return 1;; *) return 1;; esac
+	ensure_ram_root || return 1
+	tmp="$RAM_ROOT/status.new.$$"
+	[ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+	printf '%s:%s\n' "$phase" "$code" >"$tmp" || return 1
+	chmod 0600 "$tmp" || return 1
+	mv -f "$tmp" "$RAM_ROOT/status"
+}
+
+read_status() {
+	[ -d "$RAM_ROOT" ] && [ ! -L "$RAM_ROOT" ] && [ -f "$RAM_ROOT/owner" ] && [ ! -L "$RAM_ROOT/owner" ] || return 1
+	[ "$(stat -c %u "$RAM_ROOT" 2>/dev/null)" = 0 ] && [ "$(stat -c %u "$RAM_ROOT/owner" 2>/dev/null)" = 0 ] || return 1
+	grep -Fqx autovpn-zapret-install-v1 "$RAM_ROOT/owner" 2>/dev/null || return 1
+	[ -f "$RAM_ROOT/status" ] && [ ! -L "$RAM_ROOT/status" ] || return 1
+	[ "$(stat -c %u "$RAM_ROOT/status" 2>/dev/null)" = 0 ] || return 1
+	IFS= read -r stored <"$RAM_ROOT/status" || return 1
+	case "$stored" in
+		queued:|running:|ready:) phase=${stored%:}; code='' ;;
+		failed:*) phase=failed; code=${stored#failed:}; printf '%s\n' "$code" | grep -Eq '^[a-z_]{1,64}$' || return 1 ;;
+		*) return 1 ;;
+	esac
+}
+
+claim_job() {
+	ensure_ram_root || fail unsafe_install_state
+	JOB="$RAM_ROOT/job"
+	mkdir "$JOB" 2>/dev/null || fail install_busy 75
+	OWN_JOB=1
+	chmod 0700 "$JOB" || fail unsafe_install_state
+}
+
+engine_running() {
+	{ [ -x "$ENGINE_SERVICE" ] && "$ENGINE_SERVICE" running >/dev/null 2>&1; } ||
+		{ [ -x "$DIRECT_SERVICE" ] && "$DIRECT_SERVICE" running >/dev/null 2>&1; }
+}
+
+preflight() {
+	[ "$(id -u 2>/dev/null)" = 0 ] || fail root_required
+	[ "$(uname -m 2>/dev/null)" = aarch64 ] || fail unsupported_architecture
+	for tool in id uname curl sha256sum tar gzip df awk grep wc mktemp mkdir chmod cp mv rm rmdir stat sync; do
+		command -v "$tool" >/dev/null 2>&1 || fail missing_required_tool
+	done
+	[ "$ARCHIVE_URL" = 'https://github.com/bol-van/zapret2/releases/download/v1.0.5/zapret2-v1.0.5-openwrt-embedded.tar.gz' ] || fail invalid_source
+	[ "$LICENSE_URL" = 'https://raw.githubusercontent.com/bol-van/zapret2/v1.0.5/docs/LICENSE.txt' ] || fail invalid_source
+	[ -d "$TARGET_PARENT" ] && [ ! -L "$TARGET_PARENT" ] || fail unsafe_target_parent
+}
+
+check_resources() {
+	free_tmp=$(free_kib /tmp) || return 1
+	free_overlay=$(free_kib "$TARGET_PARENT") || return 1
+	available=$(awk '/^MemAvailable:[[:space:]]+[0-9]+[[:space:]]+kB$/ { print $2; exit }' "$MEMINFO" 2>/dev/null) || return 1
+	number "$free_tmp" && number "$free_overlay" && number "$available" || return 1
+	[ "$free_tmp" -ge "$MIN_TMP_KIB" ] || fail insufficient_temporary_space
+	[ "$free_overlay" -ge "$MIN_OVERLAY_KIB" ] || fail insufficient_writable_space
+	[ "$available" -ge "$MIN_MEMORY_KIB" ] || fail insufficient_memory
+}
+
+download() {
+	name=$1 limit=$2 url=$3 code=$4 timeout=$5
+	# The fixed URLs above are the complete allowlist. Redirects remain HTTPS and
+	# ulimit bounds a response even if Content-Length is absent or dishonest.
+	(ulimit -f "$((limit * 2))"; curl --disable --fail --silent --show-error --location \
+		--proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time "$timeout" \
+		--output "$WORK/$name" "$url" >/dev/null 2>&1) || fail "${code}_download_failed"
+	bytes=$(wc -c <"$WORK/$name" 2>/dev/null | awk '{ print $1 }') || fail "${code}_size_failed"
+	number "$bytes" || fail "${code}_size_failed"
+	[ "$bytes" -le "$((limit * 1024))" ] || fail "${code}_oversized"
+}
+
+install_bundle() {
+	if existing_state; then
+		write_status ready || fail status_write_failed
+		reply '{"ok":true,"installed":false,"already_present":true,"version":"v1.0.5"}'
+		return 0
+	else
+		state=$?
+	fi
+	[ "$state" = 1 ] || fail unsafe_existing_bundle
+	engine_running && fail engine_running
+	check_resources || fail resource_check_failed
+	WORK=$(mktemp -d /tmp/autovpn-zapret-install.XXXXXX) || fail work_directory_failed
+	chmod 0700 "$WORK" || fail work_directory_failed
+	download "$ARCHIVE" "$MAX_ARCHIVE_KIB" "$ARCHIVE_URL" archive 120
+	hash_is "$WORK/$ARCHIVE" "$ARCHIVE_SHA256" || fail archive_checksum_mismatch
+	download LICENSE.txt "$MAX_LICENSE_KIB" "$LICENSE_URL" license 30
+	hash_is "$WORK/LICENSE.txt" "$LICENSE_SHA256" || fail license_checksum_mismatch
+	mkdir "$WORK/extract" || fail extract_failed
+	# Extract only the three audited members. In particular, none of the shell
+	# installers or service definitions carried by upstream can be executed.
+	tar -xzf "$WORK/$ARCHIVE" -C "$WORK/extract" \
+		"$PREFIX/binaries/linux-arm64/nfqws2" \
+		"$PREFIX/lua/zapret-lib.lua.gz" \
+		"$PREFIX/lua/zapret-antidpi.lua.gz" >/dev/null 2>&1 || fail extract_failed
+	candidate="$TARGET_PARENT/.autovpn-zapret-v1.0.5.$$"
+	mkdir "$candidate" || fail stage_failed
+	STAGE=$candidate
+	cp "$WORK/extract/$PREFIX/binaries/linux-arm64/nfqws2" "$STAGE/nfqws2" || fail stage_failed
+	gzip -dc "$WORK/extract/$PREFIX/lua/zapret-lib.lua.gz" >"$STAGE/zapret-lib.lua" 2>/dev/null || fail stage_failed
+	gzip -dc "$WORK/extract/$PREFIX/lua/zapret-antidpi.lua.gz" >"$STAGE/zapret-antidpi.lua" 2>/dev/null || fail stage_failed
+	cp "$WORK/LICENSE.txt" "$STAGE/LICENSE.txt" || fail stage_failed
+	printf '%s\n' "$RECEIPT" >"$STAGE/receipt.json" || fail stage_failed
+	chmod 0755 "$STAGE" "$STAGE/nfqws2" || fail stage_failed
+	chmod 0644 "$STAGE/zapret-lib.lua" "$STAGE/zapret-antidpi.lua" "$STAGE/LICENSE.txt" "$STAGE/receipt.json" || fail stage_failed
+	hash_is "$STAGE/nfqws2" "$NFQWS_SHA256" || fail extracted_checksum_mismatch
+	hash_is "$STAGE/zapret-lib.lua" "$LIB_SHA256" || fail extracted_checksum_mismatch
+	hash_is "$STAGE/zapret-antidpi.lua" "$ANTIDPI_SHA256" || fail extracted_checksum_mismatch
+	hash_is "$STAGE/LICENSE.txt" "$LICENSE_SHA256" || fail extracted_checksum_mismatch
+	engine_running && fail engine_running
+	# The target was absent under our process lock. A final check avoids mv's
+	# directory-merging behavior if something foreign appeared meanwhile.
+	[ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] || fail unsafe_existing_bundle
+	sync
+	mv "$STAGE" "$TARGET" || fail activate_failed
+	STAGE=''
+	sync
+	write_status ready || fail status_write_failed
+	reply '{"ok":true,"installed":true,"version":"v1.0.5"}'
+}
+
+status() {
+	if existing_state; then present=true; fallback=ready
+	else
+		state=$?
+		if [ "$state" = 1 ]; then present=false; fallback=idle
+		else present=true; fallback=failed; unsafe=1
+		fi
+	fi
+	phase=$fallback code=''
+	if [ "${unsafe:-0}" = 1 ]; then phase=failed; code=unsafe_existing_bundle
+	elif [ -e "$RAM_ROOT" ] || [ -L "$RAM_ROOT" ]; then
+		read_status || { phase=failed; code=invalid_install_state; }
+	fi
+	if [ "$phase" = ready ] && [ "$present" = false ]; then phase=failed; code=bundle_missing; fi
+	case "$phase" in idle|queued|running|ready|failed) ;; *) phase=failed; code=invalid_install_state;; esac
+	printf '%s\n' "$code" | grep -Eq '^[a-z_]{0,64}$' || { phase=failed; code=invalid_install_state; }
+	reply "{\"ok\":true,\"phase\":\"$phase\",\"code\":\"$code\",\"present\":$present,\"version\":\"$VERSION\"}"
+}
+
+queue() {
+	preflight
+	if existing_state; then
+		write_status ready || fail status_write_failed
+		reply '{"ok":true,"phase":"ready","already_present":true,"version":"v1.0.5"}'
+		return 0
+	else
+		state=$?
+	fi
+	[ "$state" = 1 ] || fail unsafe_existing_bundle
+	engine_running && fail engine_running
+	claim_job
+	cp "$0" "$JOB/worker" || fail worker_copy_failed
+	chmod 0700 "$JOB/worker" || fail worker_copy_failed
+	write_status queued || fail status_write_failed
+	("$JOB/worker" worker) </dev/null >/dev/null 2>&1 &
+	OWN_JOB=0
+	reply '{"ok":true,"phase":"queued","version":"v1.0.5"}'
+}
+
+worker() {
+	[ "$#" = 1 ] || fail invalid_arguments
+	JOB="$RAM_ROOT/job"
+	[ "$0" = "$JOB/worker" ] || fail invalid_worker_invocation
+	preflight
+	ensure_ram_root || fail invalid_install_state
+	[ -d "$JOB" ] && [ ! -L "$JOB" ] && [ "$(stat -c %u "$JOB" 2>/dev/null)" = 0 ] || fail invalid_install_state
+	[ -f "$0" ] && [ ! -L "$0" ] && [ "$(stat -c %u "$0" 2>/dev/null)" = 0 ] || fail invalid_install_state
+	mkdir "$JOB/claimed" 2>/dev/null || fail invalid_worker_invocation
+	OWN_JOB=1
+	WORKER_MODE=1
+	write_status running || fail status_write_failed
+	install_bundle
+}
+
+case "${1-}" in
+	install)
+		[ "$#" = 1 ] || fail invalid_arguments
+		preflight
+		claim_job
+		WORKER_MODE=1
+		write_status running || fail status_write_failed
+		install_bundle
+		;;
+	status) [ "$#" = 1 ] || fail invalid_arguments; status ;;
+	queue) [ "$#" = 1 ] || fail invalid_arguments; queue ;;
+	worker) worker "$@" ;;
+	*) fail invalid_action ;;
+esac

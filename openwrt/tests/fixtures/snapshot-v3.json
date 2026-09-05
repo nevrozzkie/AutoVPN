@@ -1,0 +1,49 @@
+{
+  "schema_version": 3,
+  "router_id": "router_test_001",
+  "revision": 41,
+  "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "applied_at": "2026-09-04T10:00:00+00:00",
+  "published_at": "2026-09-04T10:00:01+00:00",
+  "client": {
+    "id": 7,
+    "name": "Cudy WR3000S"
+  },
+  "server": {
+    "endpoint": "203.0.113.10"
+  },
+  "protocols": {
+    "vless": {
+      "enabled": true,
+      "outbound": {
+        "type": "vless",
+        "tag": "vless-reality",
+        "server": "203.0.113.10",
+        "server_port": 443,
+        "uuid": "00000000-1111-2222-3333-444444444444",
+        "flow": "xtls-rprx-vision",
+        "tls": {
+          "enabled": true,
+          "server_name": "example.com",
+          "utls": {
+            "enabled": true,
+            "fingerprint": "chrome"
+          },
+          "reality": {
+            "enabled": true,
+            "public_key": "test-public-key",
+            "short_id": "0011223344556677"
+          }
+        }
+      }
+    },
+    "hysteria2": {
+      "enabled": false,
+      "outbound": null
+    },
+    "amneziawg": {
+      "enabled": false,
+      "profile": null
+    }
+  }
+}

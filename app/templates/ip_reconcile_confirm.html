@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Ручная сверка операции Aeza IP #{{ operation.id }}</h1>
+
+<section class="panel danger">
+  Это действие не обращается к Aeza и не меняет IP. Выполните его только после
+  ручной проверки в кабинете Aeza: какой IPv4 сейчас главный, существует ли
+  safety IP и завершился ли ambiguous DELETE. Для AmneziaWG дополнительно
+  проверьте реальный handshake клиента через новый public endpoint.
+</section>
+
+<section class="panel">
+  <div><strong>Статус:</strong> {{ operation.status|status_label }}</div>
+  <div><strong>Состояние действия:</strong> {{ operation.action_state }}</div>
+  <div><strong>Старый IP:</strong> <code>{{ operation.old_ip or "" }}</code></div>
+  <div><strong>Новый IP:</strong> <code>{{ operation.new_ip or "" }}</code></div>
+  {% if operation.cleanup_warning %}<p class="warning">{{ operation.cleanup_warning }}</p>{% endif %}
+</section>
+
+<form method="post" action="/admin/ip/operations/{{ operation.id }}/reconcile">
+  <label>
+    Что проверено вручную
+    <textarea name="note" required maxlength="500"></textarea>
+  </label>
+  <label>
+    Введите <code>RECONCILE</code>
+    <input name="confirm" autocomplete="off" required>
+  </label>
+  <div class="actions action-bar">
+    <a class="button" href="/admin/operations#ip-operations">Назад</a>
+    <button type="submit" class="danger-button">Снять safety hold</button>
+  </div>
+</form>
+{% endblock %}

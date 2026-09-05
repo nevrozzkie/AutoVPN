@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+
+START=18
+USE_PROCD=1
+
+boot() {
+	# Recover incomplete changes before netifd starts, including after power loss.
+	/usr/sbin/autovpnctl network-boot >/dev/null 2>&1
+}
+start_service() {
+	procd_open_instance rollback
+	procd_set_param command /usr/libexec/autovpn/network-watchdog
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_close_instance
+}

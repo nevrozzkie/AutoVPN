@@ -5,7 +5,13 @@ import asyncio
 from app.db import get_setting, now_iso, set_setting
 from app.deep_protocol_checks import DeepCheckResult, run_deep_protocol_checks
 from app.health import ProbeResult, tcp_probe, udp_probe
-from app.runtime_config import amnezia_port, hysteria_port, vless_port
+from app.runtime_config import (
+    amnezia_port,
+    hysteria_port,
+    server_command_timeout_seconds,
+    server_ssh_probe_timeout_seconds,
+    vless_port,
+)
 
 
 # Each protocol row is checked in two layers:
@@ -67,6 +73,11 @@ def _status_dict(protocol: dict, port: int, status: str) -> dict[str, str | int 
         "last_ok_at": get_setting(f"protocol.{key}.last_ok_at"),
         "failed_since": get_setting(f"protocol.{key}.failed_since"),
         "ping_ms": _get_ping_ms(key),
+        "transport_status": get_setting(f"protocol.{key}.transport_status"),
+        "transport_last_checked_at": get_setting(
+            f"protocol.{key}.transport_last_checked_at"
+        ),
+        "transport_ping_ms": _get_ping_ms(key, prefix="transport_"),
     }
 
 
@@ -87,7 +98,20 @@ def get_client_protocol_statuses() -> list[dict[str, str | int | bool | None]]:
         if status["key"] == "hysteria_quic":
             continue
         if status["key"] == "hysteria_salamander":
-            status = {**status, "name": "Hysteria", "note": ""}
+            status = {
+                **status,
+                "name": "Hysteria",
+                "note": "",
+                "transport_status": get_setting(
+                    "protocol.hysteria_quic.transport_status"
+                ),
+                "transport_last_checked_at": get_setting(
+                    "protocol.hysteria_quic.transport_last_checked_at"
+                ),
+                "transport_ping_ms": _get_ping_ms(
+                    "hysteria_quic", prefix="transport_"
+                ),
+            }
         statuses.append(status)
     return statuses
 
@@ -118,9 +142,20 @@ def _compute_status(protocol: dict, probe_ok: bool | None, deep: DeepCheckResult
     return base
 
 
-async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int | bool | None]]:
+async def refresh_protocol_statuses(
+    current_ip: str,
+    *,
+    command_timeout: float | None = None,
+) -> list[dict[str, str | int | bool | None]]:
     checked_at = now_iso()
-    deep_results = await run_deep_protocol_checks(current_ip)
+    effective_command_timeout = (
+        float(command_timeout)
+        if command_timeout is not None
+        else float(server_command_timeout_seconds())
+    )
+    deep_results = await run_deep_protocol_checks(
+        current_ip, command_timeout=effective_command_timeout
+    )
 
     probe_tasks: list[asyncio.Task[ProbeResult] | None] = []
     for protocol in PROTOCOLS:
@@ -185,8 +220,81 @@ async def refresh_protocol_statuses(current_ip: str) -> list[dict[str, str | int
     return statuses
 
 
-def _get_ping_ms(key: str) -> int | None:
-    value = get_setting(f"protocol.{key}.ping_ms")
+async def refresh_transport_protocol_statuses(
+    current_ip: str,
+    *,
+    probe_timeout: float | None = None,
+) -> list[dict[str, str | int | bool | None]]:
+    """Refresh public network observations without SSH or deep-check state.
+
+    Results are stored under ``transport_*`` keys. Existing deep status and its
+    timestamps are intentionally untouched, especially the tunnel-only Hysteria
+    row which has no honest transport probe from the public endpoint.
+    """
+    checked_at = now_iso()
+    timeout = (
+        float(probe_timeout)
+        if probe_timeout is not None
+        else float(server_ssh_probe_timeout_seconds())
+    )
+    scheduled: list[tuple[dict, int, asyncio.Task[ProbeResult]]] = []
+    for protocol in PROTOCOLS:
+        port = protocol["port"]()
+        if port is None or protocol["probe"] is None or not current_ip:
+            continue
+        if protocol["probe"] == "tcp":
+            task = asyncio.create_task(tcp_probe(current_ip, int(port), timeout=timeout))
+        else:
+            task = asyncio.create_task(udp_probe(current_ip, int(port), timeout=timeout))
+        scheduled.append((protocol, int(port), task))
+
+    gathered = await asyncio.gather(
+        *(task for _, _, task in scheduled), return_exceptions=True
+    )
+    statuses: list[dict[str, str | int | bool | None]] = []
+    for (protocol, port, _), result in zip(scheduled, gathered, strict=True):
+        key = str(protocol["key"])
+        probe_result = result if isinstance(result, ProbeResult) else None
+        if probe_result is None:
+            transport_status = "UNKNOWN"
+        elif probe_result.ok:
+            transport_status = (
+                "UDP_PACKET_SENT" if protocol.get("udp") else "TCP_REACHABLE"
+            )
+        else:
+            transport_status = "FAILED"
+        set_setting(f"protocol.{key}.transport_status", transport_status)
+        set_setting(f"protocol.{key}.transport_last_checked_at", checked_at)
+        if transport_status in {"TCP_REACHABLE", "UDP_PACKET_SENT"}:
+            set_setting(f"protocol.{key}.transport_last_ok_at", checked_at)
+            set_setting(f"protocol.{key}.transport_failed_since", "")
+        elif transport_status == "FAILED" and not get_setting(
+            f"protocol.{key}.transport_failed_since"
+        ):
+            set_setting(f"protocol.{key}.transport_failed_since", checked_at)
+        ping = probe_result.latency_ms if probe_result and probe_result.ok else None
+        set_setting(f"protocol.{key}.transport_ping_ms", str(ping or ""))
+        statuses.append(
+            {
+                "key": key,
+                "name": protocol["name"],
+                "port": port,
+                "enabled": True,
+                "probe": protocol["probe"],
+                "status": transport_status,
+                "last_checked_at": checked_at,
+                "last_ok_at": get_setting(f"protocol.{key}.transport_last_ok_at"),
+                "failed_since": get_setting(
+                    f"protocol.{key}.transport_failed_since"
+                ),
+                "ping_ms": ping,
+            }
+        )
+    return statuses
+
+
+def _get_ping_ms(key: str, *, prefix: str = "") -> int | None:
+    value = get_setting(f"protocol.{key}.{prefix}ping_ms")
     try:
         return int(value) if value else None
     except ValueError:

@@ -1,0 +1,203 @@
+#!/bin/sh
+
+set -eu
+
+MAX_META_BYTES=4096
+MAX_STREAM_BYTES=16384
+STREAM_CAPTURE_BYTES=16385
+HELPER="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/http-helper.uc"
+
+emit_error() {
+	printf '{"ok":false,"code":"%s"}\n' "$1"
+	exit "${2:-1}"
+}
+
+map_curl_error() {
+	case "$1" in
+		6) emit_error dns_failed ;;
+		7) emit_error connect_failed ;;
+		28) emit_error request_timeout ;;
+		35) emit_error tls_failed ;;
+		60) emit_error tls_verification_failed ;;
+		63) emit_error response_too_large ;;
+		*) emit_error transport_failed ;;
+	esac
+}
+
+emit_metadata() {
+	file="$1"
+	size="$(wc -c <"$file" 2>/dev/null | tr -d '[:space:]' || printf '%s' 999999)"
+	case "$size" in
+		''|*[!0-9]*) emit_error helper_failed ;;
+	esac
+	[ "$size" -le "$MAX_META_BYTES" ] || emit_error helper_output_too_large
+	cat "$file"
+}
+
+run_helper() {
+	metadata="$1"
+	shift
+	if "$UCODE_BIN" "$HELPER" "$@" >"$metadata" 2>/dev/null; then
+		return 0
+	fi
+	emit_metadata "$metadata"
+	exit 1
+}
+
+file_size() {
+	size="$(wc -c <"$1" 2>/dev/null | tr -d '[:space:]' || printf '%s' 999999)"
+	case "$size" in
+		''|*[!0-9]*) printf '%s' 999999 ;;
+		*) printf '%s' "$size" ;;
+	esac
+}
+
+close_sink_fds() {
+	if [ "$SINKS_OPEN" -eq 1 ]; then
+		exec 3>&-
+		exec 4>&-
+		SINKS_OPEN=0
+	fi
+}
+
+stop_sinks() {
+	close_sink_fds
+	[ -z "$HEADER_READER_PID" ] || wait "$HEADER_READER_PID" 2>/dev/null || true
+	[ -z "$BODY_READER_PID" ] || wait "$BODY_READER_PID" 2>/dev/null || true
+	HEADER_READER_PID=''
+	BODY_READER_PID=''
+}
+
+start_sinks() {
+	"$MKFIFO_BIN" "$HEADER_PIPE" "$RESPONSE_PIPE" 2>/dev/null || emit_error temporary_file_failed
+	"$HEAD_BIN" -c "$STREAM_CAPTURE_BYTES" <"$HEADER_PIPE" >"$HEADER_FILE" 2>/dev/null &
+	HEADER_READER_PID=$!
+	"$HEAD_BIN" -c "$STREAM_CAPTURE_BYTES" <"$RESPONSE_PIPE" >"$RESPONSE_FILE" 2>/dev/null &
+	BODY_READER_PID=$!
+	# Dummy writers guarantee EOF after curl exits even when curl never opens one
+	# of the FIFOs (DNS/TLS failure, 304, or another response with no body).
+	exec 3>"$HEADER_PIPE"
+	exec 4>"$RESPONSE_PIPE"
+	SINKS_OPEN=1
+}
+
+run_curl() {
+	config="$1"
+	start_sinks
+	set +e
+	"$CURL_BIN" --disable --config "$config" >"$STATUS_FILE" 2>/dev/null &
+	CURL_PID=$!
+	wait "$CURL_PID"
+	CURL_STATUS=$?
+	CURL_PID=''
+	set -e
+	stop_sinks
+
+	HEADER_SIZE="$(file_size "$HEADER_FILE")"
+	BODY_SIZE="$(file_size "$RESPONSE_FILE")"
+	[ "$HEADER_SIZE" -le "$MAX_STREAM_BYTES" ] || emit_error response_headers_too_large
+	[ "$BODY_SIZE" -le "$MAX_STREAM_BYTES" ] || emit_error response_too_large
+	[ "$CURL_STATUS" -eq 0 ] || map_curl_error "$CURL_STATUS"
+	[ "$(file_size "$STATUS_FILE")" -le 3 ] || emit_error invalid_transport_status
+	HTTP_STATUS="$("$HEAD_BIN" -c 3 "$STATUS_FILE")"
+	case "$HTTP_STATUS" in
+		[0-9][0-9][0-9]) ;;
+		*) emit_error invalid_transport_status ;;
+	esac
+}
+
+CURL_BIN="$(command -v curl 2>/dev/null || true)"
+UCODE_BIN="$(command -v ucode 2>/dev/null || true)"
+HEAD_BIN="$(command -v head 2>/dev/null || true)"
+MKFIFO_BIN="$(command -v mkfifo 2>/dev/null || true)"
+[ -n "$CURL_BIN" ] || emit_error transport_unavailable 69
+[ -n "$UCODE_BIN" ] && [ -f "$HELPER" ] || emit_error helper_unavailable 69
+[ -n "$HEAD_BIN" ] && [ -n "$MKFIFO_BIN" ] || emit_error bounded_sink_unavailable 69
+
+umask 077
+WORK_DIR="$(mktemp -d /tmp/autovpn-http.XXXXXX)" || emit_error temporary_file_failed
+CONFIG_FILE="$WORK_DIR/curl.conf"
+HEADER_FILE="$WORK_DIR/headers"
+RESPONSE_FILE="$WORK_DIR/response"
+HEADER_PIPE="$WORK_DIR/headers.pipe"
+RESPONSE_PIPE="$WORK_DIR/response.pipe"
+REQUEST_FILE="$WORK_DIR/request"
+METADATA_FILE="$WORK_DIR/metadata"
+STATUS_FILE="$WORK_DIR/status"
+PUBLISHED_FILE=''
+CURL_PID=''
+HEADER_READER_PID=''
+BODY_READER_PID=''
+SINKS_OPEN=0
+
+cleanup() {
+	if [ -n "$CURL_PID" ]; then
+		kill "$CURL_PID" 2>/dev/null || true
+		wait "$CURL_PID" 2>/dev/null || true
+		CURL_PID=''
+	fi
+	close_sink_fds
+	if [ -n "$HEADER_READER_PID" ]; then
+		kill "$HEADER_READER_PID" 2>/dev/null || true
+		wait "$HEADER_READER_PID" 2>/dev/null || true
+	fi
+	if [ -n "$BODY_READER_PID" ]; then
+		kill "$BODY_READER_PID" 2>/dev/null || true
+		wait "$BODY_READER_PID" 2>/dev/null || true
+	fi
+	rm -f "$CONFIG_FILE" "$HEADER_FILE" "$RESPONSE_FILE" "$HEADER_PIPE" \
+		"$RESPONSE_PIPE" "$REQUEST_FILE" "$METADATA_FILE" "$STATUS_FILE"
+	[ -z "$PUBLISHED_FILE" ] || rm -f "$PUBLISHED_FILE"
+	rmdir "$WORK_DIR" 2>/dev/null || true
+}
+
+on_signal() {
+	trap - EXIT HUP INT TERM
+	cleanup
+	exit 1
+}
+
+trap cleanup EXIT
+trap on_signal HUP INT TERM
+
+case "${1:-}" in
+	fetch)
+		[ "$#" -eq 7 ] || emit_error invalid_arguments
+		BASE_URL="$2"
+		CREDENTIAL_FILE="$3"
+		STATE_DIR="$4"
+		APPLIED_ETAG="$5"
+		CONNECT_TIMEOUT="$6"
+		REQUEST_TIMEOUT="$7"
+		RESPONSE_HANDOFF="$STATE_DIR/http-response.$$"
+		PUBLISHED_FILE="$RESPONSE_HANDOFF"
+		run_helper "$METADATA_FILE" prepare-fetch "$BASE_URL" "$CREDENTIAL_FILE" "$STATE_DIR" \
+			"$APPLIED_ETAG" "$CONNECT_TIMEOUT" "$REQUEST_TIMEOUT" "$CONFIG_FILE" \
+			"$HEADER_PIPE" "$RESPONSE_PIPE" "$RESPONSE_HANDOFF"
+		run_curl "$CONFIG_FILE"
+		run_helper "$METADATA_FILE" finish-fetch "$HTTP_STATUS" "$HEADER_FILE" \
+			"$RESPONSE_FILE" "$RESPONSE_HANDOFF" "$APPLIED_ETAG"
+		PUBLISHED_FILE=''
+		emit_metadata "$METADATA_FILE"
+		;;
+	put-result)
+		[ "$#" -eq 8 ] || emit_error invalid_arguments
+		BASE_URL="$2"
+		CREDENTIAL_FILE="$3"
+		IDEMPOTENCY_KEY="$4"
+		ETAG="$5"
+		JOURNAL_FILE="$6"
+		CONNECT_TIMEOUT="$7"
+		REQUEST_TIMEOUT="$8"
+		run_helper "$METADATA_FILE" prepare-put "$BASE_URL" "$CREDENTIAL_FILE" \
+			"$IDEMPOTENCY_KEY" "$ETAG" "$JOURNAL_FILE" "$CONNECT_TIMEOUT" \
+			"$REQUEST_TIMEOUT" "$CONFIG_FILE" "$HEADER_PIPE" "$RESPONSE_PIPE" "$REQUEST_FILE"
+		run_curl "$CONFIG_FILE"
+		run_helper "$METADATA_FILE" finish-put "$HTTP_STATUS" "$HEADER_FILE" \
+			"$RESPONSE_FILE" "$REQUEST_FILE" "$IDEMPOTENCY_KEY" "$ETAG"
+		emit_metadata "$METADATA_FILE"
+		;;
+	*)
+		emit_error invalid_arguments
+		;;
+esac

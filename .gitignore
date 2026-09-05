@@ -9,3 +9,4 @@ run-local.sh
 data/
 *.sqlite3
 *.egg-info/
+build-artifacts/

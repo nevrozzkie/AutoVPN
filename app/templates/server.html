@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Состояние VPS в Aeza</h1>
+
+<div class="grid">
+  <section class="panel">
+    <div class="label">Услуга Aeza</div>
+    <div class="value">{{ service_id or "не настроена" }}</div>
+    <div class="muted">Текущий IP AutoVPN: {{ current_ip or "не задан" }}</div>
+    <div class="muted">SSH-цель: {{ target_host or "не задана" }}</div>
+  </section>
+  <section class="panel">
+    <div class="label">Последняя проверка Aeza</div>
+    {% if latest_operation %}
+      <div class="value">{{ latest_operation.status|status_label }}</div>
+      <div>{{ latest_operation.current_step|step_label }}</div>
+      <div class="muted">Проверено: {{ (latest_operation.completed_at or latest_operation.updated_at)|msk }}</div>
+      <div>Статус Aeza: {{ latest_operation.provider_status or "нет данных" }}</div>
+      <div>IP у Aeza: {{ latest_operation.provider_ip or "нет данных" }}</div>
+      <div>SSH: {{ latest_operation.ssh_status or "нет данных" }}</div>
+      {% if latest_operation.services_json %}
+        <div class="muted">Сервисы xray / hysteria-server / awg-quick@awg0:</div>
+        <pre>{{ latest_operation.services_json }}</pre>
+      {% endif %}
+      {% if latest_operation.protocol_health_json %}
+        <div class="muted">Проверки VPN-протоколов:</div>
+        <pre>{{ latest_operation.protocol_health_json }}</pre>
+      {% endif %}
+      <div class="actions"><a href="/admin/server/operations/{{ latest_operation.id }}">Подробности</a></div>
+    {% else %}
+      <div class="value">нет данных</div>
+    {% endif %}
+  </section>
+</div>
+
+{% if aeza_required %}
+  <section class="panel warning">Для операций с VPS настройте AEZA_TOKEN и AEZA_SERVICE_ID на странице Setup.</section>
+{% endif %}
+{% if operation_busy and active_operation %}
+  <section class="panel warning">
+    VPS занят операцией {{ active_operation.owner_type }} #{{ active_operation.owner_id }}.
+    Новая операция не запускалась.
+  </section>
+{% endif %}
+
+<h2>Действия</h2>
+<div class="actions action-bar">
+  <form method="post" action="/admin/server/status/refresh" class="inline">
+    <button type="submit" {% if not aeza_available or active_operation %}disabled{% endif %}>Обновить статус Aeza</button>
+  </form>
+  {% if aeza_available and not active_operation %}
+    <a class="button danger-button" href="/admin/server/reboot/confirm">Перезагрузить VPS через Aeza</a>
+  {% else %}
+    <button type="button" class="danger-button" disabled>Перезагрузить VPS через Aeza</button>
+  {% endif %}
+  <a class="action-bar-end" href="/admin/operations">Весь журнал операций</a>
+</div>
+
+{% if not aeza_available %}
+  <p class="muted">Проверка и перезагрузка недоступны без AEZA_TOKEN и AEZA_SERVICE_ID.</p>
+{% elif active_operation %}
+  <p class="muted">Дождитесь завершения текущей операции с VPN VPS.</p>
+{% endif %}
+
+{% if latest_operation and latest_operation.warning_message %}
+  <section class="panel warning">{{ latest_operation.warning_message }}</section>
+{% endif %}
+{% if latest_operation and latest_operation.error_message %}
+  <section class="panel danger">{{ latest_operation.error_message }}</section>
+{% endif %}
+{% endblock %}

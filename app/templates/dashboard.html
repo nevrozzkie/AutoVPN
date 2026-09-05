@@ -34,6 +34,33 @@
     <div class="label">VPN VPS</div>
     <div class="value">{{ target_host or "не настроен" }}</div>
     <div class="muted">Активных клиентов: {{ enabled_clients_count }}</div>
+    <div class="muted">
+      Конфигурация: desired {{ vpn_state.desired_revision }} /
+      applied {{ vpn_state.applied_revision if vpn_state.applied_revision is not none else "не подтверждено" }}
+    </div>
+    {% if vpn_state.applied_revision is none %}
+      <div class="warning">Состояние VPS не подтверждено — нужна синхронизация</div>
+    {% elif vpn_config_dirty %}
+      <div class="warning">Есть неприменённые изменения</div>
+    {% else %}
+      <div class="ok">Применена</div>
+    {% endif %}
+  </section>
+  <section class="panel">
+    <div class="label">VPS в Aeza</div>
+    {% if latest_server_operation %}
+      <div class="value">{{ latest_server_operation.status|status_label }}</div>
+      <div class="muted">
+        {{ latest_server_operation.current_step|step_label }} ·
+        {{ latest_server_operation.updated_at|msk }}
+      </div>
+      {% if latest_server_operation.provider_status %}
+        <div>Статус Aeza: {{ latest_server_operation.provider_status }}</div>
+      {% endif %}
+    {% else %}
+      <div class="value">нет проверок</div>
+    {% endif %}
+    <div class="actions"><a href="/admin/server">Статус и перезагрузка VPS</a></div>
   </section>
 </div>
 
@@ -93,9 +120,9 @@
 <h2>Действия</h2>
 <div class="actions action-bar">
   <form method="post" action="/admin/install/run" class="inline">
-    <button type="submit" {% if install_running or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
+    <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  {% if operation_running or not aeza_ip_rotation_available %}
+  {% if operation_running or active_vps_operation or not aeza_ip_rotation_available or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}
     <button type="button" disabled>Обновить IP</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">Обновить IP</a>
@@ -106,6 +133,8 @@
 
 {% if install_running %}
   <p class="muted">Установка или синхронизация уже выполняется.</p>
+{% elif active_vps_operation %}
+  <p class="muted">VPN VPS занят другой операцией.</p>
 {% elif not target_host %}
   <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице Setup.</p>
 {% endif %}
@@ -114,6 +143,10 @@
   <p class="muted">Операция смены IP уже выполняется.</p>
 {% elif not aeza_ip_rotation_available %}
   <p class="muted">Смена IP доступна только для Aeza: настройте AEZA_TOKEN и AEZA_SERVICE_ID.</p>
+{% elif not safe_aeza_ip_rotation_enabled %}
+  <p class="muted">Безопасная ротация Aeza выключена. Включить её можно на странице <a href="/admin/setup">Setup</a>; старый контур не запускается.</p>
+{% elif not transactional_vpn_apply_enabled %}
+  <p class="muted">Сначала включите транзакционное применение VPN на странице <a href="/admin/setup">Setup</a>; safe rotation не обходит этот gate.</p>
 {% endif %}
 
 <p class="danger">
@@ -135,6 +168,11 @@
   {% endif %}
 {% endif %}
 
+{% if latest_operation and latest_operation.cleanup_warning %}
+  <h2>Предупреждение cleanup Aeza IP</h2>
+  <section class="panel warning">{{ latest_operation.cleanup_warning }}</section>
+{% endif %}
+
 {% if latest_install_operation and latest_install_operation.error_message %}
   <h2>Последняя ошибка установки</h2>
   <section class="panel danger">{{ latest_install_operation.error_message }}</section>
@@ -144,7 +182,7 @@
   <section class="panel danger">
     SSH-ключ хоста для {{ target_host }} изменился. Это нормально после переустановки VPS, но также может быть признаком атаки посредника.
     Нажимайте кнопку ниже только если вы уверены, что это тот же ваш VPS после переустановки или замены сервера.
-    <form method="post" action="/admin/ssh/known-host/forget" class="actions" onsubmit="return confirm('Удалить старый SSH-ключ хоста для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.')">
+    <form method="post" action="/admin/ssh/known-host/forget" class="actions" data-confirm-message="Удалить старый SSH-ключ хоста для {{ target_host }} из known_hosts? Делайте это только если вы уверены, что VPS был переустановлен или заменён.">
       <button type="submit" class="danger-button" {% if install_running %}disabled{% endif %}>Забыть старый SSH-ключ хоста</button>
     </form>
   </section>

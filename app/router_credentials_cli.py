@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import argparse
+import json
+from collections.abc import Sequence
+
+from app.db import init_db
+from app.router_credentials import (
+    KNOWN_SCOPES,
+    RouterCredentialError,
+    issue_router_credential,
+    list_router_credentials,
+    revoke_router_credential,
+    rotate_router_credential,
+)
+from app.router_apply_results import (
+    get_router_apply_result,
+    list_router_apply_results,
+)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Manage AutoVPN router credentials")
+    commands = parser.add_subparsers(dest="command", required=True)
+    issue = commands.add_parser("issue", help="issue a credential and print its token once")
+    issue.add_argument("--client-id", type=int, required=True)
+    issue.add_argument(
+        "--scope",
+        action="append",
+        dest="scopes",
+        choices=sorted(KNOWN_SCOPES),
+        required=True,
+    )
+    issue.add_argument("--expires-at")
+    issue.add_argument("--label", default="")
+    issue.add_argument("--router-id")
+    commands.add_parser("list", help="list credential metadata without token digests")
+    revoke = commands.add_parser("revoke", help="revoke a credential")
+    revoke.add_argument("credential_id")
+    rotate = commands.add_parser("rotate", help="replace and print a token once")
+    rotate.add_argument("credential_id")
+    results = commands.add_parser(
+        "results", help="list sanitized router apply-result summaries"
+    )
+    results.add_argument("--limit", type=int, default=50)
+    result = commands.add_parser("result", help="show one sanitized router apply result")
+    result.add_argument("result_id", type=int)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    init_db()
+    try:
+        if args.command == "issue":
+            issued = issue_router_credential(
+                args.client_id,
+                args.scopes,
+                expires_at=args.expires_at,
+                label=args.label,
+                router_id=args.router_id,
+            )
+            print(
+                json.dumps(
+                    {
+                        "credential_id": issued.credential_id,
+                        "router_id": issued.router_id,
+                        "client_id": issued.client_id,
+                        "scopes": issued.scopes,
+                        "label": issued.label,
+                        "created_at": issued.created_at,
+                    },
+                    sort_keys=True,
+                )
+            )
+            print(f"token={issued.token}")
+        elif args.command == "list":
+            print(json.dumps(list_router_credentials(), sort_keys=True))
+        elif args.command == "revoke":
+            revoke_router_credential(args.credential_id)
+            print(json.dumps({"credential_id": args.credential_id, "revoked": True}))
+        elif args.command == "rotate":
+            token = rotate_router_credential(args.credential_id)
+            print(json.dumps({"credential_id": args.credential_id, "rotated": True}))
+            print(f"token={token}")
+        elif args.command == "results":
+            print(json.dumps(list_router_apply_results(args.limit), sort_keys=True))
+        elif args.command == "result":
+            result = get_router_apply_result(args.result_id)
+            if result is None:
+                raise RouterCredentialError("Router apply result does not exist")
+            print(json.dumps(result, sort_keys=True))
+    except RouterCredentialError as exc:
+        _parser().error(str(exc))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

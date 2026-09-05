@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=97
+STOP=9
+
+start_service() {
+	[ -r /var/run/autovpn-direct-zapret/nfqws.conf ] || return 1
+	procd_open_instance autovpn_direct_zapret
+	procd_set_param command /usr/lib/autovpn-zapret/nfqws2 @/var/run/autovpn-direct-zapret/nfqws.conf
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_close_instance
+}
+
+# Controller-only: helper owns the closed guard and opens it after queue readiness.
+boot() { return 0; }

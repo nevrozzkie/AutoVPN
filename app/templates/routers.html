@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Роутеры</h1>
+
+<p class="muted">
+  У каждого физического роутера собственные identity, VPN-клиент и токен. Токен
+  показывается только при выпуске и хранится на сервере только в виде SHA-256 digest.
+</p>
+
+{% if available_clients %}
+  <form method="post" action="/admin/routers" class="actions action-bar">
+    <input type="text" name="name" placeholder="Название роутера" required maxlength="100">
+    <select name="client_id" required>
+      {% for client in available_clients %}
+        <option value="{{ client.id }}">{{ client.name }}{% if not client.enabled %} — клиент отключён{% endif %}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Добавить и выпустить токен</button>
+  </form>
+{% elif not clients %}
+  <section class="panel warning">
+    Сначала создайте отдельного VPN-клиента для роутера на странице
+    <a href="/admin/clients">Клиенты</a>.
+  </section>
+{% else %}
+  <section class="panel muted">
+    Для нового физического роутера создайте отдельного VPN-клиента. Повторное
+    использование клиента опасно для AmneziaWG: одинаковые ключ и адрес будут
+    перетягивать handshake между устройствами.
+  </section>
+{% endif %}
+
+<section class="client-list">
+  {% for router in routers %}
+    {% set client = clients_by_id.get(router.client_id) %}
+    <details class="panel client-details" open>
+      <summary>
+        <strong>{{ router.label or router.router_id }}</strong>
+        <span class="{{ 'ok' if router.enabled else 'danger' }}">{{ "включён" if router.enabled else "отключён" }}</span>
+        <span class="muted">клиент: {{ client.name if client else router.client_id }}</span>
+        {% if router.last_seen_at %}
+          <span class="ok">связь {{ router.last_seen_at|msk }}</span>
+        {% else %}
+          <span class="muted">ещё не подключался</span>
+        {% endif %}
+      </summary>
+
+      <div class="client-grid">
+        <form method="post" action="/admin/routers/{{ router.router_id }}/rename">
+          <label class="label" for="router-name-{{ router.router_id }}">Название</label>
+          <input id="router-name-{{ router.router_id }}" type="text" name="name" value="{{ router.label }}" maxlength="100" required>
+          <button type="submit">Сохранить</button>
+        </form>
+        <div>
+          <div class="label">Router ID</div>
+          <code>{{ router.router_id }}</code>
+        </div>
+        <div>
+          <div class="label">Последнее применение</div>
+          {% if router.latest_apply_result %}
+            <strong>{{ router.latest_apply_result.outcome }}</strong>
+            · revision {{ router.latest_apply_result.revision }}
+            {% if router.latest_apply_result.active_profile %}
+              <br><span class="muted">{{ router.latest_apply_result.active_profile }}</span>
+            {% endif %}
+            <br><span class="muted">{{ router.latest_apply_result.created_at|msk }}</span>
+          {% else %}
+            <span class="muted">отчётов ещё нет</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <h3>Credentials</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Метка</th>
+            <th>Scopes</th>
+            <th>Последнее использование</th>
+            <th>Состояние</th>
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for credential in router.credentials %}
+            <tr>
+              <td><code>{{ credential.credential_id }}</code></td>
+              <td>{{ credential.label or "—" }}</td>
+              <td>{{ credential.scopes|join(", ") }}</td>
+              <td>{{ credential.last_used_at|msk or "никогда" }}</td>
+              <td>
+                {% if credential.revoked_at %}
+                  <span class="danger">отозван</span>
+                {% elif not credential.enabled %}
+                  <span class="danger">выключен</span>
+                {% else %}
+                  <span class="ok">активен</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if credential.enabled and not credential.revoked_at %}
+                  <form class="inline" method="post" action="/admin/router-credentials/{{ credential.credential_id }}/rotate" data-confirm-message="Старый токен немедленно перестанет работать. Продолжить?">
+                    <button type="submit">Заменить токен</button>
+                  </form>
+                  <form class="inline" method="post" action="/admin/router-credentials/{{ credential.credential_id }}/revoke" data-confirm-message="Отозвать credential {{ credential.credential_id }}?">
+                    <button type="submit" class="danger-button">Отозвать</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="muted">Credentials отсутствуют</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="actions action-bar">
+        <form class="inline" method="post" action="/admin/routers/{{ router.router_id }}/credentials">
+          <input type="hidden" name="label" value="replacement">
+          <button type="submit">Выпустить дополнительный токен</button>
+        </form>
+        {% if router.enabled %}
+          <form class="inline" method="post" action="/admin/routers/{{ router.router_id }}/disable" data-confirm-message="Отключить роутер {{ router.label }}? Все его credentials перестанут проходить проверку.">
+            <button type="submit" class="danger-button">Отключить роутер</button>
+          </form>
+        {% else %}
+          <form class="inline" method="post" action="/admin/routers/{{ router.router_id }}/enable">
+            <button type="submit">Включить роутер</button>
+          </form>
+        {% endif %}
+        <form class="inline" method="post" action="/admin/routers/{{ router.router_id }}/delete" data-confirm-message="Удалить роутер {{ router.label }} вместе с его credentials и историей отчётов? VPN-клиент останется.">
+          <button type="submit" class="danger-button">Удалить роутер</button>
+        </form>
+      </div>
+    </details>
+  {% else %}
+    <section class="panel muted">Роутеров пока нет</section>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import secrets
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -14,10 +16,14 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.aeza import AezaClient
-from app.amnezia import build_amnezia_client_config, build_amnezia_vpn_key
+from app.amnezia import (
+    build_amnezia_client_config,
+    build_amnezia_vpn_key,
+    render_amnezia_client_config,
+    render_amnezia_vpn_key,
+)
 from app.db import (
     create_client,
-    create_install_operation,
     create_operation,
     delete_client,
     fail_incomplete_install_operations,
@@ -25,7 +31,9 @@ from app.db import (
     get_client_by_token,
     get_latest_install_operation,
     get_latest_operation,
+    get_operation,
     get_setting,
+    get_vpn_state,
     has_running_install_operation,
     has_running_operation,
     init_db,
@@ -33,31 +41,40 @@ from app.db import (
     list_clients_with_stats,
     list_install_operations,
     list_operations,
-    mark_vpn_config_updated,
     reset_server_and_aeza_state,
+    reconcile_ip_operation,
     set_setting,
+    set_settings,
     set_client_enabled,
     update_client_name,
 )
 from app.eu_install import (
-    build_eu_install_script,
+    build_eu_deploy_script,
     describe_ssh_command,
     forget_ssh_known_host,
     resolve_eu_host,
     run_eu_install,
 )
-from app.ip_change import apply_manual_main_ip, run_ip_change
-from app.protocol_status import get_client_protocol_statuses, get_protocol_statuses, refresh_protocol_statuses
+from app.ip_change import run_ip_change
+from app.operation_coordinator import OperationBusyError
+from app.protocol_status import (
+    get_client_protocol_statuses,
+    get_protocol_statuses,
+    refresh_transport_protocol_statuses,
+)
+from app.readiness import database_is_ready
 from app.runtime_config import (
     admin_password,
     admin_username,
     aeza_api_base,
     aeza_ipv4_after_purchase_delay_seconds,
     aeza_ipv4_domain,
-    aeza_ipv4_payment_method,
     aeza_service_id,
     aeza_token,
+    router_api_enabled,
     setup_complete,
+    safe_aeza_ip_rotation_enabled,
+    transactional_vpn_apply_enabled,
     eu_ssh_host,
     eu_ssh_key_path,
     eu_ssh_password,
@@ -74,20 +91,66 @@ from app.runtime_config import (
     amnezia_port_value,
 )
 from app.stats import format_bytes, refresh_client_stats
-from app.subscriptions import build_sing_box_subscription, build_subscription
+from app.subscriptions import (
+    hysteria_auth,
+    render_sing_box_subscription,
+    render_subscription,
+)
+from app.vpn_config import capture_vpn_config
+from app.vpn_state import IpChangeSafetyHoldError, prepare_install_operation
 from app.security import (
     SECURITY_HEADERS,
     csrf_failure_detail,
     client_key,
     hash_password,
+    is_public_token_path,
     is_same_origin_request,
     login_rate_limiter,
     verify_password,
 )
+from app.secret_sanitization import sanitize_error
+from app.server_operations import (
+    create_protocol_refresh_operation,
+    create_server_operation,
+    get_active_vps_operation,
+    get_latest_server_operation,
+    get_server_operation,
+    list_server_operations,
+    run_server_reboot,
+    run_server_status,
+    run_protocol_refresh,
+)
+from app.router_api import RouterApiError, router, router_api_error_response
+from app.router_credentials import (
+    IssuedRouterCredential,
+    RouterCredentialError,
+    delete_router,
+    get_router,
+    issue_router_credential,
+    list_routers,
+    revoke_router_credential,
+    rotate_router_credential,
+    set_router_enabled,
+    update_router_label,
+)
 
-app = FastAPI(title="AutoVPN")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    fail_incomplete_install_operations(
+        "AutoVPN was restarted while this VPS operation was still running. Review its state before retrying."
+    )
+    yield
+
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+
+app = FastAPI(title="AutoVPN", lifespan=lifespan)
+app.add_exception_handler(RouterApiError, router_api_error_response)
+app.include_router(router)
+app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 security = HTTPBasic()
 setup_security = HTTPBasic(auto_error=False)
 
@@ -96,13 +159,17 @@ setup_security = HTTPBasic(auto_error=False)
 async def security_middleware(request: Request, call_next):
     # CSRF: state-changing requests must come from the panel's own origin.
     if not is_same_origin_request(request):
-        return PlainTextResponse(
+        response = PlainTextResponse(
             csrf_failure_detail(request),
             status_code=status.HTTP_403_FORBIDDEN,
         )
-    response = await call_next(request)
+    else:
+        response = await call_next(request)
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
+    if is_public_token_path(request.url.path):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -137,7 +204,9 @@ def _required_port_value(raw_value: str, label: str) -> int:
 
 def _ensure_unique_enabled_protocol_ports(protocol_settings: dict[str, tuple[bool, int]]) -> None:
     seen: dict[int, str] = {}
-    for protocol, (_, port) in protocol_settings.items():
+    for protocol, (enabled, port) in protocol_settings.items():
+        if not enabled:
+            continue
         if port in seen:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -160,6 +229,8 @@ STATUS_LABELS = {
     "RUNNING": "Выполняется",
     "DONE": "Готово",
     "PENDING": "Ожидает",
+    "TIMED_OUT": "Истёк таймаут",
+    "AMBIGUOUS": "Требуется проверка",
 }
 
 
@@ -170,6 +241,7 @@ STEP_LABELS = {
     "wait_after_ipv4_purchase": "ожидание после покупки IPv4",
     "wait_new_ipv4": "ожидание появления нового IPv4",
     "make_new_ipv4_main": "назначение нового IP главным",
+    "confirm_new_ipv4_main": "подтверждение нового главного IP в Aeza",
     "reboot_service": "перезагрузка VPS",
     "wait_vps_health": "ожидание доступности VPS",
     "server_reachable": "сервер доступен",
@@ -181,6 +253,21 @@ STEP_LABELS = {
     "remote_install_running": "удалённая установка выполняется",
     "done": "готово",
     "failed": "ошибка",
+    "provider_status": "статус VPS в Aeza",
+    "provider_status_before_reboot": "проверка статуса Aeza перед перезагрузкой",
+    "ssh_reachability": "проверка SSH",
+    "send_reboot": "отправка команды перезагрузки",
+    "wait_reboot": "ожидание перезагрузки",
+    "verify_reboot": "проверка после перезагрузки",
+    "verify_ambiguous_reboot": "безопасная проверка результата",
+    "service_health": "проверка сервисов",
+    "protocol_health": "проверка протоколов",
+    "wait_provider": "ожидание статуса Aeza",
+    "wait_ssh": "ожидание SSH",
+    "timed_out": "истёк таймаут",
+    "ambiguous": "требуется ручная проверка",
+    "manual_verification_required": "нужна ручная проверка",
+    "verification_complete": "проверка завершена",
 }
 
 
@@ -266,14 +353,6 @@ def format_eur_minor_units(value: object) -> str:
         return f"€{float(value) / 100:.2f}"
     except (TypeError, ValueError):
         return "unknown"
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-    fail_incomplete_install_operations(
-        "AutoVPN was restarted while this install operation was still running. Start install/sync again."
-    )
 
 
 def _verify_admin_credentials(request: Request, credentials: HTTPBasicCredentials) -> bool:
@@ -378,6 +457,9 @@ def admin_setup_page(
             "aeza_token_configured": bool(aeza_token()),
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
+            "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
+            "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
+            "router_api_enabled": router_api_enabled(),
             "setup_complete": setup_complete(),
             "install_running": has_running_install_operation(),
             "operation_running": has_running_operation(),
@@ -404,6 +486,10 @@ def setup_submit(
     hysteria_port_value: str = Form(""),
     amnezia_enabled_value: str | None = Form(None),
     amnezia_port_value: str = Form(""),
+    autovpn2_settings_present: str | None = Form(None),
+    transactional_vpn_apply_enabled_value: str | None = Form(None),
+    safe_aeza_ip_rotation_enabled_value: str | None = Form(None),
+    router_api_enabled_value: str | None = Form(None),
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
@@ -415,50 +501,76 @@ def setup_submit(
     if not setup_complete() and not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin password is required")
 
-    set_setting("config.admin_username", admin_username_value.strip() or "admin")
-    if password:
-        set_setting("config.admin_password", hash_password(password))
     current_ip_value = current_ip.strip()
-    if current_ip_value:
-        set_setting("current_ip", current_ip_value)
-
     ssh_host_value = eu_ssh_host_value.strip()
     if ssh_host_value == current_ip_value:
         ssh_host_value = ""
-    set_setting("config.eu_ssh_host", ssh_host_value)
-    set_setting("config.eu_ssh_user", eu_ssh_user_value.strip() or "root")
-    set_setting("config.eu_ssh_port", str(eu_ssh_port_value or 22))
+    ssh_port = _required_port_value(str(eu_ssh_port_value), "SSH")
+    existing_ssh_password = eu_ssh_password()
+    ssh_key_path = eu_ssh_key_path_value.strip()
     protocol_settings = {
         "vless": (vless_enabled_value == "on", _required_port_value(vless_port_value, "VLESS")),
         "hysteria": (hysteria_enabled_value == "on", _required_port_value(hysteria_port_value, "Hysteria")),
         "amnezia": (amnezia_enabled_value == "on", _required_port_value(amnezia_port_value, "AmneziaWG")),
     }
     _ensure_unique_enabled_protocol_ports(protocol_settings)
-    for protocol, (enabled, port) in protocol_settings.items():
-        set_setting(f"config.{protocol}_enabled", "1" if enabled else "0")
-        set_setting(f"config.{protocol}_port", str(port))
-    if eu_ssh_password_value:
-        set_setting("config.eu_ssh_password", eu_ssh_password_value)
-        set_setting("config.eu_ssh_key_path", "")
-    else:
-        if not eu_ssh_password() or eu_ssh_key_path_value.strip():
-            set_setting("config.eu_ssh_password", "")
-        set_setting("config.eu_ssh_key_path", eu_ssh_key_path_value.strip())
+    feature_updates: dict[str, str] = {}
+    if autovpn2_settings_present == "1":
+        transactional_apply_enabled = transactional_vpn_apply_enabled_value == "on"
+        safe_rotation_enabled = safe_aeza_ip_rotation_enabled_value == "on"
+        if safe_rotation_enabled and not transactional_apply_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Safe Aeza IP rotation requires transactional VPN apply",
+            )
+        feature_updates = {
+            "config.enable_transactional_vpn_apply": "1" if transactional_apply_enabled else "0",
+            "config.enable_safe_aeza_ip_rotation": "1" if safe_rotation_enabled else "0",
+            "config.enable_router_api": "1" if router_api_enabled_value == "on" else "0",
+        }
 
-    set_setting("config.aeza_api_base", "https://my.aeza.net")
+    updates = {
+        "config.admin_username": admin_username_value.strip() or "admin",
+        "config.eu_ssh_host": ssh_host_value,
+        "config.eu_ssh_user": eu_ssh_user_value.strip() or "root",
+        "config.eu_ssh_port": str(ssh_port),
+        "config.aeza_api_base": "https://my.aeza.net",
+        "config.aeza_service_id": aeza_service_id_value.strip(),
+        "config.aeza_ipv4_payment_method": "balance",
+        "config.aeza_ipv4_domain": aeza_ipv4_domain_value.strip(),
+        "config.aeza_ipv4_after_purchase_delay_seconds": "120",
+        **feature_updates,
+    }
+    if password:
+        updates["config.admin_password"] = hash_password(password)
+    if current_ip_value:
+        updates["current_ip"] = current_ip_value
+    for protocol, (enabled, port) in protocol_settings.items():
+        updates[f"config.{protocol}_enabled"] = "1" if enabled else "0"
+        updates[f"config.{protocol}_port"] = str(port)
+    if eu_ssh_password_value:
+        updates["config.eu_ssh_password"] = eu_ssh_password_value
+        updates["config.eu_ssh_key_path"] = ""
+    else:
+        if not existing_ssh_password or ssh_key_path:
+            updates["config.eu_ssh_password"] = ""
+        updates["config.eu_ssh_key_path"] = ssh_key_path
     if aeza_token_value.strip():
-        set_setting("config.aeza_token", aeza_token_value.strip())
-    set_setting("config.aeza_service_id", aeza_service_id_value.strip())
-    set_setting("config.aeza_ipv4_payment_method", "balance")
-    set_setting("config.aeza_ipv4_domain", aeza_ipv4_domain_value.strip())
-    set_setting("config.aeza_ipv4_after_purchase_delay_seconds", "120")
-    mark_vpn_config_updated()
+        updates["config.aeza_token"] = aeza_token_value.strip()
+    set_settings(updates, mark_vpn_config_updated=True)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    if database_is_ready(settings.database_path):
+        return JSONResponse({"status": "ready"})
+    return JSONResponse({"status": "not_ready"}, status_code=503)
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
@@ -472,6 +584,9 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     clients = list_clients()
     target_host = resolve_eu_host()
     latest_install_operation = get_latest_install_operation()
+    latest_server_operation = get_latest_server_operation()
+    active_vps_operation = get_active_vps_operation()
+    vpn_state = get_vpn_state()
     latest_install_error = latest_install_operation["error_message"] if latest_install_operation else ""
     ssh_host_key_changed = bool(
         latest_install_error
@@ -500,11 +615,20 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
             "latest_install_operation": latest_install_operation,
+            "latest_server_operation": latest_server_operation,
+            "active_vps_operation": active_vps_operation,
+            "vpn_state": vpn_state,
+            "vpn_config_dirty": vpn_state["applied_revision"] is None
+            or vpn_state["desired_revision"] != vpn_state["applied_revision"],
             "ssh_host_key_changed": ssh_host_key_changed,
             "operation_running": has_running_operation(),
             "install_running": has_running_install_operation(),
-            "auto_refresh": has_running_operation() or has_running_install_operation(),
+            "auto_refresh": has_running_operation()
+            or has_running_install_operation()
+            or active_vps_operation is not None,
             "aeza_ip_rotation_available": aeza_ip_rotation_available(),
+            "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
+            "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
         },
@@ -515,13 +639,18 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
 async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    price = await fetch_aeza_ipv4_price()
+    safe_rotation_enabled = safe_aeza_ip_rotation_enabled()
+    transactional_apply_enabled = transactional_vpn_apply_enabled()
+    price = await fetch_aeza_ipv4_price() if safe_rotation_enabled else None
     return templates.TemplateResponse(
         request,
         "ip_confirm.html",
         {
             "current_ip": get_setting("current_ip"),
             "operation_running": has_running_operation(),
+            "safe_rotation_enabled": safe_rotation_enabled,
+            "transactional_apply_enabled": transactional_apply_enabled,
+            "safety_hold": request.query_params.get("safety_hold") == "1",
             "aeza_ipv4_price": price,
             "after_purchase_delay_seconds": aeza_ipv4_after_purchase_delay_seconds(),
             "format_eur_minor_units": format_eur_minor_units,
@@ -533,9 +662,25 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
 def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    if has_running_operation():
+    if not safe_aeza_ip_rotation_enabled():
+        return RedirectResponse(
+            "/admin/ip/confirm?safe_rotation_required=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not transactional_vpn_apply_enabled():
+        return RedirectResponse(
+            "/admin/ip/confirm?transactional_apply_required=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    try:
+        operation_id = create_operation()
+    except IpChangeSafetyHoldError:
+        return RedirectResponse(
+            "/admin/ip/confirm?safety_hold=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    except OperationBusyError:
         return RedirectResponse("/admin/ip/confirm?already_running=1", status_code=status.HTTP_303_SEE_OTHER)
-    operation_id = create_operation()
     background_tasks.add_task(_run_operation_background, operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -547,7 +692,6 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
     error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
     current_ip = get_setting("current_ip")
-    synced_main_ip = ""
     try:
         client = get_aeza_client()
         ipv4_list = await client.get_ipv4_list(aeza_service_id())
@@ -557,11 +701,6 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             for item in ipv4_list:
                 if item.get("ip") == aeza_main_ip:
                     item["is_main"] = True
-            if aeza_main_ip != current_ip:
-                set_setting("current_ip", aeza_main_ip)
-                mark_vpn_config_updated()
-                synced_main_ip = aeza_main_ip
-                current_ip = aeza_main_ip
     except Exception as exc:
         error = error or str(exc)
     return templates.TemplateResponse(
@@ -571,9 +710,10 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             "current_ip": current_ip,
             "ipv4_list": ipv4_list,
             "error": error,
-            "synced_main_ip": synced_main_ip,
+            "synced_main_ip": "",
             "aeza_ipv4_price": await fetch_aeza_ipv4_price(),
             "format_eur_minor_units": format_eur_minor_units,
+            "safe_rotation_enabled": safe_aeza_ip_rotation_enabled(),
         },
     )
 
@@ -591,6 +731,7 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
             "aeza_ipv4_domain": domain,
             "error": request.query_params.get("error", ""),
             "format_eur_minor_units": format_eur_minor_units,
+            "safe_rotation_enabled": safe_aeza_ip_rotation_enabled(),
         },
     )
 
@@ -599,21 +740,10 @@ async def admin_ip_buy_confirm(request: Request, _: str = Depends(require_admin)
 async def admin_ip_buy(_: str = Depends(require_admin)) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    domain = aeza_ipv4_domain()
-    if not domain:
-        return redirect_with_error(
-            "/admin/ip/buy/confirm",
-            "AEZA_IPV4_DOMAIN is required for buying IPv4 in Aeza",
-        )
-    try:
-        await get_aeza_client().add_ipv4(
-            aeza_service_id(),
-            payment_method=aeza_ipv4_payment_method(),
-            domain=domain,
-        )
-    except Exception as exc:
-        return redirect_with_error("/admin/ip/buy/confirm", str(exc))
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/admin/ip/{ipv4_id}/make-main")
@@ -624,12 +754,11 @@ async def admin_ip_make_main(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    try:
-        await get_aeza_client().make_main_ipv4(aeza_service_id(), ipv4_id)
-    except Exception as exc:
-        return redirect_with_error("/admin/ip", str(exc))
-    await apply_manual_main_ip(ip)
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    del ipv4_id, ip
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/admin/ip/{ipv4_id}/delete")
@@ -641,13 +770,11 @@ async def admin_ip_delete(
 ) -> RedirectResponse:
     if not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
-    if is_main == "1" or ip == get_setting("current_ip"):
-        return RedirectResponse("/admin/ip?cannot_delete_main=1", status_code=status.HTTP_303_SEE_OTHER)
-    try:
-        await get_aeza_client().delete_ipv4(aeza_service_id(), ipv4_id)
-    except Exception as exc:
-        return redirect_with_error("/admin/ip", str(exc))
-    return RedirectResponse("/admin/ip", status_code=status.HTTP_303_SEE_OTHER)
+    del ipv4_id, ip, is_main
+    return RedirectResponse(
+        "/admin/ip/confirm?manual_disabled=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 async def _run_operation_background(operation_id: int) -> None:
@@ -658,16 +785,83 @@ async def _run_operation_background(operation_id: int) -> None:
         return
 
 
+@app.get(
+    "/admin/ip/operations/{operation_id}/reconcile/confirm",
+    response_class=HTMLResponse,
+)
+def admin_ip_reconcile_confirm(
+    request: Request,
+    operation_id: int,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    operation = get_operation(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    is_hold = operation["action_state"] != "RECONCILED" and (
+        operation["status"] == "AMBIGUOUS"
+        or operation["action_state"]
+        in {"CLEANUP_AMBIGUOUS", "PUBLISHED_AWAITING_AWG_CHECK"}
+    )
+    if operation["status"] in {"PENDING", "RUNNING"} or not is_hold:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This IP operation does not have a terminal safety hold",
+        )
+    return templates.TemplateResponse(
+        request,
+        "ip_reconcile_confirm.html",
+        {"operation": operation},
+    )
+
+
+@app.post("/admin/ip/operations/{operation_id}/reconcile")
+def admin_ip_reconcile(
+    operation_id: int,
+    confirm: str = Form(""),
+    note: str = Form(""),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if confirm.strip() != "RECONCILE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type RECONCILE after manually checking the IPv4 state in Aeza",
+        )
+    if not note.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A short reconciliation note is required",
+        )
+    try:
+        reconcile_ip_operation(operation_id, note)
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from None
+    return RedirectResponse(
+        "/admin/operations#ip-operations",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 @app.get("/admin/clients", response_class=HTMLResponse)
 def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    routers_by_client_id = {
+        int(router_entry["client_id"]): router_entry
+        for router_entry in list_routers()
+    }
+    clients = list_clients_with_stats()
+    for client in clients:
+        client["router"] = routers_by_client_id.get(int(client["id"]))
     return templates.TemplateResponse(
         request,
         "clients.html",
         {
-            "clients": list_clients_with_stats(),
+            "clients": clients,
             "base_url": str(request.base_url).rstrip("/"),
             "format_bytes": format_bytes,
-            "hysteria_password": get_setting("hysteria.password"),
+            "hysteria_auth": hysteria_auth,
             "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
             "stats_last_error": get_setting("stats.last_error"),
         },
@@ -711,19 +905,366 @@ def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> Redi
     return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _router_token_response(
+    request: Request,
+    *,
+    token: str,
+    credential_id: str,
+    router_id: str,
+    router_label: str,
+) -> HTMLResponse:
+    response = templates.TemplateResponse(
+        request,
+        "router_token_once.html",
+        {
+            "token": token,
+            "credential_id": credential_id,
+            "router_id": router_id,
+            "router_label": router_label,
+        },
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _issued_router_token_response(
+    request: Request,
+    issued: IssuedRouterCredential,
+    router_label: str,
+) -> HTMLResponse:
+    return _router_token_response(
+        request,
+        token=issued.token,
+        credential_id=issued.credential_id,
+        router_id=issued.router_id,
+        router_label=router_label,
+    )
+
+
+def _require_router_entry(router_id: str) -> dict:
+    try:
+        router_entry = get_router(router_id)
+    except RouterCredentialError:
+        router_entry = None
+    if router_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Router does not exist",
+        )
+    return router_entry
+
+
+def _router_for_credential(credential_id: str) -> dict:
+    for router_entry in list_routers():
+        if any(
+            credential["credential_id"] == credential_id
+            for credential in router_entry["credentials"]
+        ):
+            return router_entry
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Router credential does not exist",
+    )
+
+
+@app.get("/admin/routers", response_class=HTMLResponse)
+def admin_routers(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    clients = list_clients()
+    routers = list_routers()
+    assigned_client_ids = {int(router["client_id"]) for router in routers}
+    return templates.TemplateResponse(
+        request,
+        "routers.html",
+        {
+            "routers": routers,
+            "clients": clients,
+            "available_clients": [
+                client
+                for client in clients
+                if int(client["id"]) not in assigned_client_ids
+            ],
+            "clients_by_id": {int(client["id"]): client for client in clients},
+        },
+    )
+
+
+@app.post("/admin/routers", response_class=HTMLResponse)
+def admin_create_router(
+    request: Request,
+    name: str = Form(...),
+    client_id: int = Form(...),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    router_label = name.strip()
+    if not router_label:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Router name is required",
+        )
+    try:
+        issued = issue_router_credential(
+            client_id,
+            ("snapshot:read", "apply:write"),
+            label=router_label,
+        )
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    return _issued_router_token_response(request, issued, router_label)
+
+
+@app.post("/admin/routers/{router_id}/rename")
+def admin_rename_router(
+    router_id: str,
+    name: str = Form(...),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    if not name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Router name is required",
+        )
+    try:
+        update_router_label(router_id, name)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/enable")
+def admin_enable_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    set_router_enabled(router_id, True)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/disable")
+def admin_disable_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    set_router_enabled(router_id, False)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/delete")
+def admin_delete_router(
+    router_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    _require_router_entry(router_id)
+    delete_router(router_id)
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/routers/{router_id}/credentials", response_class=HTMLResponse)
+def admin_issue_router_credential(
+    request: Request,
+    router_id: str,
+    label: str = Form("replacement"),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    try:
+        router_entry = _require_router_entry(router_id)
+        issued = issue_router_credential(
+            int(router_entry["client_id"]),
+            ("snapshot:read", "apply:write"),
+            label=label.strip(),
+            router_id=router_id,
+        )
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return _issued_router_token_response(
+        request,
+        issued,
+        str(router_entry["label"]),
+    )
+
+
+@app.post("/admin/router-credentials/{credential_id}/rotate", response_class=HTMLResponse)
+def admin_rotate_router_credential(
+    request: Request,
+    credential_id: str,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    router_entry = _router_for_credential(credential_id)
+    try:
+        token = rotate_router_credential(credential_id)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return _router_token_response(
+        request,
+        token=token,
+        credential_id=credential_id,
+        router_id=str(router_entry["router_id"]),
+        router_label=str(router_entry["label"]),
+    )
+
+
+@app.post("/admin/router-credentials/{credential_id}/revoke")
+def admin_revoke_router_credential(
+    credential_id: str,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    try:
+        revoke_router_credential(credential_id)
+    except RouterCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    return RedirectResponse("/admin/routers", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/admin/operations", response_class=HTMLResponse)
 def admin_operations(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     operation_running = has_running_operation()
     install_running = has_running_install_operation()
+    server_running = get_active_vps_operation() is not None
     return templates.TemplateResponse(
         request,
         "operations.html",
         {
             "operations": list_operations(),
             "install_operations": list_install_operations(),
-            "auto_refresh": operation_running or install_running,
+            "server_operations": list_server_operations(),
+            "auto_refresh": operation_running or install_running or server_running,
         },
     )
+
+
+@app.get("/admin/server", response_class=HTMLResponse)
+def admin_server(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "server.html",
+        {
+            "latest_operation": get_latest_server_operation(),
+            "active_operation": get_active_vps_operation(),
+            "aeza_available": aeza_ip_rotation_available(),
+            "service_id": aeza_service_id(),
+            "current_ip": get_setting("current_ip"),
+            "target_host": resolve_eu_host(),
+            "aeza_required": request.query_params.get("aeza_required") == "1",
+            "operation_busy": request.query_params.get("operation_busy") == "1",
+        },
+    )
+
+
+@app.post("/admin/server/status/refresh")
+def admin_server_status_refresh(
+    background_tasks: BackgroundTasks,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    try:
+        operation_id = create_server_operation("STATUS")
+    except OperationBusyError:
+        return RedirectResponse(
+            "/admin/server?operation_busy=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    background_tasks.add_task(_run_server_status_background, operation_id)
+    return RedirectResponse(
+        f"/admin/server/operations/{operation_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/admin/server/reboot/confirm", response_class=HTMLResponse)
+def admin_server_reboot_confirm(
+    request: Request,
+    _: str = Depends(require_admin),
+) -> Response:
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    return templates.TemplateResponse(
+        request,
+        "server_reboot_confirm.html",
+        {
+            "service_id": aeza_service_id(),
+            "current_ip": get_setting("current_ip"),
+            "latest_operation": get_latest_server_operation(),
+            "active_operation": get_active_vps_operation(),
+        },
+    )
+
+
+@app.post("/admin/server/reboot")
+def admin_server_reboot(
+    background_tasks: BackgroundTasks,
+    confirm: str = Form(""),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    if confirm != "REBOOT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type REBOOT exactly to confirm server reboot",
+        )
+    if not aeza_ip_rotation_available():
+        return RedirectResponse(
+            "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    try:
+        operation_id = create_server_operation("REBOOT")
+    except OperationBusyError:
+        return RedirectResponse(
+            "/admin/server?operation_busy=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    background_tasks.add_task(_run_server_reboot_background, operation_id)
+    return RedirectResponse(
+        f"/admin/server/operations/{operation_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/admin/server/operations/{operation_id}", response_class=HTMLResponse)
+def admin_server_operation(
+    request: Request,
+    operation_id: int,
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    operation = get_server_operation(operation_id)
+    if not operation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return templates.TemplateResponse(
+        request,
+        "server_operation.html",
+        {
+            "operation": operation,
+            "auto_refresh": operation["status"] in {"PENDING", "RUNNING"},
+        },
+    )
+
+
+async def _run_server_status_background(operation_id: int) -> None:
+    await run_server_status(operation_id)
+
+
+async def _run_server_reboot_background(operation_id: int) -> None:
+    await run_server_reboot(operation_id)
 
 
 @app.get("/admin/install")
@@ -733,7 +1274,7 @@ def admin_install_redirect(_: str = Depends(require_admin)) -> RedirectResponse:
 
 @app.get("/admin/install/script", response_class=PlainTextResponse)
 def admin_install_script(_: str = Depends(require_admin)) -> PlainTextResponse:
-    return PlainTextResponse(build_eu_install_script())
+    return PlainTextResponse(build_eu_deploy_script())
 
 
 @app.post("/admin/ssh/known-host/forget")
@@ -753,11 +1294,12 @@ def admin_run_install(
     background_tasks: BackgroundTasks,
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
-    if has_running_install_operation():
-        return RedirectResponse("/admin?install_already_running=1", status_code=status.HTTP_303_SEE_OTHER)
     host = resolve_eu_host()
-    operation_id = create_install_operation(host)
-    background_tasks.add_task(_run_install_background, operation_id)
+    try:
+        prepared = prepare_install_operation(host)
+    except OperationBusyError:
+        return RedirectResponse("/admin?install_already_running=1", status_code=status.HTTP_303_SEE_OTHER)
+    background_tasks.add_task(_run_install_background, prepared.operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -781,8 +1323,19 @@ def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(
         and latest_install_operation["status"] == "DONE"
         and latest_install_operation["target_host"] == target_host
     ):
-        background_tasks.add_task(refresh_protocol_statuses, current_ip)
+        try:
+            operation_id = create_protocol_refresh_operation()
+        except OperationBusyError:
+            return RedirectResponse(
+                "/admin?operation_busy=1",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        background_tasks.add_task(_run_protocol_refresh_background, operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+async def _run_protocol_refresh_background(operation_id: int) -> None:
+    await run_protocol_refresh(operation_id)
 
 
 @app.post("/admin/stats/refresh")
@@ -795,72 +1348,81 @@ async def _refresh_stats_background() -> None:
     try:
         await refresh_client_stats()
     except Exception as exc:
-        set_setting("stats.last_error", str(exc)[-4000:])
+        set_setting(
+            "stats.last_error",
+            sanitize_error(exc, aeza_token(), eu_ssh_password()),
+        )
 
 
 @app.post("/admin/reset-server")
 def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
-    if has_running_operation() or has_running_install_operation():
+    try:
+        reset_server_and_aeza_state()
+    except OperationBusyError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot reset server settings while an operation is running",
         )
-    reset_server_and_aeza_state()
     return RedirectResponse("/admin/setup", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse)
 def subscription(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(build_subscription(client, current_ip))
+    return PlainTextResponse(render_subscription(config, client.as_dict()))
 
 
 @app.get("/sing-box/{token}", response_class=JSONResponse)
 def sing_box_subscription(token: str) -> JSONResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return JSONResponse(build_sing_box_subscription(client, current_ip))
+    return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
 
 
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    captured_client = config.client_by_token(token)
+    if not captured_client or not captured_client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    client = captured_client.as_dict()
     base_url = str(request.base_url).rstrip("/")
-    current_amnezia_port = amnezia_port()
-    current_vless_port = vless_port()
-    current_hysteria_port = hysteria_port()
     return templates.TemplateResponse(
         request,
         "client_page.html",
         {
             "client": client,
-            "current_ip": current_ip,
-            "config_updated_at": get_setting("vpn.config_updated_at"),
+            "current_ip": config.current_ip,
+            "config_updated_at": config.config_updated_at,
             "protocols": get_client_protocol_statuses(),
-            "protocol_status_available": bool(get_setting("protocol.vless.last_checked_at")),
+            "protocol_status_available": bool(
+                get_setting("protocol.vless.last_checked_at")
+                or get_setting("protocol.vless.transport_last_checked_at")
+                or get_setting("protocol.hysteria_quic.transport_last_checked_at")
+                or get_setting("protocol.amnezia.transport_last_checked_at")
+            ),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
-            "vless_enabled": current_vless_port is not None,
-            "hysteria_enabled": current_hysteria_port is not None,
-            "sing_box_enabled": current_vless_port is not None or current_hysteria_port is not None,
-            "amnezia_enabled": current_amnezia_port is not None,
+            "vless_enabled": config.vless.protocol.enabled,
+            "hysteria_enabled": config.hysteria.protocol.enabled,
+            "sing_box_enabled": config.vless.protocol.enabled or config.hysteria.protocol.enabled,
+            "amnezia_enabled": config.amnezia.protocol.enabled,
             "amnezia_url": f"{base_url}/amnezia/{client['token']}",
-            "amnezia_vpn_key": get_amnezia_vpn_key(client, current_ip) if current_amnezia_port is not None else "",
+            "amnezia_vpn_key": render_amnezia_vpn_key(config, captured_client)
+            if config.amnezia.protocol.enabled
+            else "",
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
         },
     )
@@ -873,18 +1435,19 @@ async def client_refresh_protocols(token: str) -> RedirectResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     current_ip = get_setting("current_ip")
     if current_ip:
-        await refresh_protocol_statuses(current_ip)
+        await refresh_transport_protocol_statuses(current_ip)
     return RedirectResponse(f"/client/{token}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/client/{token}/subscription.qr")
 def client_subscription_qr(request: Request, token: str) -> Response:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     import qrcode
 
-    subscription_url = f"{str(request.base_url).rstrip('/')}/sub/{client['token']}"
+    subscription_url = f"{str(request.base_url).rstrip('/')}/sub/{client.token}"
     image = qrcode.make(subscription_url)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -893,15 +1456,15 @@ def client_subscription_qr(request: Request, token: str) -> Response:
 
 @app.get("/client/{token}/amnezia.qr")
 def client_amnezia_qr(token: str) -> Response:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     import qrcode
 
-    image = qrcode.make(get_amnezia_vpn_key(client, current_ip))
+    image = qrcode.make(render_amnezia_vpn_key(config, client))
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return Response(buffer.getvalue(), media_type="image/png")
@@ -909,37 +1472,37 @@ def client_amnezia_qr(token: str) -> Response:
 
 @app.get("/ip/{token}", response_class=PlainTextResponse)
 def current_eu_ip(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(f"{current_ip}\n")
+    return PlainTextResponse(f"{config.current_ip}\n")
 
 
 @app.get("/amnezia/{token}", response_class=PlainTextResponse)
 def amnezia_config(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     return PlainTextResponse(
-        get_amnezia_config(client, current_ip),
+        render_amnezia_client_config(config, client),
         headers={
-            "Content-Disposition": f"attachment; filename=amnezia-{client['id']}.conf"
+            "Content-Disposition": f"attachment; filename=amnezia-{client.id}.conf"
         },
     )
 
 
 @app.get("/amnezia-key/{token}", response_class=PlainTextResponse)
 def amnezia_vpn_key(token: str) -> PlainTextResponse:
-    client = get_client_by_token(token)
-    if not client or not client["enabled"]:
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    current_ip = get_setting("current_ip")
-    if not current_ip:
+    if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return PlainTextResponse(get_amnezia_vpn_key(client, current_ip) + "\n")
+    return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")

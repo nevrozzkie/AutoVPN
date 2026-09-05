@@ -430,6 +430,13 @@
                 {% if protocol.last_checked_at %}
                   <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
                 {% endif %}
+                {% if protocol.transport_last_checked_at %}
+                  <br><span class="muted">Транспорт: {{ protocol.transport_status|status_label }}</span>
+                  <br><span class="muted">Проверено снаружи: {{ protocol.transport_last_checked_at|msk }}</span>
+                  {% if protocol.transport_status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
+                    <br><span class="muted">Транспортная проверка не подтверждает VPN handshake или авторизацию.</span>
+                  {% endif %}
+                {% endif %}
                 {% if protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
                   {% if protocol.udp %}
                     <br><span class="muted">Это не проверяет handshake, SNI и авторизацию.</span>
@@ -470,7 +477,7 @@
             {% endif %}
           </h2>
           <p><code>{{ subscription_url }}</code></p>
-          <button type="button" onclick="navigator.clipboard.writeText('{{ subscription_url }}')">Скопировать подписку</button>
+          <button type="button" data-copy-value="{{ subscription_url }}">Скопировать подписку</button>
           <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
           <div id="subscription-qr" class="qr">
             <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
@@ -479,7 +486,7 @@
             <summary>sing-box <span class="muted">не тестировалось</span></summary>
             <p><code>{{ sing_box_subscription_url }}</code></p>
             <a class="button" href="{{ sing_box_subscription_url }}">Открыть конфиг</a>
-            <button type="button" onclick="navigator.clipboard.writeText('{{ sing_box_subscription_url }}')">Скопировать ссылку</button>
+            <button type="button" data-copy-value="{{ sing_box_subscription_url }}">Скопировать ссылку</button>
           </details>
         </section>
       {% endif %}
@@ -831,6 +838,11 @@
         document.documentElement.dataset.theme = next;
         localStorage.setItem("autovpn-theme", next);
       }
+      document.querySelectorAll("[data-copy-value]").forEach((button) => {
+        button.addEventListener("click", () => {
+          navigator.clipboard.writeText(button.dataset.copyValue);
+        });
+      });
       document.querySelectorAll(".guide-stage").forEach((stage) => {
         stage.addEventListener("toggle", () => {
           if (!stage.open) return;

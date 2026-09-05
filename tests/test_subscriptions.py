@@ -1,7 +1,4 @@
-import os
-import tempfile
-
-os.environ["DATABASE_PATH"] = tempfile.NamedTemporaryFile(delete=True).name
+from urllib.parse import quote
 
 from app.db import create_client, get_setting, init_db, set_setting
 from app.config import settings
@@ -20,7 +17,8 @@ def test_subscription_contains_vless_reality_params() -> None:
     assert "fp=firefox" in subscription
     assert "flow=xtls-rprx-vision" in subscription
     assert "%5BAutoVPN%5D%20Alice%20-%20vless" in subscription
-    assert f"hy2://{get_setting('hysteria.password')}@" in subscription
+    expected_auth = f"client-{client['id']}:{client['hysteria_password']}"
+    assert f"hy2://{quote(expected_auth, safe='')}@" in subscription
     assert "hysteria2://" not in subscription
 
 
@@ -54,7 +52,8 @@ def test_subscriptions_include_hysteria_when_enabled() -> None:
         sing_box_subscription = build_sing_box_subscription(client, "203.0.113.10")
         outbounds = {outbound["tag"]: outbound for outbound in sing_box_subscription["outbounds"]}
 
-        assert f"hy2://{get_setting('hysteria.password')}@" in text_subscription
+        expected_auth = f"client-{client['id']}:{client['hysteria_password']}"
+        assert f"hy2://{quote(expected_auth, safe='')}@" in text_subscription
         assert "hysteria2://" not in text_subscription
         assert f"@203.0.113.10:{settings.hysteria_port}/?insecure=1&sni=ok.ru" in text_subscription
         assert "obfs=salamander" in text_subscription
@@ -64,7 +63,7 @@ def test_subscriptions_include_hysteria_when_enabled() -> None:
         assert outbounds["proxy"]["default"] == "vless-reality"
         assert outbounds["hysteria2"]["type"] == "hysteria2"
         assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
-        assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
+        assert outbounds["hysteria2"]["password"] == expected_auth
         assert outbounds["hysteria2"]["obfs"]["type"] == "salamander"
         assert outbounds["hysteria2"]["obfs"]["password"] == get_setting("hysteria.obfs_password")
         assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
@@ -84,7 +83,9 @@ def test_sing_box_subscription_contains_vless_and_hysteria() -> None:
 
         assert outbounds["hysteria2"]["type"] == "hysteria2"
         assert outbounds["hysteria2"]["server_port"] == settings.hysteria_port
-        assert outbounds["hysteria2"]["password"] == get_setting("hysteria.password")
+        assert outbounds["hysteria2"]["password"] == (
+            f"client-{client['id']}:{client['hysteria_password']}"
+        )
         assert outbounds["hysteria2"]["tls"]["server_name"] == settings.vless_reality_server_name
         assert outbounds["hysteria2"]["tls"]["insecure"] is True
     finally:

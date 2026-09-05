@@ -1,0 +1,138 @@
+#!/bin/sh
+# Interactive first-install Wi-Fi bootstrap. Prompts use the controlling TTY so
+# a `curl ... | sh` pipeline keeps stdin free of secrets and script content.
+set -eu
+umask 077
+export LC_ALL=C
+
+TTY_IN='/dev/tty'
+TTY_OUT='/dev/tty'
+CTL='/usr/sbin/autovpnctl'
+TTY_STATE=''
+TTY_HIDDEN=0
+
+restore_tty() {
+	if [ "$TTY_HIDDEN" = 1 ] && [ -n "$TTY_STATE" ]; then
+		stty "$TTY_STATE" <&3 >/dev/null 2>&1 || true
+		TTY_HIDDEN=0
+	fi
+}
+fail() { restore_tty; printf 'AutoVPN: %s\n' "$1" >&4; exit "${2:-1}"; }
+trap restore_tty EXIT
+trap 'fail "Wi-Fi setup interrupted." 130' INT
+trap 'fail "Wi-Fi setup interrupted." 143' TERM
+
+[ "$#" = 0 ] || { printf '%s\n' 'Usage: install-wifi' >&2; exit 64; }
+[ "$(id -u 2>/dev/null)" = 0 ] || { printf '%s\n' 'AutoVPN: run as root.' >&2; exit 1; }
+for tool in stty grep wc awk jsonfilter; do
+	command -v "$tool" >/dev/null 2>&1 || { printf 'AutoVPN: missing %s.\n' "$tool" >&2; exit 1; }
+done
+[ -x "$CTL" ] || { printf '%s\n' 'AutoVPN: controller CLI is unavailable.' >&2; exit 1; }
+
+valid_ssid() {
+	[ -n "$1" ] || return 1
+	bytes=$(printf '%s' "$1" | wc -c | awk '{ print $1 }') || return 1
+	case "$bytes" in ''|*[!0-9]*) return 1;; esac
+	[ "$bytes" -le 27 ] || return 1
+	! printf '%s' "$1" | grep -q '[[:cntrl:]]'
+}
+valid_password() {
+	case "$1" in
+		????????????????????????????????????????????????????????????????)
+			printf '%s\n' "$1" | grep -Eq '^[0-9A-Fa-f]{64}$' ;;
+		*)
+			bytes=$(printf '%s' "$1" | wc -c | awk '{ print $1 }') || return 1
+			case "$bytes" in ''|*[!0-9]*) return 1;; esac
+			[ "$bytes" -ge 8 ] && [ "$bytes" -le 63 ] &&
+				printf '%s\n' "$1" | grep -Eq '^[ -~]+$' ;;
+	esac
+}
+bounded() {
+	count=$(printf '%s' "$1" | wc -c | awk '{ print $1 }') || return 1
+	case "$count" in ''|*[!0-9]*) return 1;; esac
+	[ "$count" -le 1024 ]
+}
+read_secret() {
+	label=$1
+	printf '%s' "$label" >&4
+	stty -echo <&3 >/dev/null 2>&1 || fail 'Cannot disable terminal echo.'
+	TTY_HIDDEN=1
+	if ! IFS= read -r secret <&3; then fail 'Password input ended unexpectedly.'; fi
+	restore_tty
+	printf '\n' >&4
+}
+
+# Recover the narrow window where the network transaction was confirmed but
+# committing the completion marker failed. This call consumes no installer stdin
+# and completes without asking for the Wi-Fi password again.
+resume=$("$CTL" wifi-bootstrap-resume </dev/null 2>/dev/null) || {
+	printf '%s\n' 'AutoVPN: existing Wi-Fi bootstrap state could not be recovered; inspect LuCI before retrying.' >&2
+	exit 1
+}
+bounded "$resume" || {
+	printf '%s\n' 'AutoVPN: invalid Wi-Fi bootstrap recovery response.' >&2
+	exit 1
+}
+resume_ok=$(printf '%s' "$resume" | jsonfilter -e '@.ok' 2>/dev/null || true)
+resume_phase=$(printf '%s' "$resume" | jsonfilter -e '@.phase' 2>/dev/null || true)
+[ "$resume_ok" = true ] || {
+	printf '%s\n' 'AutoVPN: existing Wi-Fi bootstrap state could not be recovered; inspect LuCI before retrying.' >&2
+	exit 1
+}
+case "$resume_phase" in
+	confirmed)
+		resume_id=$(printf '%s' "$resume" | jsonfilter -e '@.transaction_id' 2>/dev/null || true)
+		printf '%s\n' "$resume_id" | grep -Eq '^[0-9]{1,12}-[0-9]{1,12}$' || {
+			printf '%s\n' 'AutoVPN: invalid Wi-Fi bootstrap recovery response.' >&2
+			exit 1
+		}
+		printf '%s\n' 'AutoVPN: primary Wi-Fi confirmation recovered.' >&2
+		exit 0
+		;;
+	not_configured) ;;
+	*)
+		printf '%s\n' 'AutoVPN: existing Wi-Fi bootstrap state is not ready for first-install setup; inspect LuCI.' >&2
+		exit 1
+		;;
+esac
+
+exec 3<"$TTY_IN" || { printf '%s\n' 'AutoVPN: cannot read the controlling terminal.' >&2; exit 1; }
+exec 4>"$TTY_OUT" || { printf '%s\n' 'AutoVPN: cannot write the controlling terminal.' >&2; exit 1; }
+TTY_STATE=$(stty -g <&3 2>/dev/null) || fail 'Cannot inspect terminal echo state.'
+[ -n "$TTY_STATE" ] || fail 'Cannot inspect terminal echo state.'
+
+printf '%s' 'Primary Wi-Fi name [wifi]: ' >&4
+IFS= read -r base_ssid <&3 || fail 'Wi-Fi name input ended unexpectedly.'
+[ -n "$base_ssid" ] || base_ssid=wifi
+valid_ssid "$base_ssid" || fail 'Wi-Fi name must be 1-27 UTF-8 bytes without control characters.'
+
+read_secret 'WPA2 password (8-63 printable ASCII, or 64 hex digits): '
+password=$secret
+valid_password "$password" || fail 'WPA2 password must be 8-63 printable ASCII characters or 64 hexadecimal digits.'
+read_secret 'Confirm WPA2 password: '
+[ "$secret" = "$password" ] || fail 'Passwords do not match.'
+secret=''
+
+response=$(printf '%s\n%s\n' "$base_ssid" "$password" | "$CTL" wifi-bootstrap 2>/dev/null) ||
+	fail 'Could not stage the primary Wi-Fi transaction.'
+password=''
+bounded "$response" || fail 'Invalid Wi-Fi bootstrap response.'
+ok=$(printf '%s' "$response" | jsonfilter -e '@.ok' 2>/dev/null || true)
+phase=$(printf '%s' "$response" | jsonfilter -e '@.phase' 2>/dev/null || true)
+transaction_id=$(printf '%s' "$response" | jsonfilter -e '@.transaction_id' 2>/dev/null || true)
+[ "$ok" = true ] && [ "$phase" = pending ] || fail 'Could not stage the primary Wi-Fi transaction.'
+printf '%s\n' "$transaction_id" | grep -Eq '^[0-9]{1,12}-[0-9]{1,12}$' || fail 'Invalid Wi-Fi transaction identifier.'
+
+printf 'Primary Wi-Fi %s is staged. AutoVPN names are %s, %s-в, %s-з, %s-вз.\n' "$base_ssid" "$base_ssid" "$base_ssid" "$base_ssid" "$base_ssid" >&4
+printf '%s' 'Within 180 seconds, connect a test device to the primary network and verify Internet access. Is it working? [y/N]: ' >&4
+IFS= read -r answer <&3 || answer=''
+case "$answer" in y|Y|yes|YES)
+	confirmed=$("$CTL" network-confirm "$transaction_id" 2>/dev/null) || fail 'Wi-Fi confirmation did not complete; inspect LuCI before retrying.'
+	bounded "$confirmed" || fail 'Invalid Wi-Fi confirmation response.'
+	[ "$(printf '%s' "$confirmed" | jsonfilter -e '@.ok' 2>/dev/null || true)" = true ] &&
+		[ "$(printf '%s' "$confirmed" | jsonfilter -e '@.phase' 2>/dev/null || true)" = confirmed ] ||
+		fail 'Wi-Fi confirmation did not complete; inspect LuCI before retrying.'
+	printf '%s\n' 'AutoVPN: primary Wi-Fi confirmed.' >&4
+	;;
+*) fail 'Wi-Fi was not confirmed; automatic rollback remains armed for the existing PPPoE/Wi-Fi configuration.' ;;
+esac

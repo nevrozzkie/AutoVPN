@@ -1,0 +1,374 @@
+#!/bin/sh
+# Safe, deliberately narrow AutoVPN application updater.  It only accepts a
+# signed autovpn-controller APK from a manually selected GitHub release tag.
+# It never runs a downloaded shell script, changes firmware, kernels, feeds,
+# or installs a dependency that is not already present.
+set -eu
+umask 077
+export LC_ALL=C
+
+ROOT=/etc/autovpn
+STATE="$ROOT/state/update-status.json"
+GATE="$ROOT/state/update.lock"
+RECEIPT="$ROOT/release.json"
+KEY="$ROOT/release-signing.pem"
+LOCK=/var/lock/autovpn-update.lock
+WORK=''
+MAX_MANIFEST_KIB=64
+MAX_APK_KIB=16384
+PLAN_TTL=900
+GATE_OWNED=0
+HAVE_UPDATE_LOCK=0
+HAVE_CONTROLLER_LOCK=0
+GATE_EXTRA=''
+
+fail() {
+	# Check/queue failures only affect the status record. Once the worker has
+	# created its gate, retain a durable failed gate for explicit recovery.
+	[ "$GATE_OWNED" = 0 ] || write_gate failed "$1" "$GATE_EXTRA"
+	# A rejected competing request must never overwrite another worker's plan.
+	[ "$HAVE_UPDATE_LOCK" = 0 ] || write_state failed "$1" "$GATE_EXTRA"
+	printf '%s\n' "{\"ok\":false,\"code\":\"$1\"}"
+	exit "${3:-1}"
+}
+field() { jsonfilter -i "$1" -e "$2" 2>/dev/null; }
+valid_hash() { printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{64}$'; }
+valid_tag() {
+	printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$' || return 1
+	lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case "$lower" in latest|main|master|head) return 1;; esac
+	return 0
+}
+uptime() { awk '{print int($1)}' /proc/uptime 2>/dev/null; }
+write_state() {
+	local phase code extra tmp
+	phase=$1 code=${2:-} extra=${3:-}
+	mkdir -p "$ROOT/state"
+	chmod 0700 "$ROOT" "$ROOT/state"
+	tmp="$STATE.new.$$"
+	# All dynamic fields are restricted ASCII before this function is called.
+	printf '{"schema_version":1,"phase":"%s","code":"%s"%s}\n' "$phase" "$code" "$extra" >"$tmp"
+	chmod 0600 "$tmp"
+	mv -f "$tmp" "$STATE"
+}
+write_gate() {
+	local phase code extra tmp
+	phase=$1 code=${2:-} extra=${3:-}
+	mkdir -p "$ROOT/state"
+	chmod 0700 "$ROOT" "$ROOT/state"
+	tmp="$GATE.new.$$"
+	printf '{"schema_version":1,"phase":"%s","code":"%s"%s}\n' "$phase" "$code" "$extra" >"$tmp"
+	chmod 0600 "$tmp"
+	mv -f "$tmp" "$GATE"
+	GATE_OWNED=1
+	# Persist the safety gate before the VPN or UCI state changes.
+	sync
+}
+release_locks() {
+	[ "$HAVE_CONTROLLER_LOCK" = 0 ] || lock -u /var/lock/autovpn-controller.lock
+	[ "$HAVE_UPDATE_LOCK" = 0 ] || lock -u "$LOCK"
+}
+clean_work() { case "$WORK" in /tmp/autovpn-update.*) rm -rf -- "$WORK" ;; esac; }
+trap 'release_locks; clean_work' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+need() { command -v "$1" >/dev/null 2>&1 || { printf '%s\n' "missing $1" >&2; exit 1; }; }
+for tool in apk curl ubus jsonfilter sha256sum awk grep wc df mktemp cp chmod mkdir mv rm uname tr cut lock uci sync; do need "$tool"; done
+
+receipt() {
+	[ -f "$RECEIPT" ] && [ ! -L "$RECEIPT" ] && [ -f "$KEY" ] && [ ! -L "$KEY" ] || return 1
+	[ "$(field "$RECEIPT" '@.schema_version')" = 1 ] || return 1
+	base=$(field "$RECEIPT" '@.release_base') || return 1
+	key_hash=$(field "$RECEIPT" '@.signing_key_sha256') || return 1
+	printf '%s\n' "$base" | grep -Eq '^https://github\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9._-]+$' || return 1
+	valid_hash "$key_hash" || return 1
+	actual=$(sha256sum "$KEY") || return 1
+	[ "${actual%% *}" = "$key_hash" ] || return 1
+	repo=${base#https://github.com/}; repo=${repo%%/releases/download/*}
+	printf '%s\n' "$repo" | grep -Eq '^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$' || return 1
+	return 0
+}
+
+board() {
+	[ -n "$WORK" ] || return 1
+	ubus call system board >"$WORK/board.json" || return 1
+	release=$(field "$WORK/board.json" '@.release.version') || return 1
+	target=$(field "$WORK/board.json" '@.release.target') || return 1
+	architecture=$(apk --print-arch) || return 1
+	kernel_release=$(uname -r) || return 1
+	apk query --installed --match name --fields name,version --format json kernel >"$WORK/kernel.json" || return 1
+	kernel_package=$(field "$WORK/kernel.json" '@[0].version') || return 1
+	printf '%s\n' "$release" | grep -Eq '^25\.12\.[0-9]+$' || return 1
+	printf '%s\n' "$target" | grep -Eq '^[a-z0-9_]+/[a-z0-9_-]+$' || return 1
+	printf '%s\n' "$architecture" | grep -Eq '^[a-z0-9_-]+$' || return 1
+	printf '%s\n' "$kernel_package" | grep -Eq '^[A-Za-z0-9_.+~-]+$' || return 1
+}
+
+download() {
+	file=$1 limit=$2 url=$3
+	case "$file" in *[!A-Za-z0-9._+~-]*|'') return 1;; esac
+	# HTTPS only, restricted redirects and a byte limit. The APK signature and
+	# SHA-256 are checked independently below.
+	(ulimit -f "$((limit * 2))"; curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --output "$WORK/$file" "$url") || return 1
+	[ "$(wc -c <"$WORK/$file")" -le "$((limit * 1024))" ]
+}
+
+package_version() {
+	if [ -z "$WORK" ]; then
+		# `status` is read-only and must not share/delete a worker workdir.
+		output=$(apk query --installed --match name --fields version --format json autovpn-controller) || return 1
+		printf '%s\n' "$output" | jsonfilter -e '@[0].version' 2>/dev/null
+		return
+	fi
+	apk query --installed --match name --fields version --format json autovpn-controller >"$WORK/current.json" || return 1
+	field "$WORK/current.json" '@[0].version'
+}
+record_installed_version() {
+	receipt || return 1
+	printf '%s\n' "$installed" | grep -Eq '^[A-Za-z0-9._+~-]+$' || return 1
+	tmp="$RECEIPT.new.$$"
+	printf '{"schema_version":1,"release_base":"%s","signing_key_sha256":"%s","installed_version":"%s"}\n' \
+		"$base" "$key_hash" "$installed" >"$tmp" || return 1
+	chmod 0600 "$tmp" || return 1
+	mv -f "$tmp" "$RECEIPT"
+}
+
+space_ok() {
+	free_overlay=$(df -Pk /overlay | awk 'NR == 2 {print $4}') || return 1
+	free_tmp=$(df -Pk /tmp | awk 'NR == 2 {print $4}') || return 1
+	case "$free_overlay:$free_tmp" in *[!0-9:]*|:*|*:) return 1;; esac
+	[ "$free_overlay" -ge 8192 ] && [ "$free_tmp" -ge $((MAX_APK_KIB + 1024)) ]
+}
+
+check_now() {
+	tag=${1:-}
+	valid_tag "$tag" || fail invalid_update_tag
+	if [ "$HAVE_UPDATE_LOCK" = 0 ]; then
+		if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
+		HAVE_UPDATE_LOCK=1
+	fi
+	recovery=0
+	if [ -e "$GATE" ] || [ -L "$GATE" ]; then
+		[ -f "$GATE" ] && [ ! -L "$GATE" ] && [ "$(field "$GATE" '@.schema_version')" = 1 ] || fail invalid_update_gate
+		gate_phase=$(field "$GATE" '@.phase' || true)
+		gate_tag=$(field "$GATE" '@.tag' || true)
+		gate_version=$(field "$GATE" '@.version' || true)
+		case "$gate_phase" in running|failed) ;; *) fail update_in_progress;; esac
+		valid_tag "$gate_tag" || fail invalid_update_gate
+		printf '%s\n' "$gate_version" | grep -Eq '^[A-Za-z0-9._+~-]{1,128}$' || fail invalid_update_gate
+		recovery=1
+	fi
+	[ ! -e "$ROOT/state/maintenance.lock" ] && [ ! -L "$ROOT/state/maintenance.lock" ] || fail maintenance_in_progress
+	WORK=$(mktemp -d /tmp/autovpn-update.XXXXXX) || fail update_workdir_failed
+	chmod 0700 "$WORK"
+	receipt || fail invalid_release_receipt
+	board || fail incompatible_router
+	space_ok || fail insufficient_update_space
+	base="https://github.com/$repo/releases/download/$tag"
+	manifest="manifest-$release-$(printf '%s' "$target" | tr / -)-$architecture.json"
+	download "$manifest" "$MAX_MANIFEST_KIB" "$base/$manifest" || fail update_manifest_download_failed
+	[ "$(field "$WORK/$manifest" '@.schema_version')" = 1 ] || fail invalid_update_manifest
+	[ "$(field "$WORK/$manifest" '@.release')" = "$release" ] || fail update_release_mismatch
+	[ "$(field "$WORK/$manifest" '@.target')" = "$target" ] || fail update_target_mismatch
+	[ "$(field "$WORK/$manifest" '@.architecture')" = "$architecture" ] || fail update_architecture_mismatch
+	[ "$(field "$WORK/$manifest" '@.kernel_release')" = "$kernel_release" ] || fail update_kernel_mismatch
+	[ "$(field "$WORK/$manifest" '@.kernel_package')" = "$kernel_package" ] || fail update_kernel_abi_mismatch
+	[ "$(field "$WORK/$manifest" '@.signing_key_sha256')" = "$key_hash" ] || fail update_signing_key_mismatch
+	name=''; filename=''; sha=''; version=''; controllers=0; index=0
+	# The release can also carry ABI-matched AWG APKs, but this UI path selects
+	# only the controller entry.  No module is downloaded or handed to apk.
+	while [ "$index" -lt 4 ]; do
+		entry_name=$(field "$WORK/$manifest" "@.packages[$index].name" || true)
+		[ -n "$entry_name" ] || break
+		if [ "$entry_name" = autovpn-controller ]; then
+			controllers=$((controllers + 1))
+			name=$entry_name
+			filename=$(field "$WORK/$manifest" "@.packages[$index].filename") || fail invalid_update_manifest
+			sha=$(field "$WORK/$manifest" "@.packages[$index].sha256") || fail invalid_update_manifest
+			version=$(field "$WORK/$manifest" "@.packages[$index].version") || fail update_manifest_missing_package_version
+		fi
+		index=$((index + 1))
+	done
+	[ "$controllers" = 1 ] || fail update_not_controller_only
+	printf '%s\n' "$filename" | grep -Eq '^autovpn-controller-[A-Za-z0-9._+~-]+\.apk$' || fail unsafe_update_filename
+	valid_hash "$sha" || fail invalid_update_hash
+	printf '%s\n' "$version" | grep -Eq '^[A-Za-z0-9._+~-]+$' || fail invalid_update_version
+	current=$(package_version) || fail controller_not_installed
+	comparison=$(apk version -t "$current" "$version") || fail update_version_compare_failed
+	if [ "$recovery" = 1 ]; then
+		gate_comparison=$(apk version -t "$gate_version" "$version") || fail update_version_compare_failed
+		case "$gate_comparison" in '<') ;; '=')
+			[ "$gate_tag" = "$tag" ] && [ "$(field "$GATE" '@.sha256')" = "$sha" ] || fail update_plan_changed ;;
+			*) fail update_not_newer;; esac
+		case "$comparison" in '<'|'=') ;; *) fail update_not_newer;; esac
+	else
+		[ "$comparison" = '<' ] || fail update_not_newer
+	fi
+	download "$filename" "$MAX_APK_KIB" "$base/$filename" || fail update_package_download_failed
+	actual=$(sha256sum "$WORK/$filename") || fail update_package_hash_failed
+	[ "${actual%% *}" = "$sha" ] || fail update_package_hash_mismatch
+	mkdir -p "$WORK/update-key"
+	cp "$KEY" "$WORK/update-key/autovpn-signing.pem"
+	apk --keys-dir "$WORK/update-key" verify "$WORK/$filename" >/dev/null 2>&1 || fail update_package_signature_invalid
+	apk adbdump --format json "$WORK/$filename" >"$WORK/package.json" || fail update_package_metadata_invalid
+	[ "$(field "$WORK/package.json" '@.info.name')" = autovpn-controller ] || fail update_package_name_mismatch
+	[ "$(field "$WORK/package.json" '@.info.version')" = "$version" ] || fail update_package_version_mismatch
+	arch=$(field "$WORK/package.json" '@.info.arch') || fail update_package_architecture_invalid
+	# APK v3 emits ``noarch`` for the controller's PKGARCH:=all.  Keep the
+	# legacy ``all`` spelling accepted too; this updater never handles native
+	# AWG packages, whose architecture stays checked by the release assembler.
+	case "$arch" in noarch|all|"$architecture") ;; *) fail update_package_architecture_mismatch;; esac
+	id="$(uptime)-$(printf '%s' "$sha" | cut -c1-12)"
+	now=$(uptime); expires=$((now + PLAN_TTL))
+	write_state checked '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"filename\":\"$filename\",\"sha256\":\"$sha\",\"expires_uptime\":$expires,\"recovery\":$recovery"
+	printf '{"ok":true,"id":"%s","version":"%s","current_version":"%s","expires_uptime":%s}\n' "$id" "$version" "$current" "$expires"
+}
+
+load_plan() {
+	id=${1:-}
+	printf '%s\n' "$id" | grep -Eq '^[0-9]+-[0-9a-f]{12}$' || return 1
+	[ -f "$STATE" ] || return 1
+	[ "$(field "$STATE" '@.schema_version')" = 1 ] || return 1
+	phase=$(field "$STATE" '@.phase') || return 1
+	case "$phase" in checked|queued) ;; *) return 1;; esac
+	[ "$(field "$STATE" '@.id')" = "$id" ] || return 1
+	tag=$(field "$STATE" '@.tag') || return 1
+	version=$(field "$STATE" '@.version') || return 1
+	filename=$(field "$STATE" '@.filename') || return 1
+	sha=$(field "$STATE" '@.sha256') || return 1
+	expires=$(field "$STATE" '@.expires_uptime') || return 1
+	recovery=$(field "$STATE" '@.recovery' || true)
+	case "$recovery" in 0|1) ;; *) return 1;; esac
+	valid_tag "$tag" && valid_hash "$sha" || return 1
+	[ "$(uptime)" -le "$expires" ]
+}
+
+worker() {
+	id=${1:-}
+	if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
+	HAVE_UPDATE_LOCK=1
+	if ! lock -n /var/lock/autovpn-controller.lock; then fail update_busy '' 75; fi
+	HAVE_CONTROLLER_LOCK=1
+	[ ! -e "$ROOT/state/maintenance.lock" ] && [ ! -L "$ROOT/state/maintenance.lock" ] || fail maintenance_in_progress
+	load_plan "$id" || fail stale_update_plan
+	if [ -e "$GATE" ]; then
+		[ "$recovery" = 1 ] || fail update_in_progress
+	fi
+	plan_id=$id plan_tag=$tag plan_version=$version plan_filename=$filename plan_sha=$sha
+	# A check produces a frozen plan; rerun it immediately before mutation to
+	# re-identify the hardware and re-verify all signed bytes.
+	check_now "$plan_tag" >/dev/null
+	# `check` writes a new nonce. It must nevertheless describe byte-for-byte
+	# the original approval; otherwise a release changed between click and apply.
+	[ "${tag:-}" = "$plan_tag" ] && [ "${version:-}" = "$plan_version" ] && \
+		[ "${filename:-}" = "$plan_filename" ] && [ "${sha:-}" = "$plan_sha" ] || fail update_plan_changed
+	id=$plan_id; tag=$plan_tag; version=$plan_version; filename=$plan_filename; sha=$plan_sha
+	# Close the VPN before writing. Leave it administratively disabled after a
+	# successful update; LuCI maintenance-resume is the explicit recovery gate.
+	/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc network-gate >/dev/null 2>&1 || fail update_network_not_safe
+	[ -z "$(uci -q changes autovpn)" ] || fail update_config_not_clean
+	GATE_EXTRA=",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"sha256\":\"$sha\""
+	write_gate running '' "$GATE_EXTRA"
+	write_state running '' "$GATE_EXTRA"
+	uci set autovpn.main.enabled=0 || fail update_disable_failed
+	uci commit autovpn || fail update_disable_failed
+	sync
+	/usr/libexec/autovpn/runtime-adapter fail-closed >/dev/null 2>&1 || fail update_fail_closed_failed
+	space_ok || fail insufficient_update_space
+	# An empty cache makes dependency additions impossible: installed packages
+	# may satisfy the controller, but no cached/remote APK can be pulled in.
+	mkdir -p "$WORK/empty-cache" "$WORK/update-key"
+	chmod 0700 "$WORK/empty-cache" "$WORK/update-key"
+	cp "$KEY" "$WORK/update-key/autovpn-signing.pem"
+	chmod 0600 "$WORK/update-key/autovpn-signing.pem"
+	# Same isolated inputs for the plan and transaction: no remote/cached
+	# dependency can be introduced by a LuCI application update.
+	plan=$(apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/update-key" add --simulate "$WORK/$filename") || fail update_dependency_plan_failed
+	# apk's transaction lines enumerate every package mutation. Permit exactly
+	# one controller mutation; reject install, purge or replacement of anything
+	# else before committing.
+	plan_lines=$(printf '%s\n' "$plan" | grep -E '^\([[:space:]]*[0-9]+/[0-9]+\) ' || true)
+	[ -n "$plan_lines" ] || fail update_recovery_needs_newer_release
+	[ "$(printf '%s\n' "$plan_lines" | grep -c '^(')" = 1 ] &&
+		printf '%s\n' "$plan_lines" | grep -Eq '^\(1/1\) (Installing|Upgrading|Replacing|Reinstalling) autovpn-controller ' ||
+		fail update_dependency_plan_unsafe
+	apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/update-key" add "$WORK/$filename" || fail update_apk_install_failed
+	installed=$(package_version) || fail update_installed_version_unknown
+	[ "$installed" = "$version" ] || fail update_installed_version_mismatch
+	record_installed_version || fail update_receipt_write_failed
+	write_gate ready '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"installed_version\":\"$installed\""
+	write_state ready '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"installed_version\":\"$installed\""
+}
+
+check_queue() {
+	tag=${1:-}
+	valid_tag "$tag" || fail invalid_update_tag
+	if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
+	HAVE_UPDATE_LOCK=1
+	mkdir -p "$ROOT/state"; chmod 0700 "$ROOT" "$ROOT/state"
+	worker="$ROOT/state/update-check-worker"
+	cp "$0" "$worker"; chmod 0700 "$worker"
+	write_state checking '' ",\"tag\":\"$tag\""
+	lock -u "$LOCK"; HAVE_UPDATE_LOCK=0
+	("$worker" check-worker "$tag") </dev/null >/dev/null 2>&1 &
+	printf '{"ok":true,"phase":"checking","candidate_tag":"%s"}\n' "$tag"
+}
+
+queue() {
+	id=${1:-}
+	if ! lock -n "$LOCK"; then printf '%s\n' '{"ok":false,"code":"update_busy"}'; exit 75; fi
+	HAVE_UPDATE_LOCK=1
+	load_plan "$id" || { printf '%s\n' '{"ok":false,"code":"stale_update_plan"}'; exit 1; }
+	[ "$(field "$STATE" '@.phase')" = checked ] || { printf '%s\n' '{"ok":false,"code":"update_already_queued"}'; exit 1; }
+	# The worker starts detached so rpcd/LuCI is never held across APK install.
+	# The package being replaced contains this script. Copy the verified local
+	# worker before starting it, so an APK file replacement cannot alter a live
+	# maintenance operation. The state directory is root-only and persistent.
+	mkdir -p "$ROOT/state"; chmod 0700 "$ROOT" "$ROOT/state"
+	worker="$ROOT/state/update-worker"
+	cp "$0" "$worker"; chmod 0700 "$worker"
+	# Claim the frozen plan before forking. A second LuCI click now sees
+	# `queued` rather than launching a competing worker.
+	write_state queued '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"filename\":\"$filename\",\"sha256\":\"$sha\",\"expires_uptime\":$expires,\"recovery\":$recovery"
+	lock -u "$LOCK"
+	HAVE_UPDATE_LOCK=0
+	("$worker" worker "$id") </dev/null >/dev/null 2>&1 &
+	printf '{"ok":true,"phase":"queued","id":"%s"}\n' "$id"
+}
+
+status() {
+	current=$(package_version 2>/dev/null || true)
+	printf '%s\n' "$current" | grep -Eq '^[A-Za-z0-9._+~-]{1,128}$' || current=''
+	if [ ! -f "$STATE" ]; then
+		printf '{"ok":true,"phase":"idle","current_version":"%s"}\n' "$current"; return
+	fi
+	phase=$(field "$STATE" '@.phase' || true); code=$(field "$STATE" '@.code' || true)
+	case "$phase" in checking|checked|queued|running|ready|failed) ;; *) phase=invalid;; esac
+	printf '%s\n' "$code" | grep -Eq '^[a-z_]{0,80}$' || code=''
+	candidate_id=$(field "$STATE" '@.id' || true)
+	candidate_tag=$(field "$STATE" '@.tag' || true)
+	candidate_version=$(field "$STATE" '@.version' || true)
+	# Show the durable outcome after an interruption or a rejected check. A
+	# checked recovery candidate still takes precedence until it is approved.
+	if [ "$phase" != checked ] && [ "$phase" != queued ] && [ "$phase" != checking ] && [ -f "$GATE" ]; then
+		gate_phase=$(field "$GATE" '@.phase' || true)
+		case "$gate_phase" in ready|running|failed) phase=$gate_phase;; esac
+		candidate_tag=$(field "$GATE" '@.tag' || true)
+		candidate_version=$(field "$GATE" '@.version' || true)
+	fi
+	printf '%s\n' "$candidate_id" | grep -Eq '^[0-9]+-[0-9a-f]{12}$' || candidate_id=''
+	valid_tag "$candidate_tag" || candidate_tag=''
+	printf '%s\n' "$candidate_version" | grep -Eq '^[A-Za-z0-9._+~-]{1,128}$' || candidate_version=''
+	printf '{"ok":true,"phase":"%s","code":"%s","current_version":"%s","candidate_id":"%s","candidate_tag":"%s","candidate_version":"%s"}\n' \
+		"$phase" "$code" "$current" "$candidate_id" "$candidate_tag" "$candidate_version"
+}
+
+case "${1:-status}" in
+	check) check_queue "${2:-}" ;;
+	check-worker) check_now "${2:-}" ;;
+	queue) queue "${2:-}" ;;
+	worker) worker "${2:-}" ;;
+	status) status ;;
+	*) printf '%s\n' 'usage: update-helper {check TAG|queue ID|worker ID|status}' >&2; exit 64 ;;
+esac

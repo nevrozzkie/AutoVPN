@@ -1,0 +1,18 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=94
+STOP=9
+
+start_service() {
+	[ -f /etc/autovpn/runtime-zapret/run.json ] || return 1
+	procd_open_instance vpn_zapret
+	procd_set_param command /usr/bin/sing-box run -c /etc/autovpn/runtime-zapret/run.json
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_set_param file /etc/autovpn/runtime-zapret/run.json
+	procd_close_instance
+}
+
+# Only the lane controller starts this service after restoring guards/routes.
+boot() { return 0; }

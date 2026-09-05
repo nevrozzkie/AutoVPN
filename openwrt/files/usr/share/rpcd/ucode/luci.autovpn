@@ -1,0 +1,202 @@
+#!/usr/bin/ucode
+
+'use strict';
+
+import { readfile, unlink } from 'fs';
+
+const processRunner = require('autovpn.process');
+
+const SETUP_RESULT_ROOT = '/etc/autovpn/state/setup-result.';
+
+function callController(command, argument, lane) {
+	let argv = ['/usr/sbin/autovpnctl', command];
+	if (argument != null) push(argv, argument);
+	if (lane != null) push(argv, lane);
+	let process = processRunner.popen(argv, 'r');
+	if (process == null)
+		return { ok: false, code: 'controller_start_failed' };
+	let output = process.read(4097) || '';
+	let status = process.close();
+	if (length(output) > 4096) return { ok: false, code: 'controller_invalid_response' };
+	let response;
+	try {
+		response = json(output);
+	}
+	catch (e) {
+		return { ok: false, code: 'controller_invalid_response' };
+	}
+	if (status != 0 && response.ok !== false)
+		return { ok: false, code: 'controller_failed' };
+	return response;
+}
+
+function pingAll(request) {
+	let target = request.args.target;
+	if (type(target) != 'string' || (target != 'youtube' && target != 'instagram'))
+		return { ok: false, code: 'invalid_ping_target' };
+	let lane = request.args.lane || 'vpn';
+	if (lane != 'vpn' && lane != 'vpn_zapret') return { ok: false, code: 'invalid_lane' };
+	return callController('ping-all', target, lane);
+}
+
+function validSetupNonce(value) {
+	return type(value) == 'string' && match(value, /^[A-Za-z0-9_-]{16,48}$/) != null;
+}
+
+function detectWanDevice() {
+	let process = processRunner.popen(['/bin/ubus', 'call', 'network.interface.wan', 'status'], 'r');
+	if (process == null) return null;
+	let raw = process.read(4097) || '';
+	let status = process.close();
+	if (status != 0 || length(raw) > 4096) return null;
+	let response;
+	try { response = json(raw); } catch (e) { return null; }
+	let device = type(response) == 'object' ? response.l3_device : null;
+	return type(device) == 'string' && match(device, /^[A-Za-z0-9_.:-]{1,31}$/) != null ? device : null;
+}
+
+function setupResult(nonce) {
+	let path = SETUP_RESULT_ROOT + nonce + '.json';
+	let raw = readfile(path, 4097);
+	unlink(path);
+	if (raw == null || length(raw) > 4096) return { ok: false, code: 'setup_result_missing' };
+	let response;
+	try { response = json(raw); } catch (e) { return { ok: false, code: 'setup_result_invalid' }; }
+	return type(response) == 'object' && type(response.ok) == 'bool'
+		? response
+		: { ok: false, code: 'setup_result_invalid' };
+}
+
+function configureSetup(request) {
+	let nonce = request.args.nonce;
+	if (!validSetupNonce(nonce)) return { ok: false, code: 'invalid_setup_nonce' };
+	let wan = detectWanDevice();
+	if (wan == null) return { ok: false, code: 'wan_not_ready' };
+	/*
+	 * `credential` is passed only in this private stdin JSON. It is intentionally
+	 * absent from argv, UCI, output and the persisted result.
+	 */
+	let input = {
+		base_url: request.args.base_url,
+		router_id: request.args.router_id,
+		credential: request.args.credential,
+		base_ssid: request.args.base_ssid,
+		password: request.args.password,
+		wan_device: wan,
+	};
+	let encoded = sprintf('%J\n', input);
+	if (length(encoded) > 4096) return { ok: false, code: 'setup_request_too_large' };
+	/* A reused nonce must never turn an old private success result into a new one. */
+	unlink(SETUP_RESULT_ROOT + nonce + '.json');
+	let process = processRunner.popen(['/usr/sbin/autovpnctl', 'setup', nonce], 'w');
+	if (process == null) return { ok: false, code: 'setup_start_failed' };
+	let wrote = process.write(encoded);
+	let status = process.close();
+	if (wrote == null || status != 0) {
+		let result = setupResult(nonce);
+		return result.ok === true ? { ok: false, code: 'setup_failed' } : result;
+	}
+	return setupResult(nonce);
+}
+
+function maintain(request) {
+	let args = request.args;
+	if (!validSetupNonce(args.nonce)) return { ok: false, code: 'invalid_nonce' };
+	if (args.action != 'rotate' && args.action != 'rebind' && args.action != 'reset')
+		return { ok: false, code: 'invalid_maintenance_action' };
+	let encoded = sprintf('%J\n', {
+		action: args.action, base_url: args.base_url, router_id: args.router_id,
+		credential: args.credential, confirmation: args.confirmation,
+	});
+	if (length(encoded) > 4096) return { ok: false, code: 'maintenance_request_too_large' };
+	let path = '/etc/autovpn/state/maintenance-result.' + args.nonce + '.json';
+	unlink(path);
+	let process = processRunner.popen(['/usr/sbin/autovpnctl', 'maintenance', args.nonce], 'w');
+	if (process == null) return { ok: false, code: 'maintenance_start_failed' };
+	let wrote = process.write(encoded);
+	let status = process.close();
+	let raw = readfile(path, 4097);
+	unlink(path);
+	if (raw == null || length(raw) > 4096) return { ok: false, code: 'maintenance_result_missing' };
+	let result;
+	try { result = json(raw); } catch (e) { return { ok: false, code: 'maintenance_result_invalid' }; }
+	if (type(result) != 'object' || type(result.ok) != 'bool') return { ok: false, code: 'maintenance_result_invalid' };
+	if ((wrote != length(encoded) || status != 0) && result.ok)
+		return { ok: false, code: 'maintenance_failed' };
+	return result;
+}
+
+return {
+	'luci.autovpn': {
+		zapret_install: { call: function() { return callController('zapret-install'); } },
+		zapret_install_status: { call: function() { return callController('zapret-install-status'); } },
+		maintenance_action: {
+			args: { nonce: '', action: '', base_url: '', router_id: '', credential: '', confirmation: '' },
+			call: function(request) { return maintain(request); },
+		},
+		maintenance_resume: { call: function() { return callController('maintenance-resume'); } },
+		update_status: { call: function() { return callController('update-status'); } },
+		update_check: {
+			args: { tag: '' },
+			call: function(request) {
+				let tag = request.args.tag;
+				if (type(tag) != 'string' || match(tag, /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/) == null)
+					return { ok: false, code: 'invalid_update_tag' };
+				return callController('update-check', tag);
+			},
+		},
+		update_apply: {
+			args: { candidate_id: '' },
+			call: function(request) {
+				let id = request.args.candidate_id;
+				if (type(id) != 'string' || match(id, /^[0-9]+-[0-9a-f]{12}$/) == null)
+					return { ok: false, code: 'invalid_update_id' };
+				return callController('update-apply', id);
+			},
+		},
+		setup_configure: {
+			args: { nonce: '', base_url: '', router_id: '', credential: '', base_ssid: '', password: '' },
+			call: function(request) { return configureSetup(request); },
+		},
+		setup_activate: {
+			call: function() { return callController('setup-activate'); },
+		},
+		network_status: {
+			call: function() { return callController('network-status'); },
+		},
+		network_setup: {
+			call: function() { return callController('network-setup'); },
+		},
+		network_confirm: {
+			args: { transaction_id: '' },
+			call: function(request) {
+				let id = request.args.transaction_id;
+				if (type(id) != 'string' || length(id) > 40 || match(id, /^[0-9]+-[0-9]+$/) == null)
+					return { ok: false, code: 'invalid_transaction_id' };
+				return callController('network-confirm', id);
+			},
+		},
+		status: {
+			call: function() {
+				return callController('status');
+			},
+		},
+		ru_db_status: {
+			call: function() { return callController('ru-db-status'); },
+		},
+		refresh: {
+			call: function() {
+				return callController('refresh');
+			},
+		},
+		apply_policy: {
+			call: function() {
+				return callController('apply-policy');
+			},
+		},
+		ping_all: {
+			args: { target: '', lane: '' },
+			call: function(request) { return pingAll(request); },
+		},
+	},
+};

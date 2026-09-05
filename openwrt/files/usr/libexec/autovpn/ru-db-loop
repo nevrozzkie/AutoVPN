@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# Separate procd instance: database downloads never delay VPN health/failover.
+while :; do
+	/usr/libexec/autovpn/ru-db-update tick >/dev/null 2>&1
+	sleep 3600
+done

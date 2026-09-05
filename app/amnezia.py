@@ -4,14 +4,18 @@ import base64
 import ipaddress
 import json
 import secrets
+import unicodedata
 import zlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from app.config import settings
 from app.profile_names import profile_name
+
+if TYPE_CHECKING:
+    from app.vpn_config import CapturedVpnConfig, VpnClient
 
 
 AMNEZIA_SERVER_ADDRESS = "10.66.66.1/24"
@@ -53,12 +57,21 @@ def generate_obfuscation_settings() -> dict[str, int]:
     }
 
 
-def client_amnezia_address(client_id: int) -> str:
+def client_amnezia_address(client_id: int, network_prefix: str | None = None) -> str:
     octet = client_id + 1
     if octet > 254:
         raise ValueError("AMNEZIA_NETWORK_PREFIX supports up to 253 clients in MVP")
-    ipaddress.ip_address(f"{settings.amnezia_network_prefix}.{octet}")
-    return f"{settings.amnezia_network_prefix}.{octet}"
+    prefix = network_prefix or settings.amnezia_network_prefix
+    ipaddress.ip_address(f"{prefix}.{octet}")
+    return f"{prefix}.{octet}"
+
+
+def _config_comment(value: object) -> str:
+    without_controls = "".join(
+        " " if unicodedata.category(character).startswith("C") else character
+        for character in str(value)
+    )
+    return " ".join(without_controls.split())
 
 
 def build_amnezia_client_config(
@@ -68,13 +81,15 @@ def build_amnezia_client_config(
     server_public_key: str,
     obfuscation: dict[str, int],
     endpoint_port: int | None = None,
+    dns: str | None = None,
 ) -> str:
     address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
     port = endpoint_port or settings.amnezia_port
+    dns_value = settings.amnezia_dns if dns is None else dns
     return f"""[Interface]
 PrivateKey = {client["amnezia_private_key"]}
 Address = {address}/32
-DNS = {settings.amnezia_dns}
+DNS = {dns_value}
 Jc = {obfuscation["jc"]}
 Jmin = {obfuscation["jmin"]}
 Jmax = {obfuscation["jmax"]}
@@ -101,17 +116,22 @@ def build_amnezia_vpn_key(
     server_public_key: str,
     obfuscation: dict[str, int],
     endpoint_port: int | None = None,
+    network_prefix: str | None = None,
+    dns: str | None = None,
 ) -> str:
     port = endpoint_port or settings.amnezia_port
+    prefix = network_prefix or settings.amnezia_network_prefix
+    dns_value = settings.amnezia_dns if dns is None else dns
     config = build_amnezia_client_config(
         client,
         current_ip=current_ip,
         server_public_key=server_public_key,
         obfuscation=obfuscation,
         endpoint_port=port,
+        dns=dns_value,
     )
     address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
-    dns_values = [item.strip() for item in settings.amnezia_dns.split(",") if item.strip()]
+    dns_values = [item.strip() for item in dns_value.split(",") if item.strip()]
     dns1 = dns_values[0] if dns_values else "1.1.1.1"
     dns2 = dns_values[1] if len(dns_values) > 1 else dns1
     awg = {
@@ -152,7 +172,7 @@ def build_amnezia_vpn_key(
                     **awg,
                     "port": str(port),
                     "protocol_version": "2",
-                    "subnet_address": f"{settings.amnezia_network_prefix}.0",
+                    "subnet_address": f"{prefix}.0",
                     "transport_proto": "udp",
                 },
                 "container": "amnezia-awg2",
@@ -175,14 +195,17 @@ def build_amnezia_server_config(
     server_private_key: str,
     obfuscation: dict[str, int],
     listen_port: int | None = None,
+    network_prefix: str | None = None,
 ) -> str:
     port = listen_port or settings.amnezia_port
+    prefix = network_prefix or settings.amnezia_network_prefix
+    server_address = f"{prefix}.1/24"
     peer_blocks = []
     for client in clients:
         address = client.get("amnezia_ipv4") or client_amnezia_address(int(client["id"]))
         peer_blocks.append(
             f"""[Peer]
-# {client["name"]}
+# {_config_comment(client["name"])}
 PublicKey = {client["amnezia_public_key"]}
 PresharedKey = {client["amnezia_preshared_key"]}
 AllowedIPs = {address}/32
@@ -191,7 +214,7 @@ AllowedIPs = {address}/32
     peers = "\n".join(peer_blocks)
     return f"""[Interface]
 PrivateKey = {server_private_key}
-Address = {AMNEZIA_SERVER_ADDRESS}
+Address = {server_address}
 ListenPort = {port}
 Jc = {obfuscation["jc"]}
 Jmin = {obfuscation["jmin"]}
@@ -202,8 +225,51 @@ H1 = {obfuscation["h1"]}
 H2 = {obfuscation["h2"]}
 H3 = {obfuscation["h3"]}
 H4 = {obfuscation["h4"]}
-PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -t nat -A POSTROUTING -s {settings.amnezia_network_prefix}.0/24 -o $(ip route show default | awk '{{print $5; exit}}') -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -s {settings.amnezia_network_prefix}.0/24 -o $(ip route show default | awk '{{print $5; exit}}') -j MASQUERADE
+PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -t nat -A POSTROUTING -s {prefix}.0/24 -o $(ip route show default | awk '{{print $5; exit}}') -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s {prefix}.0/24 -o $(ip route show default | awk '{{print $5; exit}}') -j MASQUERADE
 
 {peers}
 """
+
+
+def render_amnezia_client_config(config: "CapturedVpnConfig", client: "VpnClient") -> str:
+    return build_amnezia_client_config(
+        client.as_dict(),
+        current_ip=config.current_ip,
+        server_public_key=config.amnezia.server_public_key,
+        obfuscation=config.amnezia.obfuscation.as_dict(),
+        endpoint_port=config.amnezia.protocol.port,
+        dns=config.amnezia.dns,
+    )
+
+
+def render_amnezia_vpn_key(config: "CapturedVpnConfig", client: "VpnClient") -> str:
+    return build_amnezia_vpn_key(
+        client.as_dict(),
+        current_ip=config.current_ip,
+        server_public_key=config.amnezia.server_public_key,
+        obfuscation=config.amnezia.obfuscation.as_dict(),
+        endpoint_port=config.amnezia.protocol.port,
+        network_prefix=config.amnezia.network_prefix,
+        dns=config.amnezia.dns,
+    )
+
+
+def render_amnezia_server_config(config: "CapturedVpnConfig") -> str:
+    peers = [client.as_dict() for client in config.enabled_clients]
+    peers.extend(
+        {
+            "name": f"router {peer.router_id} vpn_zapret",
+            "amnezia_public_key": peer.public_key,
+            "amnezia_preshared_key": peer.preshared_key,
+            "amnezia_ipv4": peer.ipv4,
+        }
+        for peer in config.router_amnezia_peers
+    )
+    return build_amnezia_server_config(
+        peers,
+        server_private_key=config.amnezia.server_private_key,
+        obfuscation=config.amnezia.obfuscation.as_dict(),
+        listen_port=config.amnezia.protocol.port,
+        network_prefix=config.amnezia.network_prefix,
+    )

@@ -11,28 +11,45 @@ import tempfile
 import time
 from typing import Any
 
-from app.config import settings
-from app.amnezia import build_amnezia_server_config
+from app.amnezia import render_amnezia_server_config
+from app.hysteria_auth import render_hysteria_server_auth
 from app.db import (
     get_setting,
-    list_clients,
+    heartbeat_install_operation,
     update_install_operation,
 )
 from app.runtime_config import (
-    amnezia_port,
     eu_ssh_host,
     eu_ssh_key_path,
     eu_ssh_password,
     eu_ssh_port,
     eu_ssh_user,
-    hysteria_port,
     ssh_connect_timeout_seconds,
-    vless_port,
+    server_command_timeout_seconds,
+    transactional_vpn_apply_enabled,
+    vpn_deploy_timeout_seconds,
+    vpn_lease_heartbeat_seconds,
 )
 from app.protocol_status import refresh_protocol_statuses
+from app.remote_apply import (
+    render_config_apply_script,
+    render_transactional_install_script,
+)
+from app.secret_sanitization import sanitize_error
+from app.vpn_config import CapturedVpnConfig, capture_vpn_config
+from app.vpn_state import (
+    complete_install_operation,
+    fail_install_operation,
+    load_install_snapshot,
+    mark_install_operation_ambiguous,
+)
 
 
 class EuInstallError(RuntimeError):
+    pass
+
+
+class EuInstallStateUncertainError(EuInstallError):
     pass
 
 
@@ -49,37 +66,19 @@ def xray_client_email(client: dict[str, Any]) -> str:
     return f"{_safe_label(client['name'])}-{client['id']}"
 
 
-def _enabled_clients() -> list[dict[str, Any]]:
-    return [client for client in list_clients() if client["enabled"]]
-
-
-def build_eu_install_script() -> str:
-    clients = _enabled_clients()
-    reality_private_key = get_setting("vless.reality_private_key")
-    reality_short_id = get_setting("vless.reality_short_id")
-    server_private_key = get_setting("amnezia.server_private_key")
-    current_vless_port = vless_port()
-    current_hysteria_port = hysteria_port()
-    current_amnezia_port = amnezia_port()
-    amnezia_obfuscation = {
-        "jc": int(get_setting("amnezia.jc", "5")),
-        "jmin": int(get_setting("amnezia.jmin", "40")),
-        "jmax": int(get_setting("amnezia.jmax", "1000")),
-        "s1": int(get_setting("amnezia.s1", "64")),
-        "s2": int(get_setting("amnezia.s2", "128")),
-        "h1": int(get_setting("amnezia.h1", "1")),
-        "h2": int(get_setting("amnezia.h2", "2")),
-        "h3": int(get_setting("amnezia.h3", "3")),
-        "h4": int(get_setting("amnezia.h4", "4")),
-    }
+def build_eu_install_script(config: CapturedVpnConfig | None = None) -> str:
+    config = config or capture_vpn_config()
+    clients = [client.as_dict() for client in config.enabled_clients]
+    current_vless_port = config.vless.protocol.port if config.vless.protocol.enabled else None
+    current_hysteria_port = (
+        config.hysteria.protocol.port if config.hysteria.protocol.enabled else None
+    )
+    current_amnezia_port = (
+        config.amnezia.protocol.port if config.amnezia.protocol.enabled else None
+    )
     amnezia_config = ""
     if current_amnezia_port is not None:
-        amnezia_config = build_amnezia_server_config(
-            clients,
-            server_private_key=server_private_key,
-            obfuscation=amnezia_obfuscation,
-            listen_port=current_amnezia_port,
-        )
+        amnezia_config = render_amnezia_server_config(config)
     xray_clients = [
         {
             "id": client["vless_uuid"],
@@ -88,8 +87,7 @@ def build_eu_install_script() -> str:
         }
         for client in clients
     ]
-    hysteria_password = get_setting("hysteria.password")
-    hysteria_obfs_password = get_setting("hysteria.obfs_password")
+    hysteria_obfs_password = config.hysteria.obfs_password
 
     xray_config = {
         "log": {"loglevel": "warning"},
@@ -151,10 +149,10 @@ def build_eu_install_script() -> str:
                     "security": "reality",
                     "realitySettings": {
                         "show": False,
-                        "target": settings.vless_reality_target,
-                        "serverNames": settings.vless_reality_server_names,
-                        "privateKey": reality_private_key,
-                        "shortIds": [reality_short_id],
+                        "target": config.vless.target,
+                        "serverNames": list(config.vless.server_names),
+                        "privateKey": config.vless.private_key,
+                        "shortIds": [config.vless.short_id],
                     },
                 },
                 "sniffing": {
@@ -182,7 +180,7 @@ fi
         vless_firewall_script = ""
     if current_hysteria_port is not None:
         hysteria_config_script = f"""
-HYSTERIA_SNI={shlex.quote(settings.vless_reality_server_name)}
+HYSTERIA_SNI={shlex.quote(config.vless.server_name)}
 if [ ! -f /etc/autovpn/hysteria.key ] || [ ! -f /etc/autovpn/hysteria.crt ] || ! openssl x509 -in /etc/autovpn/hysteria.crt -noout -subject | grep -Eq "CN ?= ?${{HYSTERIA_SNI}}"; then
   rm -f /etc/autovpn/hysteria.key /etc/autovpn/hysteria.crt
   openssl req -x509 -newkey rsa:2048 -nodes \\
@@ -206,9 +204,7 @@ tls:
   cert: /etc/autovpn/hysteria.crt
   key: /etc/autovpn/hysteria.key
 
-auth:
-  type: password
-  password: {json.dumps(hysteria_password)}
+{render_hysteria_server_auth(config)}
 
 obfs:
   type: salamander
@@ -385,6 +381,23 @@ echo "[autovpn] done"
 """
 
 
+def build_eu_config_apply_script(config: CapturedVpnConfig) -> str:
+    return render_config_apply_script(config, revision=config.revision)
+
+
+def build_eu_deploy_script(
+    config: CapturedVpnConfig | None = None,
+    *,
+    transactional: bool | None = None,
+) -> str:
+    config = config or capture_vpn_config()
+    if transactional is None:
+        transactional = transactional_vpn_apply_enabled()
+    if transactional:
+        return render_transactional_install_script(config)
+    return build_eu_install_script(config)
+
+
 def build_ssh_command(host: str, remote_command: str = "printf 'autovpn-ssh-ok\\n' && uname -a") -> list[str]:
     if not host:
         raise EuInstallError("EU SSH host is not configured and current_ip is empty")
@@ -457,7 +470,10 @@ def _probe_ssh_banner(host: str) -> str:
 
 def _format_ssh_error(host: str, exc: Exception) -> str:
     target = f"{eu_ssh_user()}@{host}:{eu_ssh_port()}"
-    message = str(exc) or exc.__class__.__name__
+    message = sanitize_error(
+        str(exc) or exc.__class__.__name__,
+        eu_ssh_password(),
+    )
     if "Error reading SSH protocol banner" in message or "No existing session" in message:
         hint = f"SSH handshake failed for {target}: Paramiko could not complete the SSH handshake."
         try:
@@ -486,7 +502,12 @@ def _redact_password(text: str, password: str) -> str:
     return text.replace(password, "***")
 
 
-def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
+def _ssh_exec_system_password(
+    host: str,
+    command: str,
+    stdin_data: str = "",
+    command_timeout: float | None = None,
+) -> tuple[int, str]:
     password = eu_ssh_password()
     if not password:
         raise EuInstallError("Configure EU_SSH_PASSWORD")
@@ -515,6 +536,7 @@ def _ssh_exec_system_password(host: str, command: str, stdin_data: str = "") -> 
             stderr=subprocess.STDOUT,
             env=env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+            timeout=command_timeout,
             check=False,
         )
         output = result.stdout.decode("utf-8", errors="replace")
@@ -573,7 +595,12 @@ def _build_verified_ssh_client(paramiko):  # type: ignore[no-untyped-def]
     return ssh
 
 
-def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
+def _ssh_exec(
+    host: str,
+    command: str,
+    stdin_data: str = "",
+    command_timeout: float | None = None,
+) -> tuple[int, str]:
     import paramiko
 
     if not host:
@@ -584,7 +611,9 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         raise EuInstallError("Configure EU_SSH_PASSWORD or EU_SSH_KEY_PATH")
 
     if password and os.name != "nt":
-        return _ssh_exec_system_password(host, command, stdin_data)
+        return _ssh_exec_system_password(
+            host, command, stdin_data, command_timeout=command_timeout
+        )
 
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
@@ -606,7 +635,9 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
         ssh = _build_verified_ssh_client(paramiko)
         try:
             ssh.connect(**connect_kwargs)
-            stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
+            stdin, stdout, stderr = ssh.exec_command(
+                command, get_pty=True, timeout=command_timeout
+            )
             if stdin_data:
                 stdin.write(stdin_data)
             stdin.channel.shutdown_write()
@@ -643,23 +674,87 @@ def _ssh_exec(host: str, command: str, stdin_data: str = "") -> tuple[int, str]:
     raise EuInstallError(_format_ssh_error(host, last_exc or RuntimeError("unknown SSH error")))
 
 
-def _run_script_over_ssh(host: str, script: str) -> tuple[int, str]:
-    return _ssh_exec(host, "bash -s", script)
+def _run_script_over_ssh(
+    host: str,
+    script: str,
+    timeout: float | None = None,
+) -> tuple[int, str]:
+    return _ssh_exec(host, "bash -s", script, command_timeout=timeout)
+
+
+async def _run_script_over_ssh_async(
+    host: str,
+    script: str,
+    timeout: float,
+) -> tuple[int, str]:
+    return await asyncio.to_thread(_run_script_over_ssh, host, script, timeout)
+
+
+async def _run_deploy_with_heartbeat(
+    operation_id: int,
+    host: str,
+    script: str,
+    *,
+    timeout: float,
+    heartbeat_interval: float,
+) -> tuple[int, str]:
+    timeout = max(0.01, float(timeout))
+    heartbeat_interval = max(0.01, min(float(heartbeat_interval), timeout))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    task = asyncio.create_task(_run_script_over_ssh_async(host, script, timeout))
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise EuInstallStateUncertainError(
+                    f"Remote VPN deployment timed out after {timeout:g} seconds; "
+                    "the VPS state requires manual verification"
+                )
+            done, _ = await asyncio.wait(
+                {task}, timeout=min(heartbeat_interval, remaining)
+            )
+            if task in done:
+                return task.result()
+            if loop.time() >= deadline:
+                raise EuInstallStateUncertainError(
+                    f"Remote VPN deployment timed out after {timeout:g} seconds; "
+                    "the VPS state requires manual verification"
+                )
+            if not heartbeat_install_operation(operation_id):
+                raise EuInstallStateUncertainError(
+                    "Remote VPN deployment lost its durable VPS lease; "
+                    "the VPS state requires manual verification"
+                )
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 async def run_remote_command(
     host: str,
     command: str,
     stdin_data: str = "",
+    timeout: float | None = None,
 ) -> tuple[int, str]:
-    return await asyncio.to_thread(_ssh_exec, host, command, stdin_data)
+    if timeout is None:
+        timeout = float(server_command_timeout_seconds())
+    return await asyncio.to_thread(
+        _ssh_exec,
+        host,
+        command,
+        stdin_data,
+        command_timeout=timeout,
+    )
 
 
 async def run_eu_install(operation_id: int) -> None:
-    host = resolve_eu_host()
-    script = build_eu_install_script()
-
     try:
+        operation, config = load_install_snapshot(operation_id)
+        host = str(operation["target_host"] or "")
+        transactional = transactional_vpn_apply_enabled()
+        script = build_eu_deploy_script(config, transactional=transactional)
         update_install_operation(
             operation_id,
             status="RUNNING",
@@ -669,26 +764,37 @@ async def run_eu_install(operation_id: int) -> None:
         update_install_operation(
             operation_id,
             current_step="remote_install_running",
-            output="Remote install started. It can take several minutes while apt, xray, hysteria and amneziawg are installed.",
+            output=(
+                "Transactional VPN deployment started. Package bootstrap runs only "
+                "when required, then the staged config apply is validated and switched."
+                if transactional
+                else "Remote install started. It can take several minutes while apt, "
+                "xray, hysteria and amneziawg are installed."
+            ),
         )
-        exit_code, output = await asyncio.to_thread(_run_script_over_ssh, host, script)
+        exit_code, output = await _run_deploy_with_heartbeat(
+            operation_id,
+            host,
+            script,
+            timeout=float(vpn_deploy_timeout_seconds()),
+            heartbeat_interval=float(vpn_lease_heartbeat_seconds()),
+        )
         output_tail = output[-12000:]
         if exit_code != 0:
             raise EuInstallError(
                 f"SSH install failed with exit code {exit_code}\n{output_tail}"
             )
         await refresh_protocol_statuses(host)
-        update_install_operation(
+        complete_install_operation(operation_id, output_tail)
+    except EuInstallStateUncertainError as exc:
+        mark_install_operation_ambiguous(
             operation_id,
-            status="DONE",
-            current_step="done",
-            output=output_tail,
+            sanitize_error(exc, eu_ssh_password(), limit=12000),
         )
+        raise
     except Exception as exc:
-        update_install_operation(
+        fail_install_operation(
             operation_id,
-            status="FAILED",
-            current_step="failed",
-            error_message=str(exc)[-12000:],
+            sanitize_error(exc, eu_ssh_password(), limit=12000),
         )
         raise
