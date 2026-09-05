@@ -24,7 +24,7 @@ define Package/amneziawg-tools
   SUBMENU:=VPN
   TITLE:=AmneziaWG userspace control program
   URL:=https://github.com/amnezia-vpn/amneziawg-tools
-  DEPENDS:=+kmod-amneziawg
+  DEPENDS:=+kmod-amneziawg +libgcc
 endef
 
 define Package/amneziawg-tools/description

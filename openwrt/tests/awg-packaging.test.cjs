@@ -23,6 +23,8 @@ test('AmneziaWG packages pin the audited standalone module and matching tools so
 	assert.match(toolsRecipe, /PKG_VERSION:=1\.0\.20250903/);
 	assert.match(toolsRecipe, /PKG_HASH:=d729a6f54aafcd55b2cbb7324f09ca8f0d2536772970652bf822a271d0c907d7/);
 	assert.match(toolsRecipe, /\$\(INSTALL_BIN\) \$\(PKG_BUILD_DIR\)\/src\/wg \$\(1\)\/usr\/bin\/awg/);
+	assert.match(toolsRecipe, /DEPENDS:=\+kmod-amneziawg \+libgcc/,
+		'the actual ARM64 tools ELF links libgcc_s.so.1');
 });
 
 test('tools package contains only awg and the exact immutable engine contract', () => {
