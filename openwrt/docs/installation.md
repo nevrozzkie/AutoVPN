@@ -11,7 +11,9 @@ Controller 0.14.0, AmneziaWG tools и модуль собраны и подпи�
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Опубликован [предварительный установочный релиз r2](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r2).
+Опубликован [предварительный установочный релиз r3](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r3).
+Он исправляет определение APK-архитектуры на штатном OpenWrt и сам устанавливает
+`coreutils-stty`, необходимый для скрытого ввода Wi-Fi-пароля. APK совпадают с r2.
 Команда ниже загружает готовый установщик из него. Нельзя просто
 запустить исходный `openwrt/scripts/install.sh`: это шаблон, который откажется
 работать без закреплённых manifest, хеша и публичного ключа. Не подставляйте
@@ -55,7 +57,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.0-openwrt-25.12.5-r2/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.0-openwrt-25.12.5-r3/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -66,9 +68,11 @@ df -h /overlay /tmp
 скачивания возможна уже после установки APK, до изменения Wi-Fi. В таком случае
 сохраните вывод ошибки; не отключайте проверку подписей и не переустанавливайте прошивку.
 
-Для r2 требуется минимум **38 МиБ свободного `/overlay` и 64 МиБ `/tmp`**.
+Для r3 требуется минимум **38 МиБ свободного `/overlay` и 64 МиБ `/tmp`**.
 Порог рассчитан по размерам файлов и зависимостей с запасом, а не по результату
 установки на устройство. [Проверки релиза и бюджет](installer-release-r2.md).
+Дополнительный `coreutils-stty` занимает 73 925 байт файлов и 34 538 байт APK
+по каталогу 25.12.5; он укладывается в запас r2, пороги manifest не уменьшены.
 
 Обычные зависимости берутся из официальных OpenWrt feeds; custom APK и
 закреплённый installer — из GitHub Release; zapret — из закреплённых upstream

@@ -82,7 +82,7 @@ test('monorepo root invocation uses the router template, never the server instal
   assert.equal(result.status, 0, result.stderr);
   const install = readFileSync(join(output, 'install.sh'), 'utf8');
   assert.match(install, /Configure the site URL and token in LuCI/);
-  assert.match(install, /apk --print-arch/);
+  assert.match(install, /arch_file=\/etc\/apk\/arch/);
   assert.doesNotMatch(install, /@AUTOVPN_|APP_DIR=.*opt\/autovpn/);
 });
 

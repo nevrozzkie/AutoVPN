@@ -21,7 +21,7 @@ root-only сменяемый credential и journal/state отделены от �
 OpenWrt 25.12.5, подписаны и проверены; локальная проверка прошла 312 тестов.
 [Протокол сборки, kernel ABI и размер](docs/awg-sdk-build.md).
 Проверка установки и туннелей на устройстве ещё не выполнена. Опубликован
-[предварительный установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r2).
+[предварительный установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r3).
 [Проверка 0.11.0](docs/validation-0.11.md)
 сохранена как исторический отчёт, а не актуальный статус сборки.
 
