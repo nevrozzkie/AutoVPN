@@ -122,8 +122,16 @@ def validate_metadata(info: dict, expected_name: str, architecture: str, kernel_
     arch = info.get("arch")
     if name != expected_name:
         die(f"APK filename says {expected_name}, metadata says {name!r}")
-    if arch not in {"all", architecture}:
-        die(f"APK {expected_name} has arch {arch!r}; expected all or {architecture}")
+    if expected_name == "autovpn-controller":
+        # APK v3 reports OpenWrt's PKGARCH:=all as ``noarch``.  Older
+        # controller releases used ``all``, and a target-specific controller
+        # remains valid for the selected release only.
+        if arch not in {"noarch", "all", architecture}:
+            die(f"APK autovpn-controller has arch {arch!r}; expected noarch, all or {architecture}")
+    elif arch != architecture:
+        # The AWG module/tools contain native code.  Do not let the
+        # controller's noarch compatibility broaden their ABI boundary.
+        die(f"APK {expected_name} has arch {arch!r}; expected {architecture}")
     depends = string_list(info.get("depends"), f"{expected_name} depends")
     if expected_name == "autovpn-controller":
         version = info.get("version")

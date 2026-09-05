@@ -85,6 +85,13 @@ test('manual check and apply queues execute real shell workers and reach ready',
 	assert.equal(fs.readFileSync(f.gate, 'utf8'), before);
 });
 
+test('check-worker accepts APK v3 noarch metadata for the controller', t => {
+	const f = fixture(t, {FAKE_CONTROLLER_ARCH: 'noarch'});
+	const id = f.check();
+	assert.match(id, /^100-[0-9a-f]{12}$/);
+	assert.equal(f.status().phase, 'checked');
+});
+
 test('unsafe dependency plan is rejected by worker before package commit', t => {
 	const f = fixture(t, {FAKE_BAD_PLAN: '1'});
 	const id = f.check();

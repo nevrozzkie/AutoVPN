@@ -215,7 +215,10 @@ check_now() {
 	[ "$(field "$WORK/package.json" '@.info.name')" = autovpn-controller ] || fail update_package_name_mismatch
 	[ "$(field "$WORK/package.json" '@.info.version')" = "$version" ] || fail update_package_version_mismatch
 	arch=$(field "$WORK/package.json" '@.info.arch') || fail update_package_architecture_invalid
-	case "$arch" in all|"$architecture") ;; *) fail update_package_architecture_mismatch;; esac
+	# APK v3 emits ``noarch`` for the controller's PKGARCH:=all.  Keep the
+	# legacy ``all`` spelling accepted too; this updater never handles native
+	# AWG packages, whose architecture stays checked by the release assembler.
+	case "$arch" in noarch|all|"$architecture") ;; *) fail update_package_architecture_mismatch;; esac
 	id="$(uptime)-$(printf '%s' "$sha" | cut -c1-12)"
 	now=$(uptime); expires=$((now + PLAN_TTL))
 	write_state checked '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"filename\":\"$filename\",\"sha256\":\"$sha\",\"expires_uptime\":$expires,\"recovery\":$recovery"

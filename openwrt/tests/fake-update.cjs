@@ -26,7 +26,7 @@ else if (name === 'curl') {
 	if (args.includes('--print-arch')) write('aarch64_cortex-a53');
 	else if (args.includes('query')) write([{name: args.includes('kernel') ? 'kernel' : 'autovpn-controller', version: args.includes('kernel') ? '6.12.85~fixture' : current()}]);
 	else if (args.includes('version')) write(args.at(-2) === args.at(-1) ? '=' : args.at(-2) < args.at(-1) ? '<' : '>');
-	else if (args.includes('adbdump')) write({info: {name: 'autovpn-controller', version: '0.8.0-r1', arch: 'all'}});
+	else if (args.includes('adbdump')) write({info: {name: 'autovpn-controller', version: '0.8.0-r1', arch: env.FAKE_CONTROLLER_ARCH || 'all'}});
 	else if (args.includes('verify')) { if (env.FAKE_BAD_SIGNATURE === '1') process.exit(1); }
 	else if (args.includes('--simulate')) {
 		write(env.FAKE_BAD_PLAN === '1' ? '(1/2) Upgrading autovpn-controller (0.7 -> 0.8)\n(2/2) Purging other (1)' :
