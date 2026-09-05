@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import stat
@@ -158,7 +160,7 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "router_apply_results",
         "routers",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7, 8]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
@@ -167,6 +169,7 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "router_credentials",
         "router_apply_results",
         "routers",
+        "hysteria_per_client_auth",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS
@@ -246,7 +249,7 @@ def test_router_migration_backfills_one_stable_router_per_legacy_credential(
     ]
 
 
-def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
+def test_legacy_upgrade_rotates_only_hysteria_auth_and_creates_verified_backup(
     database_path: Path,
 ) -> None:
     material = _create_current_legacy_database(database_path)
@@ -258,12 +261,15 @@ def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
     for key in (
         "token",
         "vless_uuid",
-        "hysteria_password",
         "amnezia_private_key",
         "amnezia_public_key",
         "amnezia_preshared_key",
     ):
         assert client[key].encode() == material[key].encode()
+    assert len(client["hysteria_password"]) >= 32
+    assert client["hysteria_password"] not in (
+        material["hysteria_password"], material["hysteria_server_password"],
+    )
 
     with get_db() as connection:
         assert connection.execute(
@@ -278,7 +284,7 @@ def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
         assert migrated_client == {"deleted_at": None, "deleted_revision": None}
         assert connection.execute(
             "SELECT desired_revision, applied_revision FROM vpn_state WHERE singleton = 1"
-        ).fetchone() == {"desired_revision": 0, "applied_revision": None}
+        ).fetchone() == {"desired_revision": 1, "applied_revision": None}
         install_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(vpn_install_operations)")
         }
@@ -322,8 +328,9 @@ def test_legacy_upgrade_preserves_all_credentials_and_creates_verified_backup(
 
 
 def test_migration_is_applied_and_backed_up_exactly_once(database_path: Path) -> None:
-    _create_current_legacy_database(database_path)
+    material = _create_current_legacy_database(database_path)
     init_db()
+    client_before = get_client_by_token(material["token"])
     with get_db() as connection:
         applied = connection.execute(
             "SELECT version, applied_at FROM schema_migrations ORDER BY version"
@@ -336,7 +343,74 @@ def test_migration_is_applied_and_backed_up_exactly_once(database_path: Path) ->
             "SELECT version, applied_at FROM schema_migrations"
         ).fetchall()
     assert rows == applied
+    assert get_client_by_token(material["token"]) == client_before
     assert len(list((database_path.parent / "backups").glob("*.sqlite3"))) == 1
+
+
+def test_hysteria_upgrade_keeps_applied_snapshot_and_rotates_all_clients_once(
+    database_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import get_vpn_state, set_setting
+    from app.vpn_config import (
+        canonical_vpn_config_json, capture_vpn_config, captured_vpn_config_from_json,
+    )
+
+    current_migrations = migrations.MIGRATIONS
+    monkeypatch.setattr(migrations, "MIGRATIONS", current_migrations[:7])
+    init_db()
+    clients = [create_client(name) for name in ("Active", "Disabled", "Deleted")]
+    # Legacy initialization could expose the first client's secret to everyone.
+    set_setting("hysteria.password", clients[0]["hysteria_password"])
+    captured = capture_vpn_config()
+    legacy_payload = json.loads(canonical_vpn_config_json(captured))
+    legacy_payload["hysteria"].pop("auth_type")
+    legacy_json = json.dumps(legacy_payload, sort_keys=True, separators=(",", ":"))
+    legacy_hash = hashlib.sha256(legacy_json.encode()).hexdigest()
+    with get_db() as db:
+        db.execute("UPDATE clients SET enabled = 0 WHERE id = ?", (clients[1]["id"],))
+        db.execute(
+            "UPDATE clients SET deleted_at = '2026-01-01' WHERE id = ?",
+            (clients[2]["id"],),
+        )
+        db.execute(
+            """
+            INSERT INTO vpn_snapshots(
+                revision, payload_json, payload_sha256, lifecycle, prepared_at, applied_at
+            ) VALUES (?, ?, ?, 'APPLIED', '2026-01-01', '2026-01-01')
+            """,
+            (captured.revision, legacy_json, legacy_hash),
+        )
+        db.execute(
+            "UPDATE vpn_state SET applied_revision = ? WHERE singleton = 1",
+            (captured.revision,),
+        )
+        before = db.execute("SELECT * FROM clients ORDER BY id").fetchall()
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", current_migrations)
+    init_db()
+    with get_db() as db:
+        after = db.execute("SELECT * FROM clients ORDER BY id").fetchall()
+        stored = db.execute("SELECT * FROM vpn_snapshots").fetchone()
+    assert stored["payload_json"] == legacy_json
+    assert stored["payload_sha256"] == legacy_hash
+    assert stored["lifecycle"] == "APPLIED"
+    assert get_vpn_state()["applied_revision"] == captured.revision
+    assert get_vpn_state()["desired_revision"] == captured.revision + 1
+    assert captured_vpn_config_from_json(stored["payload_json"]).hysteria.auth_type == "password"
+    assert capture_vpn_config().hysteria.auth_type == "userpass"
+    assert len({row["hysteria_password"] for row in after}) == len(clients)
+    old_secrets = {row["hysteria_password"] for row in before}
+    for old, new in zip(before, after):
+        assert len(new["hysteria_password"]) >= 32
+        assert new["hysteria_password"] not in old_secrets
+        assert {k: v for k, v in new.items() if k != "hysteria_password"} == {
+            k: v for k, v in old.items() if k != "hysteria_password"
+        }
+
+    init_db()
+    with get_db() as db:
+        assert db.execute("SELECT * FROM clients ORDER BY id").fetchall() == after
+    assert get_vpn_state()["desired_revision"] == captured.revision + 1
 
 
 def test_failed_migration_rolls_back_schema_and_version_marker(

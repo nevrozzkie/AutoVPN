@@ -226,7 +226,7 @@ def test_subscription_wire_format_is_vless_then_hy2_with_trailing_newline(
         "?type=tcp&security=reality&pbk=reality-public-key&fp=firefox&sni=ok.ru"
         "&sid=0123456789abcdef&spx=%2F&flow=xtls-rprx-vision"
         "#%5BAutoVPN%5D%20Alice%20-%20vless\n"
-        "hy2://shared-hysteria-password@203.0.113.10:8443/"
+        "hy2://client-7%3Aunused-per-client-hysteria-password@203.0.113.10:8443/"
         "?insecure=1&sni=ok.ru&obfs=salamander&obfs-password=obfs-password"
         "#%5BAutoVPN%5D%20Alice%20-%20hysteria\n"
     ).encode()
@@ -279,7 +279,7 @@ def test_sing_box_wire_shape_and_tags(legacy_client: TestClient) -> None:
                 "tag": "hysteria2",
                 "server": CURRENT_IP,
                 "server_port": 8443,
-                "password": "shared-hysteria-password",
+                "password": "client-7:unused-per-client-hysteria-password",
                 "tls": {"enabled": True, "server_name": "ok.ru", "insecure": True},
                 "obfs": {"type": "salamander", "password": "obfs-password"},
             },

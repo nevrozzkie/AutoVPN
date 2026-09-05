@@ -9,7 +9,6 @@ from contextlib import contextmanager
 import pytest
 
 import app.db as database
-import app.subscriptions as subscriptions
 from app.amnezia import (
     render_amnezia_client_config,
     render_amnezia_server_config,
@@ -76,7 +75,6 @@ def test_renderers_do_not_read_database_after_capture(
         raise AssertionError("renderer accessed live database")
 
     monkeypatch.setattr(database, "get_db", unexpected_database_access)
-    monkeypatch.setattr(subscriptions, "get_setting", unexpected_database_access)
 
     assert "vless://" in render_subscription(captured, client.as_dict())
     assert render_sing_box_subscription(captured, client.as_dict())["route"]["final"] == "proxy"

@@ -427,6 +427,35 @@ def test_router_snapshot_is_exact_client_only_applied_schema_and_supports_304(
     assert cached.headers["etag"] == response.headers["etag"]
 
 
+def test_router_snapshot_preserves_legacy_hysteria_auth_until_new_apply(
+    router_api_enabled: None,
+) -> None:
+    http, client, token, revision = _setup_applied_router()
+    with get_db() as db:
+        row = db.execute(
+            "SELECT payload_json FROM vpn_snapshots WHERE revision = ?", (revision,)
+        ).fetchone()
+        payload = json.loads(row["payload_json"])
+        payload["hysteria"].pop("auth_type", None)
+        payload_json = json.dumps(payload)
+        db.execute(
+            "UPDATE vpn_snapshots SET payload_json = ?, payload_sha256 = ? WHERE revision = ?",
+            (payload_json, hashlib.sha256(payload_json.encode("utf-8")).hexdigest(), revision),
+        )
+
+    legacy = http.get("/api/v2/router/snapshot", headers=_authorization(token))
+    assert legacy.status_code == 200
+    assert legacy.json()["protocols"]["hysteria2"]["outbound"]["password"] == "shared-hysteria"
+
+    set_setting("hysteria.obfs_password", "hysteria-obfs-after-reapply")
+    _apply_current_snapshot()
+    fresh = http.get("/api/v2/router/snapshot", headers=_authorization(token))
+    assert fresh.status_code == 200
+    assert fresh.json()["protocols"]["hysteria2"]["outbound"]["password"] == (
+        f"client-{client['id']}:unused-client-hysteria-{client['id']}"
+    )
+
+
 def test_snapshot_identity_and_etag_are_distinct_for_multiple_routers(
     router_api_enabled: None,
 ) -> None:
@@ -451,6 +480,10 @@ def test_snapshot_identity_and_etag_are_distinct_for_multiple_routers(
     assert first_snapshot.json()["router_id"] == first.router_id
     assert second_snapshot.json()["router_id"] == second.router_id
     assert first_snapshot.headers["etag"] != second_snapshot.headers["etag"]
+    for response, client in ((first_snapshot, first_client), (second_snapshot, second_client)):
+        assert response.json()["protocols"]["hysteria2"]["outbound"]["password"] == (
+            f"client-{client['id']}:unused-client-hysteria-{client['id']}"
+        )
 
 
 def test_client_enabled_now_but_absent_from_applied_snapshot_is_409(

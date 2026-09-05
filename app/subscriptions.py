@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from urllib.parse import quote, urlencode
 
-from app.db import get_setting
+from app.hysteria_auth import hysteria_auth
 from app.profile_names import profile_name
 from app.vpn_config import CapturedVpnConfig, capture_vpn_config
-
-
-def hysteria_auth(_: dict | None = None) -> str:
-    return get_setting("hysteria.password")
 
 
 def render_subscription(config: CapturedVpnConfig, client: dict) -> str:
@@ -33,7 +29,7 @@ def render_subscription(config: CapturedVpnConfig, client: dict) -> str:
         )
     if config.hysteria.protocol.enabled:
         hysteria_name = quote(profile_name(client, "hysteria"))
-        hysteria_password = quote(config.hysteria.password)
+        hysteria_password = quote(hysteria_auth(client, config), safe="")
         hysteria_obfs_password = config.hysteria.obfs_password
         hysteria_query = {
             "insecure": "1",
@@ -99,7 +95,7 @@ def render_sing_box_subscription(config: CapturedVpnConfig, client: dict) -> dic
             "tag": "hysteria2",
             "server": config.current_ip,
             "server_port": config.hysteria.protocol.port,
-            "password": config.hysteria.password,
+            "password": hysteria_auth(client, config),
             "tls": {
                 "enabled": True,
                 "server_name": config.vless.server_name,

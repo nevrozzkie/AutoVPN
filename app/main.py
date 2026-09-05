@@ -92,6 +92,7 @@ from app.runtime_config import (
 )
 from app.stats import format_bytes, refresh_client_stats
 from app.subscriptions import (
+    hysteria_auth,
     render_sing_box_subscription,
     render_subscription,
 )
@@ -853,7 +854,7 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
             "clients": list_clients_with_stats(),
             "base_url": str(request.base_url).rstrip("/"),
             "format_bytes": format_bytes,
-            "hysteria_password": get_setting("hysteria.password"),
+            "hysteria_auth": hysteria_auth,
             "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
             "stats_last_error": get_setting("stats.last_error"),
         },

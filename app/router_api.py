@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.amnezia import render_amnezia_vpn_key
 from app.db import get_db
+from app.hysteria_auth import hysteria_auth
 from app.runtime_config import router_api_enabled
 from app.router_credentials import (
     AuthenticatedRouterCredential,
@@ -191,13 +192,13 @@ def _vless_outbound(config: CapturedVpnConfig, client: VpnClient) -> dict[str, A
     }
 
 
-def _hysteria_outbound(config: CapturedVpnConfig) -> dict[str, Any]:
+def _hysteria_outbound(config: CapturedVpnConfig, client: VpnClient) -> dict[str, Any]:
     outbound: dict[str, Any] = {
         "type": "hysteria2",
         "tag": "hysteria2",
         "server": config.current_ip,
         "server_port": config.hysteria.protocol.port,
-        "password": config.hysteria.password,
+        "password": hysteria_auth(client.as_dict(), config),
         "tls": {
             "enabled": True,
             "server_name": config.vless.server_name,
@@ -289,7 +290,7 @@ def build_router_snapshot_response(
             },
             "hysteria2": {
                 "enabled": config.hysteria.protocol.enabled,
-                "outbound": _hysteria_outbound(config)
+                "outbound": _hysteria_outbound(config, client)
                 if config.hysteria.protocol.enabled
                 else None,
             },

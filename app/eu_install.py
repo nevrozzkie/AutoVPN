@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from app.amnezia import render_amnezia_server_config
+from app.hysteria_auth import render_hysteria_server_auth
 from app.db import (
     get_setting,
     heartbeat_install_operation,
@@ -86,7 +87,6 @@ def build_eu_install_script(config: CapturedVpnConfig | None = None) -> str:
         }
         for client in clients
     ]
-    hysteria_password = config.hysteria.password
     hysteria_obfs_password = config.hysteria.obfs_password
 
     xray_config = {
@@ -204,9 +204,7 @@ tls:
   cert: /etc/autovpn/hysteria.crt
   key: /etc/autovpn/hysteria.key
 
-auth:
-  type: password
-  password: {json.dumps(hysteria_password)}
+{render_hysteria_server_auth(config)}
 
 obfs:
   type: salamander

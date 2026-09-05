@@ -5,6 +5,7 @@ import shlex
 from typing import Any
 
 from app.amnezia import render_amnezia_server_config
+from app.hysteria_auth import render_hysteria_server_auth
 from app.vpn_config import CapturedVpnConfig
 
 
@@ -97,9 +98,7 @@ tls:
   cert: {cert_path}
   key: {key_path}
 
-auth:
-  type: password
-  password: {json.dumps(config.hysteria.password)}
+{render_hysteria_server_auth(config)}
 
 obfs:
   type: salamander

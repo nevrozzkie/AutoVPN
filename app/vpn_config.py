@@ -32,6 +32,8 @@ class HysteriaConfig:
     protocol: ProtocolConfig
     password: str
     obfs_password: str
+    # Missing in historical snapshots, which were deployed with shared auth.
+    auth_type: str = "password"
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,7 @@ def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
             protocol=_protocol(values, "hysteria", settings.hysteria_port),
             password=values.get("hysteria.password", ""),
             obfs_password=values.get("hysteria.obfs_password", ""),
+            auth_type="userpass",
         ),
         amnezia=AmneziaConfig(
             protocol=_protocol(values, "amnezia", settings.amnezia_port),
@@ -265,6 +268,7 @@ def captured_vpn_config_from_json(payload_json: str) -> CapturedVpnConfig:
             protocol=ProtocolConfig(**hysteria["protocol"]),
             password=str(hysteria["password"]),
             obfs_password=str(hysteria["obfs_password"]),
+            auth_type=str(hysteria.get("auth_type", "password")),
         ),
         amnezia=AmneziaConfig(
             protocol=ProtocolConfig(**amnezia["protocol"]),

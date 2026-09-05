@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from app.config import settings
 from app.db import get_setting, list_clients
 from app.runtime_config import hysteria_port, server_command_timeout_seconds, vless_port
-from app.subscriptions import hysteria_auth
+from app.hysteria_auth import hysteria_auth
 from app.vpn_config import CapturedVpnConfig
 
 
@@ -152,11 +152,7 @@ def build_deep_check_script(
         if config is not None and config.hysteria.protocol.enabled
         else hysteria_port() if config is None else None
     )
-    hysteria_password = (
-        config.hysteria.password
-        if config is not None
-        else hysteria_auth(client)
-    )
+    hysteria_password = hysteria_auth(client, config)
     hysteria_obfs_password = (
         config.hysteria.obfs_password
         if config is not None

@@ -400,6 +400,34 @@ def _apply_routers(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_hysteria_per_client_auth(connection: sqlite3.Connection) -> None:
+    # The legacy shared secret could have been copied from the first client.
+    # Rotate every client once so knowing that secret cannot grant an identity.
+    clients = connection.execute("SELECT id FROM clients").fetchall()
+    for client in clients:
+        connection.execute(
+            "UPDATE clients SET hysteria_password = ? WHERE id = ?",
+            (secrets.token_urlsafe(24), _row_value(client, 0, "id")),
+        )
+    # Even an empty client set changes the server auth (to deny-all). Do not
+    # rewrite immutable applied snapshots: they still describe the live server.
+    timestamp = datetime.now(UTC).isoformat()
+    connection.execute(
+        """
+        INSERT INTO settings(key, value) VALUES ('vpn.config_updated_at', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (timestamp,),
+    )
+    connection.execute(
+        """
+        UPDATE vpn_state SET desired_revision = desired_revision + 1,
+            desired_updated_at = ? WHERE singleton = 1
+        """,
+        (timestamp,),
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -464,6 +492,15 @@ MIGRATIONS = (
             "credential to a router identity and bind credentials to routers"
         ),
         apply=_apply_routers,
+    ),
+    Migration(
+        version=8,
+        name="hysteria_per_client_auth",
+        signature=(
+            "rotate per-client Hysteria secrets once; mark desired config changed; "
+            "preserve public tokens, other protocol keys and immutable snapshots"
+        ),
+        apply=_apply_hysteria_per_client_auth,
     ),
 )
 

@@ -59,12 +59,17 @@ def test_captured_hysteria_sni_does_not_fall_back_to_live_settings() -> None:
     )
 
     script = deep_protocol_checks.build_deep_check_script(
-        {"vless_uuid": "00000000-0000-0000-0000-000000000001"},
+        {
+            "id": 1,
+            "hysteria_password": "personal-secret",
+            "vless_uuid": "00000000-0000-0000-0000-000000000001",
+        },
         "203.0.113.20",
         config=config,
     )
 
     assert "sni: bound-sni.example" in script
+    assert "auth: client-1:personal-secret" in script
 
 
 def test_parse_deep_check_output_splits_hysteria_layers() -> None:

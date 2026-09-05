@@ -203,9 +203,8 @@ def _ensure_reality_settings(db: sqlite3.Connection) -> bool:
 def _ensure_hysteria_settings(db: sqlite3.Connection) -> bool:
     changed = False
     if not _setting(db, "hysteria.password"):
-        client = db.execute("SELECT hysteria_password FROM clients ORDER BY id LIMIT 1").fetchone()
-        password = client["hysteria_password"] if client else secrets.token_urlsafe(24)
-        _set_setting(db, "hysteria.password", password)
+        # Retained for historical snapshots; never reuse a client's auth secret.
+        _set_setting(db, "hysteria.password", secrets.token_urlsafe(24))
         changed = True
     # Hysteria transport password. Must be identical on server and client;
     # both configs are generated from this value.
