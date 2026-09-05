@@ -1,0 +1,23 @@
+table inet autovpn
+flush table inet autovpn
+table inet autovpn {
+	chain ownership_autovpn_v1 {}
+	chain forward {
+		type filter hook forward priority -10; policy accept;
+		iifname "br-avpn" meta nfproto ipv4 ip saddr 192.168.30.0/24 oifname "avpn0" accept
+		iifname "avpn0" meta nfproto ipv4 oifname "br-avpn" ct state { established, related } accept
+		iifname "br-avpnd" meta nfproto ipv6 counter drop
+		iifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop
+		oifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop
+	}
+	chain input {
+		type filter hook input priority -10; policy accept;
+		iifname "br-avpn" meta nfproto ipv4 udp sport 68 udp dport 67 accept
+		iifname "br-avpnd" meta nfproto ipv6 counter drop
+		iifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop
+	}
+	chain dns {
+		type nat hook prerouting priority -101; policy accept;
+		iifname "br-avpn" ip saddr 192.168.30.0/24 meta l4proto { tcp, udp } th dport 53 dnat ip to 172.30.255.2
+	}
+}

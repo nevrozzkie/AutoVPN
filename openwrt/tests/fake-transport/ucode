@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { loadUcodeModule } = require(path.join(process.env.AUTOVPN_TEST_ROOT, 'tests/ucode-loader.cjs'));
+const http = loadUcodeModule(path.join(process.env.AUTOVPN_TEST_ROOT, 'files/usr/share/ucode/autovpn/http.uc'));
+const mappedRoot = process.env.AUTOVPN_FAKE_STATE;
+
+function mapped(value) {
+	const prefix = '/etc/autovpn/test-state/';
+	return value.startsWith(prefix) ? path.join(mappedRoot, value.slice(prefix.length)) : value;
+}
+
+const helperArgs = process.argv.slice(3);
+fs.appendFileSync(path.join(process.env.AUTOVPN_FAKE_HTTP, 'ucode-calls'), `${JSON.stringify(helperArgs)}\n`);
+const result = http.run(helperArgs, {
+	read(file, limit) {
+		try {
+			return fs.readFileSync(mapped(file)).subarray(0, limit).toString();
+		}
+		catch (_) {
+			return null;
+		}
+	},
+	writePrivate(file, value) {
+		try {
+			const target = mapped(file);
+			fs.writeFileSync(target, value, { mode: 0o600 });
+			fs.chmodSync(target, 0o600);
+			return true;
+		}
+		catch (_) {
+			return false;
+		}
+	}
+});
+fs.appendFileSync(path.join(process.env.AUTOVPN_FAKE_HTTP, 'ucode-results'), `${JSON.stringify(result)}\n`);
+process.stdout.write(`${JSON.stringify(result)}\n`);
+process.exit(result.ok === true ? 0 : 1);

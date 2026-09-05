@@ -1,0 +1,104 @@
+#!/bin/sh
+
+set -eu
+
+. /usr/libexec/autovpn/credential.sh
+
+LOCK_FILE=/var/lock/autovpn-controller.lock
+CREDENTIAL_FILE="$(uci -q get autovpn.main.credential_file || true)"
+autovpn_persistent_path_valid "$CREDENTIAL_FILE" || CREDENTIAL_FILE=/etc/autovpn/credentials
+
+acquire_lock() {
+	if ! lock -n "$LOCK_FILE"; then
+		printf '%s\n' '{"ok":false,"code":"busy"}' >&2
+		exit 75
+	fi
+	trap 'lock -u "$LOCK_FILE"' EXIT INT TERM
+}
+
+set_credential() {
+	local token tmp directory
+	IFS= read -r token
+	autovpn_credential_valid "$token" || {
+		printf '%s\n' '{"ok":false,"code":"invalid_credential"}' >&2
+		exit 64
+	}
+	directory="${CREDENTIAL_FILE%/*}"
+	[ "$directory" != "$CREDENTIAL_FILE" ] || directory=.
+	umask 077
+	mkdir -p "$directory"
+	chmod 0700 "$directory"
+	tmp="${CREDENTIAL_FILE}.new.$$"
+	trap 'rm -f "$tmp"; lock -u "$LOCK_FILE"' EXIT INT TERM
+	printf '%s\n' "$token" >"$tmp"
+	chmod 0600 "$tmp"
+	mv -f "$tmp" "$CREDENTIAL_FILE"
+	printf '%s\n' '{"ok":true,"credential_configured":true}'
+}
+
+set_router_id() {
+	local router_id
+	router_id="${1:-}"
+	autovpn_router_id_valid "$router_id" || {
+		printf '%s\n' '{"ok":false,"code":"invalid_router_id"}' >&2
+		exit 64
+	}
+	uci set "autovpn.main.router_id=$router_id"
+	uci commit autovpn
+	printf '%s\n' '{"ok":true,"router_id_configured":true}'
+}
+
+setup_action() {
+	local action result status
+	action="$1"
+	if result="$(/usr/bin/ucode /usr/libexec/autovpn/setup-helper.uc "$action" "${2:-}")"; then
+		status=0
+	else
+		status=$?
+	fi
+	if [ "$action" = activate ] && [ "$status" -eq 0 ]; then
+		# The loop may refresh immediately, so release before starting it.
+		trap - EXIT INT TERM
+		lock -u "$LOCK_FILE"
+		# No restart: its stop hook would invoke the controller recursively.
+		if ! /etc/init.d/autovpn enable >/dev/null 2>&1 || ! /etc/init.d/autovpn start >/dev/null 2>&1; then
+			uci set autovpn.main.enabled=0
+			uci set autovpn.main.setup_prepared=1
+			uci commit autovpn
+			printf '%s\n' '{"ok":false,"code":"service_start_failed"}'
+			return 1
+		fi
+	fi
+	[ -n "$result" ] && printf '%s\n' "$result"
+	return "$status"
+}
+
+command="${1:-status}"
+acquire_lock
+case "$command" in
+	set-credential)
+		set_credential
+		;;
+	set-router-id)
+		set_router_id "${2:-}"
+		;;
+	setup)
+		setup_action configure "${2:-}"
+		;;
+	setup-activate)
+		setup_action activate
+		;;
+	status|refresh|recover|apply-policy|stop)
+		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command"
+		;;
+	network-setup|network-confirm|network-tick|network-boot|network-status)
+		umask 077
+		mkdir -p /etc/autovpn/networks/stage /etc/autovpn/networks/delta
+		chmod 0700 /etc/autovpn /etc/autovpn/networks /etc/autovpn/networks/stage /etc/autovpn/networks/delta
+		/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc "$command" "${2:-}"
+		;;
+	*)
+		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate}\n' >&2
+		exit 64
+		;;
+esac

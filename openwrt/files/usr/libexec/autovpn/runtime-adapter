@@ -1,0 +1,191 @@
+#!/bin/sh
+set -eu
+umask 077
+
+ROOT=/etc/autovpn/runtime
+HELPER=/usr/libexec/autovpn/runtime-helper.uc
+SERVICE=/etc/init.d/autovpn-tunnel
+SHARE=/usr/share/autovpn
+AWG_HELPER=/usr/libexec/autovpn/awg-helper.uc
+
+error() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
+ok() { printf '%s\n' '{"ok":true}'; }
+
+guard() {
+	# Never replace an unrelated table with the same name.
+	if nft list table inet autovpn >"$ROOT/table.txt" 2>/dev/null; then
+		grep -q 'chain ownership_autovpn_v1' "$ROOT/table.txt" || return 1
+	fi
+	nft -f "$SHARE/guard-$1.nft" >/dev/null 2>&1
+}
+closed() {
+	# Stop the tunnel even if a foreign/broken nft table prevents guard installation.
+	guard_ok=0
+	guard closed && guard_ok=1
+	"$SERVICE" stop >/dev/null 2>&1 || return 1
+	[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down >/dev/null 2>&1 || return 1
+	[ "$guard_ok" -eq 1 ]
+}
+helper() {
+	ucode "$HELPER" "$1" "$JOURNAL" 2>/dev/null >"$ROOT/result.json"
+}
+empty() { grep -Eq '"empty"[[:space:]]*:[[:space:]]*true' "$ROOT/result.json"; }
+check() { sing-box check -c "$ROOT/candidate.json" >/dev/null 2>&1; }
+awg_active() { grep -q '"private_key"' "$ROOT/awg.json" 2>/dev/null; }
+awg_up() { ucode "$AWG_HELPER" up "$ROOT/awg.json" >/dev/null 2>&1; }
+awg_healthy() {
+	awg_active && cmp -s "$ROOT/awg.json" "$ROOT/awg-run.json" &&
+		ucode "$AWG_HELPER" check "$ROOT/awg.json" >/dev/null 2>&1
+}
+
+routes() {
+	# Fixed table/priority ownership. Refuse collisions; never flush a route table.
+	ip -4 rule show >"$ROOT/rules.txt" 2>/dev/null || return 1
+	for priority in 20191 20192; do
+		lines="$(grep -E "^$priority:" "$ROOT/rules.txt" || true)"
+		if [ "$priority" = 20191 ]; then
+			expected="$priority: from all iif br-avpn lookup 20191"
+		else
+			expected="$priority: from all iif br-avpn unreachable"
+		fi
+		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | tr -s '[:space:]' ' ')" = "$expected" ] || return 1
+	done
+	# Dump all tables: querying an empty numbered table alone can return ENOENT.
+	# Numeric output also prevents rt_tables aliases from hiding a collision.
+	ip -N -4 route show table all >"$ROOT/all-routes.txt" 2>/dev/null || return 1
+	grep -E ' table 20191( |$)' "$ROOT/all-routes.txt" >"$ROOT/routes.txt" || true
+	while IFS= read -r route; do
+		case "$route" in 'default dev avpn0 table 20191'|'default dev avpn0 table 20191 scope 253') ;; *) return 1 ;; esac
+	done <"$ROOT/routes.txt"
+	# The unreachable rule survives TUN disappearance, preventing main-table fallback.
+	grep -q '^20192:' "$ROOT/rules.txt" || ip -4 rule add priority 20192 iif br-avpn unreachable || return 1
+	grep -q '^20191:' "$ROOT/rules.txt" || ip -4 rule add priority 20191 iif br-avpn lookup 20191 || return 1
+	ip -4 route replace default dev avpn0 table 20191 >/dev/null 2>&1
+	if ! awg_active; then return 0; fi
+	# sing-box marks plaintext entering the AWG device. AWG marks its own UDP
+	# socket differently, so the encrypted outer packet keeps the WAN route.
+	for priority in 20193 20194; do
+		lines="$(grep -E "^$priority:" "$ROOT/rules.txt" || true)"
+		if [ "$priority" = 20193 ]; then
+			expected="$priority: from all fwmark 0x4ee1 lookup 20193"
+		else
+			expected="$priority: from all fwmark 0x4ee1 unreachable"
+		fi
+		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | tr -s '[:space:]' ' ')" = "$expected" ] || return 1
+	done
+	grep -E ' table 20193( |$)' "$ROOT/all-routes.txt" >"$ROOT/awg-routes.txt" || true
+	while IFS= read -r route; do
+		case "$route" in 'default dev avpnwg0 table 20193'|'default dev avpnwg0 table 20193 scope 253') ;; *) return 1 ;; esac
+	done <"$ROOT/awg-routes.txt"
+	grep -q '^20194:' "$ROOT/rules.txt" || ip -4 rule add priority 20194 fwmark 20193 unreachable || return 1
+	grep -q '^20193:' "$ROOT/rules.txt" || ip -4 rule add priority 20193 fwmark 20193 lookup 20193 || return 1
+	ip -4 route replace default dev avpnwg0 table 20193 >/dev/null 2>&1
+}
+start() {
+	closed || return 1
+	if awg_active && ! awg_up; then return 1; fi
+	if awg_active; then
+		cp "$ROOT/awg.json" "$ROOT/awg-run.json.new" || return 1
+		mv "$ROOT/awg-run.json.new" "$ROOT/awg-run.json" || return 1
+	else
+		rm -f "$ROOT/awg-run.json"
+	fi
+	cp "$ROOT/candidate.json" "$ROOT/run.json.new" || return 1
+	mv "$ROOT/run.json.new" "$ROOT/run.json" || return 1
+	"$SERVICE" start >/dev/null 2>&1 || return 1
+	attempt=0
+	while ! ip link show dev avpn0 >/dev/null 2>&1; do
+		attempt=$((attempt + 1))
+		[ "$attempt" -lt 6 ] || return 1
+		sleep 1
+	done
+	"$SERVICE" running >/dev/null 2>&1 || return 1
+	routes || return 1
+	# Forwarding stays closed until verify has reached the VPN over HTTPS.
+}
+probe() {
+	# Fixed URL and dedicated SOCKS inbound cannot match a direct exception.
+	code="$(curl --disable --silent --output /dev/null --write-out '%{http_code}' \
+		--proxy socks5h://127.0.0.1:1088 --noproxy '' --proto '=https' \
+		--connect-timeout 4 --max-time 10 --max-redirs 0 \
+		https://www.gstatic.com/generate_204 2>/dev/null)" || return 1
+	[ "$code" = 204 ]
+}
+preflight() {
+	# A poll/reboot must not open a network whose setup is unconfirmed or conflicted.
+	ucode /usr/libexec/autovpn/network-helper.uc network-gate >/dev/null 2>&1 || return 1
+	command -v sing-box >/dev/null && command -v nft >/dev/null && command -v ip >/dev/null || return 1
+	# Flow offload can bypass filter hooks, including the kill switch.
+	[ "$(uci -q get 'firewall.@defaults[0].flow_offloading' || true)" != 1 ] || return 1
+	[ "$(uci -q get 'firewall.@defaults[0].flow_offloading_hw' || true)" != 1 ] || return 1
+	nft list chain inet fw4 forward 2>/dev/null | grep -q 'br-avpn' || return 1
+	ip link show dev br-avpn >/dev/null 2>&1 || return 1
+}
+
+mkdir -p "$ROOT"
+chmod 0700 /etc/autovpn "$ROOT"
+JOURNAL="${2:-}"
+case "${1:-}" in
+	status)
+		if "$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1 && \
+			nft list chain inet autovpn forward 2>/dev/null | grep -q avpn0 && \
+			{ ! awg_active || awg_healthy; }; then
+			helper status || { cat "$ROOT/result.json"; exit 1; }
+			cat "$ROOT/result.json"
+		else
+			printf '%s\n' '{"ok":false,"code":"runtime_not_running"}'
+			exit 1
+		fi
+		;;
+	capabilities)
+		# Availability is advertised only after a rendered configuration is verified.
+		printf '%s\n' '{"ok":true,"capabilities":{"vless":false,"hysteria2":false,"amneziawg":false,"zapret":false,"policy_routing":false}}'
+		;;
+	fail-closed)
+		closed || error fail_closed_unconfirmed
+		ok
+		;;
+	prepare)
+		preflight || error runtime_preflight_failed
+		helper prepare || { cat "$ROOT/result.json"; exit 1; }
+		empty && error snapshot_not_applied
+		check || error sing_box_check_failed
+		ok
+		;;
+	activate)
+		preflight || error runtime_preflight_failed
+		helper activate || { cat "$ROOT/result.json"; exit 1; }
+		empty && error snapshot_not_applied
+		check || error sing_box_check_failed
+		start || error runtime_activation_failed
+		ok
+		;;
+	verify)
+		helper verify || { cat "$ROOT/result.json"; exit 1; }
+		empty && error snapshot_not_applied
+		probe && probe || error vpn_probe_failed
+		guard open || error firewall_activation_failed
+		cat "$ROOT/result.json"
+		;;
+	rollback|restore)
+		helper "$1" || { cat "$ROOT/result.json"; exit 1; }
+		if empty; then
+			closed || error fail_closed_unconfirmed
+			ok
+			exit 0
+		fi
+		preflight || error runtime_preflight_failed
+		check || error sing_box_check_failed
+		if [ "$1" = restore ] && cmp -s "$ROOT/candidate.json" "$ROOT/run.json" && \
+			{ ! awg_active || awg_healthy; } && \
+			"$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1; then
+			routes || error route_restore_failed
+		else
+			start || error runtime_restore_failed
+		fi
+		probe && probe || { closed || true; error vpn_probe_failed; }
+		guard open || error firewall_activation_failed
+		cat "$ROOT/result.json"
+		;;
+	*) error unknown_runtime_action ;;
+esac

@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const fixture = process.env.AUTOVPN_FAKE_HTTP;
+if (!fixture)
+	process.exit(2);
+
+fs.writeFileSync(path.join(fixture, 'curl-argv.json'), JSON.stringify(process.argv.slice(2)));
+const configPath = process.argv[process.argv.indexOf('--config') + 1];
+const config = fs.readFileSync(configPath, 'utf8');
+fs.writeFileSync(path.join(fixture, 'curl.conf.copy'), config);
+fs.writeFileSync(path.join(fixture, 'config-mode'), String(fs.statSync(configPath).mode & 0o777));
+fs.writeFileSync(path.join(fixture, 'work-dir-mode'), String(fs.statSync(path.dirname(configPath)).mode & 0o777));
+fs.writeFileSync(path.join(fixture, 'work-dir'), path.dirname(configPath));
+
+function option(name) {
+	const line = config.split('\n').find(item => item.startsWith(`${name} = `));
+	if (!line)
+		return null;
+	const raw = line.slice(name.length + 3);
+	return raw.startsWith('"')
+		? JSON.parse(raw.replace(/\\'/g, "'"))
+		: raw;
+}
+
+const authorization = config.split('\n').find(item => item.includes('Authorization: Bearer '));
+const token = authorization ? authorization.match(/Bearer ([A-Za-z0-9_.-]+)/)[1] : '';
+fs.writeFileSync(path.join(fixture, 'secret-in-env'), Object.values(process.env).some(value => value.includes(token)) ? 'yes' : 'no');
+
+function streamFixture(target, fixtureName, fillByte) {
+	const requestedPath = path.join(fixture, `chunked-${fixtureName}-size`);
+	const requested = fs.existsSync(requestedPath)
+		? Number(fs.readFileSync(requestedPath, 'utf8'))
+		: fs.statSync(path.join(fixture, fixtureName)).size;
+	const source = fs.readFileSync(path.join(fixture, fixtureName));
+	const sink = target.endsWith('.pipe') ? target.slice(0, -5) : target;
+	let attempted = 0;
+	let peak = 0;
+	let terminated = false;
+	const descriptor = fs.openSync(target, 'w');
+	try {
+		while (attempted < requested) {
+			const count = Math.min(4096, requested - attempted);
+			const chunk = fs.existsSync(requestedPath)
+				? Buffer.alloc(count, fillByte)
+				: source.subarray(attempted, attempted + count);
+			try {
+				attempted += fs.writeSync(descriptor, chunk);
+			}
+			catch (error) {
+				if (error.code !== 'EPIPE')
+					throw error;
+				terminated = true;
+				break;
+			}
+			if (fs.existsSync(sink))
+				peak = Math.max(peak, fs.statSync(sink).size);
+		}
+	}
+	finally {
+		try {
+			fs.closeSync(descriptor);
+		}
+		catch (_) {}
+	}
+	if (fs.existsSync(sink))
+		peak = Math.max(peak, fs.statSync(sink).size);
+	fs.writeFileSync(path.join(fixture, `${fixtureName}-attempted`), String(attempted));
+	fs.writeFileSync(path.join(fixture, `peak-${fixtureName}`), String(peak));
+	fs.writeFileSync(path.join(fixture, `${fixtureName}-writer-terminated`), terminated ? 'yes' : 'no');
+	return terminated;
+}
+
+let streamTerminated = streamFixture(option('dump-header'), 'headers', 0x68);
+if (!streamTerminated)
+	streamTerminated = streamFixture(option('output'), 'body', 0x62);
+const requestPath = option('data-binary');
+if (requestPath) {
+	const actualPath = requestPath.slice(1);
+	fs.writeFileSync(path.join(fixture, 'request-mode'), String(fs.statSync(actualPath).mode & 0o777));
+	fs.copyFileSync(actualPath, path.join(fixture, 'request-body.copy'));
+}
+if (!streamTerminated)
+	process.stdout.write(fs.readFileSync(path.join(fixture, 'status'), 'utf8'));
+process.exit(streamTerminated
+	? 23
+	: Number(fs.existsSync(path.join(fixture, 'exit')) ? fs.readFileSync(path.join(fixture, 'exit'), 'utf8') : 0));

@@ -1,0 +1,3 @@
+iifname "br-avpn" meta nfproto ipv4 udp sport 68 udp dport 67 accept
+iifname "br-avpnd" meta nfproto ipv6 counter drop
+iifname { "br-avpn", "br-avpnz", "br-avpndz" } counter drop

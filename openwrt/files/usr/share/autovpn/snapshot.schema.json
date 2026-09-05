@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autovpn.local/schemas/router-snapshot-v3.json",
+  "title": "AutoVPN router snapshot v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "router_id",
+    "revision",
+    "snapshot_sha256",
+    "applied_at",
+    "published_at",
+    "client",
+    "server",
+    "protocols"
+  ],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "router_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "applied_at": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "published_at": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 64 },
+        { "type": "null" }
+      ]
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint"],
+      "properties": {
+        "endpoint": { "type": "string", "minLength": 1, "maxLength": 253 }
+      }
+    },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vless", "hysteria2", "amneziawg"],
+      "properties": {
+        "vless": { "$ref": "#/$defs/vlessSlot" },
+        "hysteria2": { "$ref": "#/$defs/hysteriaSlot" },
+        "amneziawg": { "$ref": "#/$defs/awgSlot" }
+      }
+    }
+  },
+  "$defs": {
+    "tlsServerName": { "type": "string", "minLength": 1, "maxLength": 253 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "vlessSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "outbound"],
+          "properties": { "enabled": { "const": false }, "outbound": { "type": "null" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "outbound"],
+          "properties": { "enabled": { "const": true }, "outbound": { "$ref": "#/$defs/vlessOutbound" } }
+        }
+      ]
+    },
+    "vlessOutbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "tag", "server", "server_port", "uuid", "flow", "tls"],
+      "properties": {
+        "type": { "const": "vless" },
+        "tag": { "const": "vless-reality" },
+        "server": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "server_port": { "$ref": "#/$defs/port" },
+        "uuid": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+        "flow": { "const": "xtls-rprx-vision" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "server_name", "utls", "reality"],
+          "properties": {
+            "enabled": { "const": true },
+            "server_name": { "$ref": "#/$defs/tlsServerName" },
+            "utls": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "fingerprint"],
+              "properties": {
+                "enabled": { "const": true },
+                "fingerprint": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            "reality": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "public_key", "short_id"],
+              "properties": {
+                "enabled": { "const": true },
+                "public_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "short_id": { "type": "string", "minLength": 1, "maxLength": 32 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "hysteriaSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "outbound"],
+          "properties": { "enabled": { "const": false }, "outbound": { "type": "null" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "outbound"],
+          "properties": { "enabled": { "const": true }, "outbound": { "$ref": "#/$defs/hysteriaOutbound" } }
+        }
+      ]
+    },
+    "hysteriaOutbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "tag", "server", "server_port", "password", "tls"],
+      "properties": {
+        "type": { "const": "hysteria2" },
+        "tag": { "const": "hysteria2" },
+        "server": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "server_port": { "$ref": "#/$defs/port" },
+        "password": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "server_name", "insecure"],
+          "properties": {
+            "enabled": { "const": true },
+            "server_name": { "$ref": "#/$defs/tlsServerName" },
+            "insecure": { "type": "boolean" }
+          }
+        },
+        "obfs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "password"],
+          "properties": {
+            "type": { "const": "salamander" },
+            "password": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        }
+      }
+    },
+    "awgSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "profile"],
+          "properties": { "enabled": { "const": false }, "profile": { "type": "null" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "profile"],
+          "properties": { "enabled": { "const": true }, "profile": { "$ref": "#/$defs/awgProfile" } }
+        }
+      ]
+    },
+    "awgProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version", "capabilities", "interface", "peer", "obfuscation",
+        "route_allowed_ips", "install_routes", "legacy_amnezia_vpn_import_key"
+      ],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["awg_obfuscation_v1", "awg2_i_fields", "obfuscation_fields"],
+          "properties": {
+            "awg_obfuscation_v1": { "const": true },
+            "awg2_i_fields": { "const": false },
+            "obfuscation_fields": { "type": "array", "items": { "type": "string" }, "maxItems": 32 }
+          }
+        },
+        "interface": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["private_key", "address", "dns_servers"],
+          "properties": {
+            "private_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "address": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "dns_servers": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 253 }, "maxItems": 8 }
+          }
+        },
+        "peer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_key", "preshared_key", "endpoint", "persistent_keepalive"],
+          "properties": {
+            "public_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "preshared_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "endpoint": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["host", "port"],
+              "properties": {
+                "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+                "port": { "$ref": "#/$defs/port" }
+              }
+            },
+            "persistent_keepalive": { "type": "integer", "minimum": 0, "maximum": 65535 }
+          }
+        },
+        "obfuscation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"],
+          "properties": {
+            "Jc": { "$ref": "#/$defs/u32" }, "Jmin": { "$ref": "#/$defs/u32" },
+            "Jmax": { "$ref": "#/$defs/u32" }, "S1": { "$ref": "#/$defs/u32" },
+            "S2": { "$ref": "#/$defs/u32" }, "H1": { "$ref": "#/$defs/u32" },
+            "H2": { "$ref": "#/$defs/u32" }, "H3": { "$ref": "#/$defs/u32" },
+            "H4": { "$ref": "#/$defs/u32" }
+          }
+        },
+        "route_allowed_ips": { "const": ["0.0.0.0/0", "::/0"] },
+        "install_routes": { "const": false },
+        "legacy_amnezia_vpn_import_key": { "type": "string", "minLength": 1, "maxLength": 16384 }
+      }
+    },
+    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+  }
+}

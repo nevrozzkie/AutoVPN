@@ -1,0 +1,17 @@
+{
+  "luci-app-autovpn": {
+    "description": "Read AutoVPN status and request a refresh",
+    "read": {
+      "ubus": {
+        "luci.autovpn": ["status", "network_status"]
+      },
+      "uci": ["autovpn"]
+    },
+    "write": {
+      "ubus": {
+        "luci.autovpn": ["refresh", "apply_policy", "network_setup", "network_confirm", "setup_configure", "setup_activate"]
+      },
+      "uci": ["autovpn"]
+    }
+  }
+}
