@@ -428,6 +428,21 @@ def _apply_hysteria_per_client_auth(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_router_amnezia_peers(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS router_amnezia_peers (
+            router_id TEXT NOT NULL PRIMARY KEY,
+            private_key TEXT NOT NULL,
+            public_key TEXT NOT NULL UNIQUE,
+            preshared_key TEXT NOT NULL,
+            ipv4 TEXT NOT NULL UNIQUE,
+            FOREIGN KEY(router_id) REFERENCES routers(router_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -501,6 +516,15 @@ MIGRATIONS = (
             "preserve public tokens, other protocol keys and immutable snapshots"
         ),
         apply=_apply_hysteria_per_client_auth,
+    ),
+    Migration(
+        version=9,
+        name="router_amnezia_peers",
+        signature=(
+            "create one cascade-bound auxiliary AmneziaWG peer per router with "
+            "unique public key and address; key generation and backfill stay in init"
+        ),
+        apply=_apply_router_amnezia_peers,
     ),
 )
 

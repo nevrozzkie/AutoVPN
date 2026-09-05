@@ -5,8 +5,8 @@ import pytest
 import app.deep_protocol_checks as deep_protocol_checks
 import app.eu_install as eu_install
 from app.deep_protocol_checks import parse_deep_check_output
-from app.db import init_db
-from app.vpn_config import capture_vpn_config
+from app.db import create_client, init_db
+from app.vpn_config import RouterAmneziaPeer, capture_vpn_config
 
 
 def test_parse_deep_check_output_maps_all_protocols() -> None:
@@ -70,6 +70,59 @@ def test_captured_hysteria_sni_does_not_fall_back_to_live_settings() -> None:
 
     assert "sni: bound-sni.example" in script
     assert "auth: client-1:personal-secret" in script
+
+
+def test_expected_amnezia_peers_include_captured_router_peer_without_private_key() -> None:
+    init_db()
+    client = create_client("Router owner")
+    config = capture_vpn_config()
+    auxiliary_public_key = "router-auxiliary-public-key"
+    auxiliary_private_key = "router-auxiliary-private-secret"
+    auxiliary_preshared_key = "router-auxiliary-preshared-secret"
+    config = replace(
+        config,
+        router_amnezia_peers=(
+            RouterAmneziaPeer(
+                router_id="router-auxiliary",
+                client_id=int(client["id"]),
+                public_key=auxiliary_public_key,
+                private_key=auxiliary_private_key,
+                preshared_key=auxiliary_preshared_key,
+                ipv4="10.66.66.3",
+            ),
+        ),
+    )
+
+    script = deep_protocol_checks.build_deep_check_script(
+        client,
+        "203.0.113.20",
+        config=config,
+    )
+
+    assert str(client["amnezia_public_key"]) in script
+    assert auxiliary_public_key in script
+    assert auxiliary_private_key not in script
+    assert auxiliary_preshared_key not in script
+
+
+def test_live_expected_amnezia_peers_include_authorized_router_public_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    client = create_client("Router owner")
+    auxiliary_public_key = "router-live-public-key"
+    monkeypatch.setattr(
+        deep_protocol_checks,
+        "list_router_amnezia_public_keys",
+        lambda: [{"client_id": client["id"], "public_key": auxiliary_public_key}],
+    )
+
+    script = deep_protocol_checks.build_deep_check_script(
+        client,
+        "203.0.113.20",
+    )
+
+    assert auxiliary_public_key in script
 
 
 def test_parse_deep_check_output_splits_hysteria_layers() -> None:

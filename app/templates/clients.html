@@ -23,6 +23,9 @@
     <details class="panel client-details">
       <summary>
         <strong>{{ client.name }}</strong>
+        {% if client.router is not none %}
+          <span class="badge">Роутер{% if client.router.label %}: {{ client.router.label }}{% else %}: {{ client.router.router_id }}{% endif %}</span>
+        {% endif %}
         <span class="muted">{{ "включён" if client.enabled else "отключён" }}</span>
         <span class="muted">
           VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}

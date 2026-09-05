@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 import app.stats as stats
-from app.db import create_client, get_client_stats, init_db, upsert_client_stats
+from app.db import (
+    create_client,
+    get_client_by_id,
+    get_client_stats,
+    init_db,
+    upsert_client_stats,
+)
 from app.eu_install import xray_client_email
 from app.stats import (
     format_bytes,
@@ -173,3 +179,62 @@ async def test_failed_source_does_not_advance_last_seen(
     assert get_client_stats(int(client["id"]))["last_seen_at"] == (
         "2026-01-01T00:00:00+00:00"
     )
+
+
+@pytest.mark.anyio
+async def test_router_peer_stats_are_aggregated_into_the_ordinary_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_db()
+    client = create_client("Router owner")
+    client_id = int(client["id"])
+    ordinary_public_key = str(client["amnezia_public_key"])
+    auxiliary_public_key = "router-auxiliary-public-key"
+    original_token = str(client["token"])
+
+    async def fake_remote(
+        host: str,
+        command: str,
+        stdin_data: str = "",
+        timeout: float | None = None,
+    ) -> tuple[int, str]:
+        if command == stats.XRAY_STATS_COMMAND:
+            return 0, ""
+        return 0, (
+            f"{ordinary_public_key}\tpsk\tendpoint\t10.66.66.2/32"
+            "\t600\t100\t200\toff\n"
+            f"{auxiliary_public_key}\tpsk\tendpoint\t10.66.66.3/32"
+            "\t700\t300\t400\toff\n"
+        )
+
+    monkeypatch.setattr(stats, "resolve_eu_host", lambda: "203.0.113.10")
+    monkeypatch.setattr(stats, "run_remote_command", fake_remote)
+    monkeypatch.setattr(
+        stats,
+        "list_router_amnezia_public_keys",
+        lambda: [{"client_id": client_id, "public_key": auxiliary_public_key}],
+    )
+
+    await refresh_client_stats()
+
+    stored = get_client_stats(client_id)
+    assert stored is not None
+    assert (stored["amnezia_rx"], stored["amnezia_tx"]) == (400, 600)
+    assert stored["amnezia_latest_handshake"] == 700
+    raw = str(stored["raw"])
+    assert auxiliary_public_key not in raw
+    current = get_client_by_id(client_id)
+    assert current is not None
+    assert current["amnezia_public_key"] == ordinary_public_key
+    assert current["token"] == original_token
+
+
+def test_amnezia_aggregation_deduplicates_keys_and_uses_latest_handshake() -> None:
+    parsed = {
+        "ordinary": {"rx": 10, "tx": 20, "latest_handshake": 100},
+        "router": {"rx": 30, "tx": 40, "latest_handshake": 200},
+    }
+
+    assert stats._aggregate_amnezia_stats(
+        ["ordinary", "router", "router", "missing"], parsed
+    ) == {"rx": 40, "tx": 60, "latest_handshake": 200}

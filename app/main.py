@@ -847,11 +847,18 @@ def admin_ip_reconcile(
 
 @app.get("/admin/clients", response_class=HTMLResponse)
 def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    routers_by_client_id = {
+        int(router_entry["client_id"]): router_entry
+        for router_entry in list_routers()
+    }
+    clients = list_clients_with_stats()
+    for client in clients:
+        client["router"] = routers_by_client_id.get(int(client["id"]))
     return templates.TemplateResponse(
         request,
         "clients.html",
         {
-            "clients": list_clients_with_stats(),
+            "clients": clients,
             "base_url": str(request.base_url).rstrip("/"),
             "format_bytes": format_bytes,
             "hysteria_auth": hysteria_auth,

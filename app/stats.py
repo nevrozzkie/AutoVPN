@@ -4,7 +4,14 @@ import json
 import re
 from typing import Any
 
-from app.db import get_client_stats, list_clients, now_iso, set_setting, upsert_client_stats
+from app.db import (
+    get_client_stats,
+    list_clients,
+    list_router_amnezia_public_keys,
+    now_iso,
+    set_setting,
+    upsert_client_stats,
+)
 from app.eu_install import resolve_eu_host, run_remote_command, xray_client_email
 from app.runtime_config import (
     aeza_token,
@@ -71,6 +78,22 @@ def format_bytes(value: int | None) -> str:
     return f"{size:.1f} TB"
 
 
+def _aggregate_amnezia_stats(
+    public_keys: list[str], parsed: dict[str, dict[str, int]]
+) -> dict[str, int]:
+    values = {"rx": 0, "tx": 0, "latest_handshake": 0}
+    for public_key in dict.fromkeys(public_keys):
+        peer = parsed.get(public_key)
+        if peer is None:
+            continue
+        values["rx"] += peer["rx"]
+        values["tx"] += peer["tx"]
+        values["latest_handshake"] = max(
+            values["latest_handshake"], peer["latest_handshake"]
+        )
+    return values
+
+
 async def refresh_client_stats() -> dict[str, Any]:
     host = resolve_eu_host()
     if not host:
@@ -123,6 +146,11 @@ async def refresh_client_stats() -> dict[str, Any]:
 
     refreshed = 0
     seen_at = now_iso()
+    router_keys_by_client: dict[int, list[str]] = {}
+    for peer in list_router_amnezia_public_keys():
+        router_keys_by_client.setdefault(int(peer["client_id"]), []).append(
+            str(peer["public_key"])
+        )
     for client in list_clients():
         email = xray_client_email(client)
         previous = get_client_stats(int(client["id"]))
@@ -142,11 +170,10 @@ async def refresh_client_stats() -> dict[str, Any]:
             if xray_exit_code == 0
             else previous_xray
         )
+        amnezia_keys = [client.get("amnezia_public_key") or ""]
+        amnezia_keys.extend(router_keys_by_client.get(int(client["id"]), []))
         amnezia_values = (
-            amnezia_parsed.get(
-                client.get("amnezia_public_key") or "",
-                {"rx": 0, "tx": 0, "latest_handshake": 0},
-            )
+            _aggregate_amnezia_stats(amnezia_keys, amnezia_parsed)
             if amnezia_exit_code == 0
             else previous_amnezia
         )

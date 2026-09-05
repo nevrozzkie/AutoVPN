@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.config import settings
@@ -81,6 +81,18 @@ class VpnClient:
 
 
 @dataclass(frozen=True)
+class RouterAmneziaPeer:
+    """Auxiliary VPN+zapret identity, never an ordinary subscription client."""
+
+    router_id: str
+    client_id: int
+    private_key: str = field(repr=False)
+    public_key: str
+    preshared_key: str = field(repr=False)
+    ipv4: str
+
+
+@dataclass(frozen=True)
 class CapturedVpnConfig:
     current_ip: str
     config_updated_at: str
@@ -89,6 +101,7 @@ class CapturedVpnConfig:
     amnezia: AmneziaConfig
     clients: tuple[VpnClient, ...]
     revision: int = 0
+    router_amnezia_peers: tuple[RouterAmneziaPeer, ...] = ()
 
     @property
     def enabled_clients(self) -> tuple[VpnClient, ...]:
@@ -118,6 +131,29 @@ def _protocol(values: dict[str, str], name: str, default_port: int) -> ProtocolC
     return ProtocolConfig(enabled=enabled, port=port)
 
 
+def _capture_router_peers(connection: sqlite3.Connection) -> tuple[RouterAmneziaPeer, ...]:
+    # Used when reading an older schema during migration compatibility checks.
+    # A current schema with a missing peer table is corruption, not an empty set.
+    schema = connection.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
+    if schema is not None and int(schema["version"] or 0) < 9:
+        return ()
+    return tuple(
+        RouterAmneziaPeer(**dict(row))
+        for row in connection.execute(
+            """
+            SELECT peer.router_id, router.client_id, peer.private_key,
+                   peer.public_key, peer.preshared_key, peer.ipv4
+            FROM router_amnezia_peers AS peer
+            JOIN routers AS router ON router.router_id = peer.router_id
+            JOIN clients AS client ON client.id = router.client_id
+            WHERE router.enabled = 1 AND client.enabled = 1
+                  AND client.deleted_at IS NULL
+            ORDER BY peer.router_id
+            """
+        ).fetchall()
+    )
+
+
 def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
     setting_rows = connection.execute("SELECT key, value FROM settings").fetchall()
     values = {str(row["key"]): str(row["value"]) for row in setting_rows}
@@ -144,6 +180,7 @@ def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
         )
         for row in client_rows
     )
+    router_peers = _capture_router_peers(connection)
     server_names = tuple(
         item.strip()
         for item in _configured_value(
@@ -207,6 +244,7 @@ def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
         ),
         clients=clients,
         revision=int(state["desired_revision"]),
+        router_amnezia_peers=router_peers,
     )
 
 
@@ -240,6 +278,10 @@ def canonical_vpn_config_json(config: CapturedVpnConfig) -> str:
         "amnezia": asdict(config.amnezia),
         "clients": [asdict(client) for client in config.enabled_clients],
     }
+    # Historical applied snapshots remain readable and retain their exact JSON
+    # shape when no auxiliary peers were included in that server deployment.
+    if config.router_amnezia_peers:
+        payload["router_amnezia_peers"] = [asdict(peer) for peer in config.router_amnezia_peers]
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -280,4 +322,7 @@ def captured_vpn_config_from_json(payload_json: str) -> CapturedVpnConfig:
         ),
         clients=tuple(VpnClient(**client) for client in payload["clients"]),
         revision=int(payload["revision"]),
+        router_amnezia_peers=tuple(
+            RouterAmneziaPeer(**peer) for peer in payload.get("router_amnezia_peers", [])
+        ),
     )

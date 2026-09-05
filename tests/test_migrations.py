@@ -159,8 +159,9 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "router_credentials",
         "router_apply_results",
         "routers",
+        "router_amnezia_peers",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
@@ -170,6 +171,7 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "router_apply_results",
         "routers",
         "hysteria_per_client_auth",
+        "router_amnezia_peers",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS

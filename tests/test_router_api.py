@@ -95,7 +95,7 @@ def _authorization(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_router_credentials_migration_constraints_and_no_vpn_revision_change() -> None:
+def test_router_creation_adds_one_peer_revision_but_token_rotation_does_not() -> None:
     init_db()
     client = _fixture_client()
     before = get_vpn_state()["desired_revision"]
@@ -107,7 +107,7 @@ def test_router_credentials_migration_constraints_and_no_vpn_revision_change() -
     with pytest.raises(ValueError, match="Revoked"):
         rotate_router_credential(issued.credential_id)
 
-    assert get_vpn_state()["desired_revision"] == before
+    assert get_vpn_state()["desired_revision"] == before + 1
     assert issued.token.startswith(f"avrt_{issued.credential_id}.")
     assert len(issued.token.rsplit(".", 1)[1]) >= 43
     assert rotated != issued.token

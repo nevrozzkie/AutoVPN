@@ -97,6 +97,7 @@ def init_db() -> None:
         if not _is_memory_database(database_path):
             db.execute("PRAGMA journal_mode = WAL")
             _secure_database_files(database_path)
+        db.execute("BEGIN IMMEDIATE")
         db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             ("current_ip", ""),
@@ -111,6 +112,7 @@ def init_db() -> None:
                 _ensure_reality_settings(db),
                 _ensure_hysteria_settings(db),
                 _ensure_client_amnezia_material(db),
+                _ensure_router_amnezia_peers(db),
             )
         )
         if vpn_changed:
@@ -247,6 +249,78 @@ def _ensure_client_amnezia_material(db: sqlite3.Connection) -> bool:
     return changed
 
 
+def _router_amnezia_peers_table_exists(db: sqlite3.Connection) -> bool:
+    return db.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'router_amnezia_peers'
+        """
+    ).fetchone() is not None
+
+
+def _create_router_amnezia_peer(
+    db: sqlite3.Connection, router_id: str
+) -> tuple[dict[str, Any], bool]:
+    existing = db.execute(
+        """
+        SELECT router_id, private_key, public_key, preshared_key, ipv4
+        FROM router_amnezia_peers WHERE router_id = ?
+        """,
+        (router_id,),
+    ).fetchone()
+    if existing is not None:
+        return existing, False
+    router = db.execute(
+        "SELECT 1 FROM routers WHERE router_id = ?",
+        (router_id,),
+    ).fetchone()
+    if router is None:
+        raise LookupError("Router does not exist")
+    private_key = generate_private_key()
+    public_key = generate_public_key(private_key)
+    preshared_key = generate_preshared_key()
+    ipv4 = _allocate_amnezia_address(db)
+    db.execute(
+        """
+        INSERT INTO router_amnezia_peers(
+            router_id, private_key, public_key, preshared_key, ipv4
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (router_id, private_key, public_key, preshared_key, ipv4),
+    )
+    return {
+        "router_id": router_id,
+        "private_key": private_key,
+        "public_key": public_key,
+        "preshared_key": preshared_key,
+        "ipv4": ipv4,
+    }, True
+
+
+def ensure_router_amnezia_peer(
+    db: sqlite3.Connection, router_id: str
+) -> dict[str, Any]:
+    if not db.in_transaction:
+        db.execute("BEGIN IMMEDIATE")
+    peer, created = _create_router_amnezia_peer(db, router_id)
+    if created:
+        _mark_vpn_config_updated(db)
+    return peer
+
+
+def _ensure_router_amnezia_peers(db: sqlite3.Connection) -> bool:
+    if not _router_amnezia_peers_table_exists(db):
+        return False
+    changed = False
+    router_ids = db.execute(
+        "SELECT router_id FROM routers ORDER BY router_id"
+    ).fetchall()
+    for router in router_ids:
+        _, created = _create_router_amnezia_peer(db, str(router["router_id"]))
+        changed = changed or created
+    return changed
+
+
 def _amnezia_network(db: sqlite3.Connection) -> ipaddress.IPv4Network:
     prefix = _setting(db, "config.amnezia_network_prefix") or settings.amnezia_network_prefix
     try:
@@ -266,8 +340,15 @@ def _allocate_amnezia_address(db: sqlite3.Connection) -> str:
             "SELECT amnezia_ipv4 FROM clients WHERE amnezia_ipv4 IS NOT NULL AND amnezia_ipv4 != ''"
         )
     }
-    # The first usable host is the server. Every row reserves its address,
-    # including disabled clients and (after migration v2) soft-deleted clients.
+    if _router_amnezia_peers_table_exists(db):
+        used.update(
+            str(row["ipv4"])
+            for row in db.execute(
+                "SELECT ipv4 FROM router_amnezia_peers WHERE ipv4 != ''"
+            )
+        )
+    # The first usable host is the server. Every client and auxiliary peer row
+    # reserves its address, including disabled and soft-deleted owners.
     for address in list(network.hosts())[1:]:
         candidate = str(address)
         if candidate not in used:
@@ -285,6 +366,11 @@ def _legacy_or_free_amnezia_address(
         in_use = db.execute(
             "SELECT 1 FROM clients WHERE amnezia_ipv4 = ? LIMIT 1", (preferred,)
         ).fetchone()
+        if not in_use and _router_amnezia_peers_table_exists(db):
+            in_use = db.execute(
+                "SELECT 1 FROM router_amnezia_peers WHERE ipv4 = ? LIMIT 1",
+                (preferred,),
+            ).fetchone()
         if not in_use:
             return preferred
     return _allocate_amnezia_address(db)
@@ -332,6 +418,22 @@ def list_clients() -> list[dict[str, Any]]:
     with get_db() as db:
         return db.execute(
             "SELECT * FROM clients WHERE deleted_at IS NULL ORDER BY id DESC"
+        ).fetchall()
+
+
+def list_router_amnezia_public_keys() -> list[dict[str, Any]]:
+    with get_db() as db:
+        return db.execute(
+            """
+            SELECT client.id AS client_id, peer.public_key
+            FROM router_amnezia_peers AS peer
+            JOIN routers AS router ON router.router_id = peer.router_id
+            JOIN clients AS client ON client.id = router.client_id
+            WHERE router.enabled = 1
+              AND client.enabled = 1
+              AND client.deleted_at IS NULL
+            ORDER BY client.id, router.router_id
+            """
         ).fetchall()
 
 

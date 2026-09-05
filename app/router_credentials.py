@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Iterable
 
-from app.db import get_db, now_iso
+from app.db import (
+    _mark_vpn_config_updated,
+    ensure_router_amnezia_peer,
+    get_db,
+    now_iso,
+)
 
 
 ROUTER_TOKEN_PREFIX = "avrt_"
@@ -132,6 +137,7 @@ def create_router(name: str, client_id: int) -> dict[str, Any]:
             """,
             (router_id, client_id, normalized_label, timestamp, timestamp),
         )
+        ensure_router_amnezia_peer(db, router_id)
     return {
         "router_id": router_id,
         "client_id": client_id,
@@ -222,14 +228,22 @@ def set_router_enabled(router_id: str, enabled: bool) -> None:
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        updated = db.execute(
+        router = db.execute(
+            "SELECT enabled FROM routers WHERE router_id = ?",
+            (normalized_router_id,),
+        ).fetchone()
+        if router is None:
+            raise RouterCredentialError("Router does not exist")
+        desired_value = int(enabled)
+        if int(router["enabled"]) == desired_value:
+            return
+        db.execute(
             """
             UPDATE routers SET enabled = ?, updated_at = ? WHERE router_id = ?
             """,
-            (int(enabled), timestamp, normalized_router_id),
+            (desired_value, timestamp, normalized_router_id),
         )
-        if updated.rowcount != 1:
-            raise RouterCredentialError("Router does not exist")
+        _mark_vpn_config_updated(db)
 
 
 def update_router_label(router_id: str, name: str) -> None:
@@ -252,6 +266,13 @@ def delete_router(router_id: str) -> None:
     normalized_router_id = _validated_router_id(router_id)
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        exists = db.execute(
+            "SELECT 1 FROM routers WHERE router_id = ?",
+            (normalized_router_id,),
+        ).fetchone()
+        if exists is None:
+            raise RouterCredentialError("Router does not exist")
+        _mark_vpn_config_updated(db)
         deleted = db.execute(
             "DELETE FROM routers WHERE router_id = ?",
             (normalized_router_id,),
@@ -317,6 +338,7 @@ def issue_router_credential(
             ).fetchone()
             if router is None:
                 raise RouterCredentialError("Router does not belong to client")
+        ensure_router_amnezia_peer(db, assigned_router_id)
         db.execute(
             """
             INSERT INTO router_credentials(

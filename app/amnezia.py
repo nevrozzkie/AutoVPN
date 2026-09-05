@@ -256,8 +256,18 @@ def render_amnezia_vpn_key(config: "CapturedVpnConfig", client: "VpnClient") -> 
 
 
 def render_amnezia_server_config(config: "CapturedVpnConfig") -> str:
+    peers = [client.as_dict() for client in config.enabled_clients]
+    peers.extend(
+        {
+            "name": f"router {peer.router_id} vpn_zapret",
+            "amnezia_public_key": peer.public_key,
+            "amnezia_preshared_key": peer.preshared_key,
+            "amnezia_ipv4": peer.ipv4,
+        }
+        for peer in config.router_amnezia_peers
+    )
     return build_amnezia_server_config(
-        [client.as_dict() for client in config.enabled_clients],
+        peers,
         server_private_key=config.amnezia.server_private_key,
         obfuscation=config.amnezia.obfuscation.as_dict(),
         listen_port=config.amnezia.protocol.port,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -424,6 +424,57 @@ def router_snapshot(request: Request) -> Response:
         media_type="application/json",
         headers=headers,
     )
+
+
+@router.get("/amnezia/vpn-zapret")
+def router_auxiliary_amnezia(request: Request) -> Response:
+    """Return only this router's second peer from the immutable applied revision.
+
+    Kept separate from snapshot v3 so existing strict OpenWrt clients, ETags and
+    apply-results keep their contract. This endpoint never allocates live keys.
+    """
+    credential = authorize_router(request, "snapshot:read")
+    snapshot, config, _ = _load_applied_snapshot()
+    client = _client_from_applied_snapshot(credential, config)
+    peer = next(
+        (peer for peer in config.router_amnezia_peers
+         if peer.router_id == credential.router_id and peer.client_id == credential.client_id),
+        None,
+    )
+    if peer is None:
+        raise RouterApiError(
+            409, "router_peer_not_applied",
+            "The router VPN+zapret peer is not present in the applied snapshot",
+        )
+    if not config.current_ip:
+        raise RouterApiError(503, "snapshot_not_ready", "Applied VPN snapshot has no server endpoint")
+    profile = None
+    if config.amnezia.protocol.enabled:
+        auxiliary_client = replace(
+            client, amnezia_private_key=peer.private_key,
+            amnezia_public_key=peer.public_key, amnezia_preshared_key=peer.preshared_key,
+            amnezia_ipv4=peer.ipv4,
+        )
+        profile = _amnezia_profile(config, auxiliary_client)
+        # No second import link is needed; the controller consumes typed fields.
+        del profile["legacy_amnezia_vpn_import_key"]
+    payload = {
+        "schema_version": 1,
+        "router_id": credential.router_id,
+        "lane": "vpn_zapret",
+        "revision": int(snapshot["revision"]),
+        "snapshot_sha256": str(snapshot["payload_sha256"]),
+        "enabled": config.amnezia.protocol.enabled,
+        "profile": profile,
+    }
+    etag = response_etag(payload)
+    conditional = request.headers.get("if-none-match", "")
+    if len(conditional) > MAX_CONDITIONAL_HEADER:
+        raise RouterApiError(400, "invalid_header", "Conditional header is too long")
+    headers = {**API_RESPONSE_HEADERS, "ETag": etag}
+    if conditional == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=canonical_json_bytes(payload), media_type="application/json", headers=headers)
 
 
 @router.put("/apply-results/{idempotency_key}")
