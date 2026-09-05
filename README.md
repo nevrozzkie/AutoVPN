@@ -57,7 +57,7 @@ AutoVPN — программное обеспечение для админис�
 
 В состав 2.0 входит [OpenWrt-приложение](openwrt/README.md) для **Cudy WR3000S v1
 на OpenWrt 25.12.x**. Для OpenWrt 25.12.5 опубликован предварительный
-[установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r2):
+[установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.0-openwrt-25.12.5-r3):
 [установка одной командой](openwrt/docs/installation.md), дальнейшая настройка — через
 LuCI. Оно использует Router API этого же сайта, но сайт не раздаёт установочные
 файлы. Обычные зависимости роутера берутся из официальных feeds OpenWrt, наш APK

@@ -23,6 +23,9 @@ function fixture(t, options = {}) {
 	fs.writeFileSync(tty, '');
 	fs.mkdirSync(path.join(etc, 'repositories.d'), { recursive: true });
 	fs.mkdirSync(path.join(etc, 'keys'));
+	const archDir = options.libArch ? path.join(root, 'lib-apk') : etc;
+	fs.mkdirSync(archDir, {recursive:true});
+	if (!options.noArch) fs.writeFileSync(path.join(archDir, 'arch'), options.arch || 'aarch64_cortex-a53\n');
 	fs.writeFileSync(path.join(etc, 'repositories.d/distfeeds.list'),
 		'https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/packages/packages.adb\n' +
 		'https://downloads.openwrt.org/releases/25.12.5/packages/aarch64_cortex-a53/base/packages.adb\n' +
@@ -51,7 +54,7 @@ function fixture(t, options = {}) {
 	const encoded = JSON.stringify(manifest);
 	const manifestName = 'manifest-25.12.5-mediatek-filogic-aarch64_cortex-a53.json';
 	fs.writeFileSync(path.join(assets, manifestName), encoded);
-	const installer = source
+	let installer = source
 		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/router/releases/download/v0.7.0')
 		.replace('@AUTOVPN_SIGNING_KEY_SHA256@', hash(key))
 		.replace('@AUTOVPN_MANIFEST_SHA256@', options.badManifestHash ? '0'.repeat(64) : hash(encoded))
@@ -61,6 +64,9 @@ function fixture(t, options = {}) {
 		.replace("INSTALL_TTY='/dev/tty'", `INSTALL_TTY='${tty}'`)
 		.replace("WIFI_HELPER='/usr/libexec/autovpn/install-wifi'", `WIFI_HELPER='${path.join(bin, 'install-wifi')}'`)
 		.replace("ZAPRET_INSTALL='/usr/libexec/autovpn/zapret-install'", `ZAPRET_INSTALL='${path.join(bin, 'zapret-install')}'`);
+	if (options.missingStty) installer = installer
+		.replaceAll('command -v stty', `test -f '${path.join(root, 'stty-installed')}'`)
+		.replace('[ -t 3 ]', options.noTerminal ? 'false' : 'true');
 	const script = path.join(root, 'install.sh');
 	fs.writeFileSync(script, installer);
 	const mock = `#!${process.execPath}
@@ -111,10 +117,10 @@ else if (name === 'jsonfilter') {
   if (env.MOCK_DOWNLOAD_FAIL === '1') process.exit(22);
   fs.copyFileSync(path.join(env.MOCK_ASSETS, path.basename(url)), args[args.indexOf('--output')+1]);
 } else if (name === 'apk') {
-  if (args.includes('--print-arch')) output('aarch64_cortex-a53');
+  if (args.includes('--print-arch')) output('aarch64');
   else if (args.includes('query')) {
     if (args.includes('autovpn-controller')) output([{name:'autovpn-controller',version:env.MOCK_INSTALLED_CONTROLLER || '0.7.0-r1'}]);
-    else output([{name:'kernel',version:'6.12.85~fixture-r1'}]);
+    else output([{name:'kernel',version:'6.12.85~fixture-r1',arch:env.MOCK_KERNEL_ARCH || 'aarch64_cortex-a53'}]);
   }
   else {
     const entry = {name,args};
@@ -123,6 +129,7 @@ else if (name === 'jsonfilter') {
     if (args.includes('verify') && env.MOCK_BAD_SIGNATURE === '1') process.exit(1);
     if (args.includes('--simulate') && env.MOCK_BAD_PLAN === '1') process.exit(1);
     if (args.includes('add') && !args.includes('--simulate') && env.MOCK_BAD_COMMIT === '1') process.exit(1);
+    if (args.includes('add') && !args.includes('--simulate') && args.includes('coreutils-stty')) fs.writeFileSync(path.join(env.MOCK_ROOT, 'stty-installed'), 'installed');
     output('OK fixture APK');
   }
 } else throw new Error('Unexpected mock tool: ' + name);
@@ -138,7 +145,7 @@ else if (name === 'jsonfilter') {
 		run(args = [], env = {}) {
 			const result = spawnSync('/bin/sh', [script, ...args], {
 				encoding: 'utf8', timeout: 30000,
-				env: { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_ASSETS: assets, MOCK_LOG: logFile, ...env }
+				env: { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_ROOT: root, MOCK_ASSETS: assets, MOCK_LOG: logFile, ...env }
 			});
 			assert.equal(result.error, undefined);
 			const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
@@ -150,6 +157,43 @@ else if (name === 'jsonfilter') {
 function noCommit(result) {
 	assert.equal(result.calls.some(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate')), false);
 }
+
+test('configured package architecture wins over generic APK build architecture, with lib fallback', t => {
+	for (const libArch of [false, true]) {
+		const result = fixture(t, {libArch}).run(['--check']);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /aarch64_cortex-a53/);
+	}
+});
+
+test('missing, multiple or kernel-mismatched architectures fail before downloads', t => {
+	for (const options of [{noArch:true}, {arch:'aarch64\naarch64_cortex-a53\n'}, {arch:'aarch64\n'}]) {
+		const result = fixture(t, options).run(['--check']);
+		assert.notEqual(result.status, 0);
+		noCommit(result);
+		assert.equal(result.calls.some(c => c.name === 'curl'), false);
+	}
+});
+
+test('missing stty is included in official APK plan and installed before Wi-Fi bootstrap', t => {
+	const f = fixture(t, {missingStty:true});
+	const result = f.run([], {MOCK_BOOTSTRAP_MISSING:'1'});
+	assert.equal(result.status, 0, result.stderr);
+	const adds = result.calls.filter(c => c.name === 'apk' && c.args.includes('add'));
+	assert.equal(adds.length, 2);
+	for (const call of adds) assert.ok(call.args.includes('coreutils-stty'));
+	assert.ok(fs.existsSync(path.join(f.root, 'stty-installed')));
+	assert.ok(result.calls.some(c => c.name === 'install-wifi'));
+});
+
+test('missing stty check-only stays non-mutating, and no terminal blocks first install', t => {
+	const result = fixture(t, {missingStty:true}).run(['--check']);
+	assert.equal(result.status, 0, result.stderr);
+	noCommit(result);
+	const denied = fixture(t, {missingStty:true, noTerminal:true}).run([], {MOCK_BOOTSTRAP_MISSING:'1'});
+	assert.notEqual(denied.status, 0);
+	noCommit(denied);
+});
 
 test('source template cannot execute an unpublished installer', () => {
 	const result = spawnSync('/bin/sh', ['-c', source], { encoding: 'utf8' });

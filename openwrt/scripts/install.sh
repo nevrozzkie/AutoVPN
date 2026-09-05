@@ -41,7 +41,7 @@ for value in "$PUBLIC_KEY_SHA256" "$MANIFEST_SHA256"; do
 	printf '%s\n' "$value" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release pins are missing.'
 done
 [ "$(id -u)" = 0 ] || fail 'Run as root on the OpenWrt router.'
-for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod sync uci stty; do
+for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod sync uci; do
 	command -v "$tool" >/dev/null 2>&1 || fail "Missing $tool. Requires official OpenWrt 25.12 with APK; no firmware will be flashed."
 done
 if command -v curl >/dev/null 2>&1; then
@@ -59,13 +59,19 @@ field() { jsonfilter -i "$1" -e "$2" 2>/dev/null; }
 release=$(field "$WORK/board.json" '@.release.version') || fail 'Missing OpenWrt release.'
 distribution=$(field "$WORK/board.json" '@.release.distribution') || fail 'Missing distribution.'
 target=$(field "$WORK/board.json" '@.release.target') || fail 'Missing OpenWrt target.'
-architecture=$(apk --print-arch) || fail 'Cannot identify APK architecture.'
+# --print-arch reports APK's generic build architecture on stock OpenWrt
+# (aarch64), not the configured package ABI (aarch64_cortex-a53).
+arch_file=/etc/apk/arch
+[ -f "$arch_file" ] || arch_file=/lib/apk/arch
+architecture=$(awk 'NF { if (NF != 1 || ++n != 1) exit 1; value=$1 } END { if (n != 1) exit 1; print value }' "$arch_file") ||
+	fail 'Cannot read a single configured APK architecture.'
 [ "$distribution" = OpenWrt ] || fail 'Only official OpenWrt is supported.'
 printf '%s\n' "$release" | grep -Eq '^25\.12\.[0-9]+$' || fail 'Only stable OpenWrt 25.12.x is supported; no opkg or snapshot conversion.'
 printf '%s\n' "$target" | grep -Eq '^[a-z0-9_]+/[a-z0-9_-]+$' || fail 'Invalid target.'
 printf '%s\n' "$architecture" | grep -Eq '^[a-z0-9_-]+$' || fail 'Invalid architecture.'
-apk query --installed --match name --fields name,version --format json kernel >"$WORK/kernel.json" || fail 'Cannot read installed kernel ABI.'
+apk query --installed --match name --fields name,version,arch --format json kernel >"$WORK/kernel.json" || fail 'Cannot read installed kernel ABI.'
 [ "$(field "$WORK/kernel.json" '@[0].name')" = kernel ] || fail 'Missing installed kernel package.'
+[ "$(field "$WORK/kernel.json" '@[0].arch')" = "$architecture" ] || fail 'Configured APK architecture differs from the installed kernel package.'
 kernel_package=$(field "$WORK/kernel.json" '@[0].version') || fail 'Missing kernel package version.'
 kernel_release=$(uname -r)
 printf '%s\n' "$kernel_package" | grep -Eq '^[A-Za-z0-9_.+~-]+$' || fail 'Invalid kernel package version.'
@@ -218,7 +224,7 @@ esac
 
 # Check-only downloads into RAM and does not commit packages or UCI settings.
 apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" update || fail 'Official feed refresh failed.'
-apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" add --simulate "kernel=$kernel_package" "$@" || fail 'Package dependency/ABI check failed.'
+apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" add --simulate "kernel=$kernel_package" coreutils-stty "$@" || fail 'Package dependency/ABI check failed.'
 if [ "$CHECK_ONLY" = 1 ]; then
 	say 'Release signatures, compatibility, space budget and dependency plan checked; nothing installed.'
 	exit 0
@@ -240,15 +246,17 @@ if [ "$(uci -q get autovpn.wifi.bootstrap_completed 2>/dev/null || true)" != 1 ]
 	done
 	if [ "$LEGACY_INSTALL" = 0 ]; then
 		WIFI_BOOTSTRAP=1
-		(exec 3<"$INSTALL_TTY" && exec 4>"$INSTALL_TTY" && stty -g <&3 >/dev/null) 2>/dev/null ||
+		(exec 3<"$INSTALL_TTY" && exec 4>"$INSTALL_TTY" &&
+			if command -v stty >/dev/null 2>&1; then stty -g <&3 >/dev/null; else [ -t 3 ]; fi) 2>/dev/null ||
 			fail 'First installation requires an interactive controlling terminal for Wi-Fi setup. No package was installed.'
 	fi
 fi
 # Recheck overlay before the commit. APK performs its own locked transaction.
 check_space flash
 say 'Installing signed packages; dependencies come from official OpenWrt feeds.'
-apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" --cache-predownload add "kernel=$kernel_package" "$@" ||
+apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" --cache-predownload add "kernel=$kernel_package" coreutils-stty "$@" ||
 	fail 'Package installation failed. Existing network configuration was not changed by this installer; inspect APK errors before retrying.'
+command -v stty >/dev/null 2>&1 || fail 'coreutils-stty was not made available after installation; Wi-Fi was not changed.'
 apk query --installed --match name --fields version --format json autovpn-controller >"$WORK/installed-controller.json" ||
 	fail 'Installed controller version could not be verified.'
 installed_controller_version=$(field "$WORK/installed-controller.json" '@[0].version') ||
