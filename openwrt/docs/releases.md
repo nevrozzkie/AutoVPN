@@ -2,7 +2,7 @@
 
 Роутерные исходники входят в `openwrt/` единого репозитория AutoVPN и поставляются
 как часть AutoVPN 2.0. Команды подготовки ниже выполняются из корня AutoVPN.
-APK сохраняет собственную техническую версию `0.12.0` независимо от тега всего проекта.
+APK сохраняет собственную техническую версию `0.14.0` независимо от тега всего проекта.
 
 Этот проект не скачивает свои пакеты с AutoVPN-сервера. Роутер получает
 установочный `install.sh` из конкретного GitHub Release, а обычные зависимости
@@ -41,19 +41,12 @@ apk query --installed --match name --fields name,version --format json kernel
 
 Скачай точный SDK по ссылке из официального каталога выбранного target, проверь
 его SHA256 по `sha256sums` и распакуй. Не используй `*` внутри URL: HTTP-клиент
-не подбирает имя SDK по маске. Далее из каталога SDK:
-
-```sh
-./scripts/feeds update -a
-./scripts/feeds install -a
-make defconfig
-make package/autovpn-controller/compile V=s
-```
-
-Последняя команда предполагает, что каталог `AutoVPN/openwrt/` добавлен в SDK как
-package `autovpn-controller`. Команды сборки стороннего kmod намеренно здесь не
-придуманы: они зависят от выбранного feed и SDK. Его Makefile обязан зависеть
-от точного `kernel=...` из этого SDK.
+не подбирает имя SDK по маске. Точные входы, размещение трёх package-рецептов,
+команды сборки и подписи описаны в [awg-sdk-build.md](awg-sdk-build.md).
+В частности, не копируй весь `openwrt/` под один package: вложенные AWG-рецепты
+создадут дубли. Для controller нужны только `Makefile`, `LICENSE` и `files/`;
+оба AWG package размещаются рядом с ним. Kmod обязан зависеть от точного
+`kernel=...` из этого SDK.
 
 Для AmneziaWG используй исходники из официальной организации
 [AmneziaVPN](https://github.com/amnezia-vpn), зафиксируй конкретный commit и
@@ -95,12 +88,12 @@ python3 openwrt/scripts/prepare-release.py \
   --kernel-package '6.6.99~example_abcdef' \
   --release-base https://github.com/nevrozzkie/AutoVPN/releases/download/v2.0.0 \
   --signing-key /safe/path/autovpn-signing.pem \
-  --package /path/to/autovpn-controller-0.12.0-r1.apk \
+  --package /path/to/autovpn-controller-0.14.0-r1.apk \
   --package /path/to/kmod-amneziawg-0-r1.apk \
   --package /path/to/amneziawg-tools-0-r1.apk \
   --min-free-kib 32768 \
   --min-tmp-kib 65536 \
-  --output /safe/path/autovpn-router-v0.12.0
+  --output /safe/path/autovpn-router-v0.14.0
 ```
 
 Числа ядра и размеров в примере — условные, а не готовая конфигурация WR3000S.
