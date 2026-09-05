@@ -9,7 +9,7 @@ const { loadUcodeModule } = require('./ucode-loader.cjs');
 const root = path.resolve(__dirname, '..');
 const modules = path.join(root, 'files/usr/share/ucode/autovpn');
 const planner = loadUcodeModule(path.join(modules, 'networks.uc'));
-const transaction = loadUcodeModule(path.join(modules, 'network-transaction.uc'));
+const transaction = loadUcodeModule(path.join(modules, 'network_transaction.uc'));
 const helperSource = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/network-helper.uc'), 'utf8')
 	.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
 
@@ -96,16 +96,20 @@ function fixture(options = {}) {
 		}
 		return { read: () => output, close: () => status };
 	}
-	function run(action, args = []) {
+	function run(action, args = [], catchErrors = false) {
 		env.exit = null; env.output = null;
-		const uncaught = helperSource.replace("catch (e) { result = { ok: false, code: 'network_helper_failed' }; }", 'catch (e) { throw e; }');
-		const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'mockPopen', 'error', 'cursor', 'require',
-			'length', 'type', 'keys', 'push', 'json', 'sprintf', 'time', 'match', 'int', 'split', 'index', 'ARGV', 'printf', 'exit', uncaught);
+		const source = catchErrors ? helperSource : helperSource.replace(
+			"catch (e) { result = { ok: false, code: 'network_helper_failed' }; }",
+			'catch (e) { throw e; }'
+		);
+		const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'mockPopen', 'error', 'cursor', 'require', 'die',
+			'length', 'type', 'keys', 'push', 'json', 'sprintf', 'time', 'match', 'int', 'split', 'index', 'ARGV', 'printf', 'exit', source);
 		invoke(read,
 			(file, raw) => { files.set(file, raw); return Buffer.byteLength(raw); }, (file, mode) => { env.modes.push([file, mode]); return true; },
 			(from, to) => { files.set(to, files.get(from)); files.delete(from); return true; }, popen,
 			() => { const value = lastError; lastError = null; return value; }, cursor,
-			name => ({ 'autovpn.networks': planner, 'autovpn.network-transaction': transaction, 'autovpn.process': { popen } })[name],
+			name => ({ 'autovpn.networks': planner, 'autovpn.network_transaction': transaction, 'autovpn.process': { popen } })[name],
+			value => { throw value; },
 			value => typeof value === 'string' ? Buffer.byteLength(value) : value.length, type, Object.keys,
 			(array, value) => array.push(value), JSON.parse, (format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''), () => env.now,
 			(value, expression) => value.match(expression), value => Number.parseInt(value, 10), (value, separator) => value.split(separator),
@@ -231,6 +235,12 @@ test('real helper reloads wireless on timeout rollback as well as initial setup'
 	assert.equal(run('network-tick').phase, 'rolled_back');
 	assert.equal(env.files.get('/etc/config/wireless'), before);
 	assert.equal(env.calls.filter(argv => argv.includes('/sbin/wifi')).length, 2);
+});
+
+test('invalid uptime remains a catchable helper failure', () => {
+	const { env, run } = fixture();
+	env.files.set('/proc/uptime', 'unavailable\n');
+	assert.equal(run('network-setup', [], true).code, 'network_helper_failed');
 });
 
 test('helper clean check accepts empty change records but rejects actual changes', () => {

@@ -103,6 +103,10 @@ test('assembles immutable release artifacts and pins the manifest', () => {
   assert.match(install, /https:\/\/github\.com\/nevrozzkie\/AutoVPN\/releases\/download\/router-v0\.7\.0/);
   assert.match(install, new RegExp(sha256(manifestPath)));
   assert.equal(existsSync(join(output, 'autovpn-signing.pem')), true);
+  const repair = readFileSync(join(output, 'repair-bootstrap.sh'), 'utf8');
+  assert.match(repair, new RegExp(sha256(manifestPath)));
+  assert.match(repair, new RegExp(sha256(f.key)));
+  assert.doesNotMatch(repair, /@AUTOVPN_/);
 });
 
 test('accepts APK v3 noarch metadata only for the controller', () => {

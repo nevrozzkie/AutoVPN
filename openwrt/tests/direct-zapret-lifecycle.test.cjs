@@ -7,7 +7,7 @@ const test = require('node:test');
 const { loadUcodeModule } = require('./ucode-loader.cjs');
 
 const root = path.resolve(__dirname, '..');
-const direct = loadUcodeModule(path.join(root, 'files/usr/share/ucode/autovpn/direct-zapret.uc'));
+const direct = loadUcodeModule(path.join(root, 'files/usr/share/ucode/autovpn/direct_zapret.uc'));
 const helperSource = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/direct-zapret-helper.uc'), 'utf8')
 	.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
 const serviceSource = fs.readFileSync(path.join(root, 'files/etc/init.d/autovpn-direct-zapret'), 'utf8');
@@ -108,7 +108,7 @@ function harness() {
 		);
 		invoke(readfile, writefile, chmod, rename, unlink, access, mkdir, lstat, () => 'No such file or directory', cursor,
 			name => {
-				if (name === 'autovpn.direct-zapret') return direct;
+				if (name === 'autovpn.direct_zapret') return direct;
 				if (name === 'autovpn.process') return { popen };
 				throw new Error('Unexpected module: ' + name);
 			},

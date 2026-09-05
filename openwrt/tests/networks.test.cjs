@@ -8,7 +8,7 @@ const { loadUcodeModule } = require('./ucode-loader.cjs');
 const root = path.resolve(__dirname, '..');
 const modules = path.join(root, 'files/usr/share/ucode/autovpn');
 const planner = loadUcodeModule(path.join(modules, 'networks.uc'));
-const tx = loadUcodeModule(path.join(modules, 'network-transaction.uc'));
+const tx = loadUcodeModule(path.join(modules, 'network_transaction.uc'));
 const clone = value => structuredClone(value);
 const settings = { base_ssid: 'Общага', password: "hello-'$;pass" };
 function configs() {

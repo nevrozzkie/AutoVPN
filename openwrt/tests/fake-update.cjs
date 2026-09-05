@@ -23,8 +23,8 @@ else if (name === 'curl') {
 		write(value);
 	} catch (_) { process.exit(1); }
 } else if (name === 'apk') {
-	if (args.includes('--print-arch')) write('aarch64_cortex-a53');
-	else if (args.includes('query')) write([{name: args.includes('kernel') ? 'kernel' : 'autovpn-controller', version: args.includes('kernel') ? '6.12.85~fixture' : current()}]);
+	if (args.includes('--print-arch')) throw new Error('Updater must use the configured APK architecture file');
+	else if (args.includes('query')) write([{name: args.includes('kernel') ? 'kernel' : 'autovpn-controller', version: args.includes('kernel') ? '6.12.85~fixture' : current(), ...(args.includes('kernel') ? {arch: env.FAKE_KERNEL_ARCH || 'aarch64_cortex-a53'} : {})}]);
 	else if (args.includes('version')) write(args.at(-2) === args.at(-1) ? '=' : args.at(-2) < args.at(-1) ? '<' : '>');
 	else if (args.includes('adbdump')) write({info: {name: 'autovpn-controller', version: '0.8.0-r1', arch: env.FAKE_CONTROLLER_ARCH || 'all'}});
 	else if (args.includes('verify')) { if (env.FAKE_BAD_SIGNATURE === '1') process.exit(1); }

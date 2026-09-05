@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_VERSION = "0.14.0"
+APP_VERSION = "0.14.1"
 ALLOWED_PACKAGES = {"autovpn-controller", "kmod-amneziawg", "amneziawg-tools"}
 RELEASE_RE = re.compile(r"25\.12\.\d+")
 SAFE_OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -289,6 +289,8 @@ def main(argv: list[str]) -> int:
             manifest_path = output / manifest_name
             manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             replace_template(template, output / "install.sh", release_base, key_hash, sha256(manifest_path))
+            repair_template = Path(__file__).resolve().with_name("repair-bootstrap.sh")
+            replace_template(regular_file(repair_template, "repair template"), output / "repair-bootstrap.sh", release_base, key_hash, sha256(manifest_path))
         except Exception:
             shutil.rmtree(output, ignore_errors=True)
             raise

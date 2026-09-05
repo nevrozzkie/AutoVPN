@@ -6,7 +6,7 @@ import { readfile, lstat, error as fsError } from 'fs';
 import { cursor } from 'uci';
 
 const planner = require('autovpn.networks');
-const transaction = require('autovpn.network-transaction');
+const transaction = require('autovpn.network_transaction');
 const runner = require('autovpn.process');
 const JOURNAL = '/etc/autovpn/networks/journal.json';
 

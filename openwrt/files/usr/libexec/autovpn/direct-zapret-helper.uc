@@ -4,7 +4,7 @@
 import { readfile, writefile, chmod, rename, unlink, access, mkdir, lstat, error as fsError } from 'fs';
 import { cursor } from 'uci';
 
-const direct = require('autovpn.direct-zapret');
+const direct = require('autovpn.direct_zapret');
 const runner = require('autovpn.process');
 const ROOT = '/var/run/autovpn-direct-zapret';
 const ENGINE = '/usr/lib/autovpn-zapret';

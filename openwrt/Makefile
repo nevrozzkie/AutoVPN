@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.14.0
+PKG_VERSION:=0.14.1
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -88,10 +88,10 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/http.uc $(1)/usr/share/ucode/autovpn/http.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret.uc $(1)/usr/share/ucode/autovpn/zapret.uc
-	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/direct-zapret.uc $(1)/usr/share/ucode/autovpn/direct-zapret.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/direct_zapret.uc $(1)/usr/share/ucode/autovpn/direct_zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/networks.uc $(1)/usr/share/ucode/autovpn/networks.uc
-	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/network-transaction.uc $(1)/usr/share/ucode/autovpn/network-transaction.uc
-	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/setup-policy.uc $(1)/usr/share/ucode/autovpn/setup-policy.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/network_transaction.uc $(1)/usr/share/ucode/autovpn/network_transaction.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/setup_policy.uc $(1)/usr/share/ucode/autovpn/setup_policy.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/process.uc $(1)/usr/share/ucode/autovpn/process.uc
 	$(INSTALL_DIR) $(1)/usr/share/autovpn
 	$(INSTALL_DATA) ./files/usr/share/autovpn/snapshot.schema.json $(1)/usr/share/autovpn/snapshot.schema.json

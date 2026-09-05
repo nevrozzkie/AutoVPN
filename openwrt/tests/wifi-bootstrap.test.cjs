@@ -9,7 +9,7 @@ const { loadUcodeModule } = require('./ucode-loader.cjs');
 const root = path.join(__dirname, '..');
 const modules = path.join(root, 'files/usr/share/ucode/autovpn');
 const planner = loadUcodeModule(path.join(modules, 'networks.uc'));
-const transaction = loadUcodeModule(path.join(modules, 'network-transaction.uc'));
+const transaction = loadUcodeModule(path.join(modules, 'network_transaction.uc'));
 const journalPath = '/etc/autovpn/networks/journal.json';
 function state(phase = 'confirmed') {
 	const before = {}, after = {};
@@ -34,7 +34,7 @@ function fixture(options = {}) {
 			if (options.unreadable === name) { error = 'Permission denied'; return null; }
 			if (files.has(name)) return { type: 'file' };
 			error = 'No such file or directory'; return null;
-		}, () => error, () => ctx, name => ({ 'autovpn.networks': planner, 'autovpn.network-transaction': transaction,
+		}, () => error, () => ctx, name => ({ 'autovpn.networks': planner, 'autovpn.network_transaction': transaction,
 			'autovpn.process': { popen: argv => { commands.push(argv); return { read: () => JSON.stringify({ ok: true, phase: 'pending', transaction_id: '100-1', ready: true }), close: () => 0 }; } } })[name],
 		value => value == null ? null : Array.isArray(value) ? 'array' : typeof value === 'number' ? 'int' : typeof value === 'boolean' ? 'bool' : typeof value,
 		value => typeof value === 'string' ? Buffer.byteLength(value) : value.length, Object.keys, JSON.parse,
