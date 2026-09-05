@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import sys
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -61,6 +62,12 @@ def _fake_remote_environment(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     _write_executable(
         fake_bin / "systemctl",
         "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        " 'show xray.service --property=LoadState --value') echo \"${FAKE_XRAY_LOAD:-loaded}\"; exit 0 ;;\n"
+        " 'show xray.service --property=DynamicUser --value') echo \"${FAKE_XRAY_DYNAMIC:-no}\"; exit 0 ;;\n"
+        " 'show xray.service --property=User --value') echo \"${FAKE_XRAY_USER-}\"; exit 0 ;;\n"
+        " 'show xray.service --property=Group --value') echo \"${FAKE_XRAY_GROUP-}\"; exit 0 ;;\n"
+        "esac\n"
         "printf '%s\\n' \"$*\" >>\"$FAKE_SYSTEMCTL_LOG\"\n"
         "service=\"${3:-$2}\"\n"
         "case \"$1:$service\" in\n"
@@ -83,6 +90,7 @@ def _fake_remote_environment(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "FAKE_SYSTEMCTL_LOG": str(log),
         "FAKE_RESTART_MARKER": str(tmp_path / "restart-failed"),
+        "FAKE_XRAY_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
     }
     return root, environment
 
@@ -328,6 +336,108 @@ def test_success_keeps_versioned_backup_and_prunes_old_backups(tmp_path: Path) -
     assert (applied[0] / "manifest.ready").is_file()
     assert applied[0].name in result.stdout
     assert config.vless.private_key not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("service_user,explicit_group,mode", [
+    ("nobody", "", 0o640), ("vpn-daemon", "vpn-config", 0o640),
+    ("", "", 0o600), ("root", "", 0o600),
+])
+def test_xray_config_uses_effective_service_group_before_restart(
+    tmp_path: Path, service_user: str, explicit_group: str, mode: int,
+) -> None:
+    root, env = _fake_remote_environment(tmp_path)
+    fake_bin = Path(env["PATH"].split(":")[0])
+    env.update(FAKE_XRAY_USER=service_user, FAKE_XRAY_GROUP=explicit_group)
+    # Resolve simulated service identities to the test process's real group so
+    # the test performs actual chmod/chgrp/rename without requiring root.
+    _write_executable(fake_bin / "id", f'''#!/bin/sh
+case "$1:$3" in
+  -u:root) echo 0 ;;
+  -u:*) echo 65534 ;;
+  -g:*) echo {os.getgid()} ;;
+  *) exit 1 ;;
+esac
+''')
+    _write_executable(fake_bin / "getent", f'''#!/bin/sh
+[ "$1:$2:$3" = '--:group:vpn-config' ] || exit 1
+echo 'vpn-config:x:{os.getgid()}:'
+''')
+    config = _vless_only(_captured_config())
+    live = root / "usr/local/etc/xray/config.json"
+    # The assertion is invoked by the fake service at restart time, not merely
+    # after the deploy has completed, to catch chmod/chgrp after restart bugs.
+    check = tmp_path / "check-xray-mode.py"
+    check.write_text(
+        "import os, pathlib, stat\n"
+        f"p = pathlib.Path({str(live)!r})\n"
+        f"assert stat.S_IMODE(p.stat().st_mode) == {mode}\n"
+        f"assert p.stat().st_gid == {os.getgid()}\n"
+        "assert not (p.stat().st_mode & 0o007)\n"
+    )
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text(systemctl.read_text().replace(
+        "  restart:xray)\n", f"  restart:xray)\n    {shlex.quote(sys.executable)} {shlex.quote(str(check))} || exit 23\n",
+    ))
+    result = _run_script(render_config_apply_script(config), env)
+    assert result.returncode == 0, result.stderr
+    assert 'restart xray' in (tmp_path / "systemctl.log").read_text()
+
+
+@pytest.mark.parametrize("failure", ["missing_unit", "dynamic_user", "unknown_user", "unknown_group"])
+def test_xray_unresolved_service_identity_preserves_live_config(tmp_path: Path, failure: str) -> None:
+    root, env = _fake_remote_environment(tmp_path)
+    fake_bin = Path(env["PATH"].split(":")[0])
+    if failure == "missing_unit":
+        env["FAKE_XRAY_LOAD"] = "not-found"
+    elif failure == "dynamic_user":
+        env["FAKE_XRAY_DYNAMIC"] = "yes"
+    elif failure == "unknown_user":
+        env["FAKE_XRAY_USER"] = "autovpn-test-nonexistent-account"
+    else:
+        env["FAKE_XRAY_GROUP"] = "autovpn-test-nonexistent-group"
+        _write_executable(fake_bin / "getent", "#!/bin/sh\nexit 2\n")
+    live = root / "usr/local/etc/xray/config.json"
+    live.parent.mkdir(parents=True)
+    live.write_text("previous-config\n")
+    live.chmod(0o644)
+    result = _run_script(render_config_apply_script(_vless_only(_captured_config())), env)
+    assert result.returncode != 0
+    assert "validation failed:" in result.stderr
+    assert live.read_text() == "previous-config\n"
+    assert live.stat().st_mode & 0o777 == 0o644
+    assert not (tmp_path / "systemctl.log").exists()
+
+
+def test_xray_restart_failure_restores_previous_file_permissions(tmp_path: Path) -> None:
+    root, env = _fake_remote_environment(tmp_path)
+    env["FAIL_RESTART"] = "1"
+    live = root / "usr/local/etc/xray/config.json"
+    live.parent.mkdir(parents=True)
+    live.write_text("previous-config\n")
+    live.chmod(0o604)
+    previous = live.stat()
+    result = _run_script(render_config_apply_script(_vless_only(_captured_config())), env)
+    assert result.returncode != 0
+    assert live.read_text() == "previous-config\n"
+    assert live.stat().st_mode == previous.st_mode
+    assert live.stat().st_uid == previous.st_uid
+    assert live.stat().st_gid == previous.st_gid
+
+
+def test_xray_group_assignment_failure_does_not_publish_new_config(tmp_path: Path) -> None:
+    root, env = _fake_remote_environment(tmp_path)
+    fake_bin = Path(env["PATH"].split(":")[0])
+    _write_executable(fake_bin / "chgrp", "#!/bin/sh\nexit 1\n")
+    live = root / "usr/local/etc/xray/config.json"
+    live.parent.mkdir(parents=True)
+    live.write_text("previous-config\n")
+    live.chmod(0o644)
+    result = _run_script(render_config_apply_script(_vless_only(_captured_config())), env)
+    assert result.returncode != 0
+    assert live.read_text() == "previous-config\n"
+    assert live.stat().st_mode & 0o777 == 0o644
+    assert not live.with_name("config.json.autovpn-new").exists()
+    assert " applied; backup " not in result.stdout
 
 
 def test_transactional_full_install_bootstraps_then_reuses_same_apply() -> None:
