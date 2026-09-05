@@ -232,6 +232,36 @@ def _service_switch_script(config: CapturedVpnConfig) -> str:
     )
 
 
+def _xray_config_access_script(config: CapturedVpnConfig) -> str:
+    if not config.vless.protocol.enabled:
+        return ""
+    # Use systemd's effective identity (including drop-ins), not a hardcoded
+    # nobody/nogroup. Reject unresolved identities before touching live files.
+    return r'''
+[ "$(systemctl show xray.service --property=LoadState --value)" = loaded ] ||
+  fail_validation 'xray service is not loaded'
+[ "$(systemctl show xray.service --property=DynamicUser --value)" = no ] ||
+  fail_validation 'xray requires a static service identity'
+XRAY_USER=$(systemctl show xray.service --property=User --value) ||
+  fail_validation 'cannot resolve xray service user'
+XRAY_GROUP=$(systemctl show xray.service --property=Group --value) ||
+  fail_validation 'cannot resolve xray service group'
+XRAY_USER=${XRAY_USER:-root}
+XRAY_UID=$(id -u -- "$XRAY_USER") || fail_validation 'unknown xray service user'
+if [ -n "$XRAY_GROUP" ]; then
+  XRAY_GID=$(getent -- group "$XRAY_GROUP" | awk -F: 'NR == 1 {print $3}') ||
+    fail_validation 'unknown xray service group'
+else
+  XRAY_GID=$(id -g -- "$XRAY_USER") || fail_validation 'unknown xray primary group'
+fi
+case "$XRAY_UID:$XRAY_GID" in
+  *[!0-9:]*|:*|*:) fail_validation 'invalid xray service identity' ;;
+esac
+XRAY_CONFIG_MODE=0640
+[ "$XRAY_UID" != 0 ] || XRAY_CONFIG_MODE=0600
+'''
+
+
 def _service_check_script(config: CapturedVpnConfig) -> str:
     values = {
         "xray": config.vless.protocol.enabled,
@@ -283,6 +313,7 @@ def render_config_apply_script(
     revision = config.revision if revision is None else revision
     write_artifacts = _write_artifacts(config)
     validate = _validation_script(config)
+    xray_access = _xray_config_access_script(config)
     switch_services = _service_switch_script(config)
     check_services = _service_check_script(config)
     firewall = _firewall_script(config)
@@ -450,13 +481,18 @@ trap cleanup EXIT
 
 echo "[autovpn] validating staged VPN configuration revision {revision}"
 {validate}
+{xray_access}
 
 prepare_backup
 
 atomic_install() {{
-  local source="$1" target="$2" mode="$3"
+  local source="$1" target="$2" mode="$3" group="${{4:-}}"
   install -d -m 0755 "$(dirname "$target")"
   install -m "$mode" "$source" "$target.autovpn-new"
+  if [ -n "$group" ] && ! chgrp -- "$group" "$target.autovpn-new"; then
+    rm -f -- "$target.autovpn-new"
+    return 1
+  fi
   mv -f -- "$target.autovpn-new" "$target"
 }}
 
@@ -472,7 +508,11 @@ apply_service() {{
 }}
 
 SWITCH_STARTED=1
-if [ {xray_enabled} = 1 ]; then atomic_install "$STAGE/xray.json" "$LIVE_XRAY" 0600; else rm -f -- "$LIVE_XRAY"; fi
+if [ {xray_enabled} = 1 ]; then
+  atomic_install "$STAGE/xray.json" "$LIVE_XRAY" "$XRAY_CONFIG_MODE" "$XRAY_GID"
+else
+  rm -f -- "$LIVE_XRAY"
+fi
 if [ {hysteria_enabled} = 1 ]; then
   atomic_install "$STAGE/hysteria.yaml" "$LIVE_HYSTERIA" 0640
   atomic_install "$STAGE/hysteria.crt" "$LIVE_HYSTERIA_CERT" 0644
