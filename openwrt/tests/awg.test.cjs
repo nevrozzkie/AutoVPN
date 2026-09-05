@@ -14,10 +14,11 @@ const adapter = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runti
 function runAwg(action, accessResult, popenResult, readResult = () => null) {
 	let code;
 	const source = helper.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
-	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'unlink', 'access', 'popen', 'require',
+	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'unlink', 'access', 'fsError', 'lstat', 'popen', 'require',
 		'type', 'match', 'sort', 'keys', 'join', 'length', 'split', 'int', 'substr', 'json', 'ARGV', 'printf', 'exit', source);
 	invoke(
 		path => readResult(path), () => null, () => true, () => true, () => true, path => accessResult(path),
+		() => 'No such file or directory', () => null,
 		path => popenResult(path), name => name === 'autovpn.process' ? { popen: popenResult }
 			: name === 'autovpn.lanes' ? lanes : null,
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
@@ -38,19 +39,23 @@ const profile = () => ({
 	route_allowed_ips: ['0.0.0.0/0', '::/0'], install_routes: false, legacy_amnezia_vpn_import_key: 'vpn://opaque'
 });
 
-function awgHarness({ commandFailure, routes = [], marker, link, lane = 'vpn', profileValue } = {}) {
+function awgHarness({ commandFailure, routes = [], marker, link, lane = 'vpn', profileValue,
+	engineReceipt, engineReceiptInfo, engineReceiptError, engineReceiptReadFailure,
+	action = 'up' } = {}) {
 	const descriptor = lanes.get(lane);
 	const runtimeRoot = descriptor.root;
 	const deviceName = descriptor.awg.device;
 	const alias = lane === 'vpn_zapret' ? 'autovpn-awg-zapret-v1' : 'autovpn-awg-v1';
 	const value = profileValue || profile();
 	const files = new Map([[runtimeRoot + '/awg.json', JSON.stringify(value)]]);
+	if (engineReceipt !== undefined)
+		files.set('/usr/share/autovpn/awg-engine.json', engineReceipt);
 	if (marker != null) files.set(runtimeRoot + '/awg-owned', marker);
 	let device = link || null;
 	const calls = [];
 	let code;
 	const source = helper.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
-	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'unlink', 'access', 'popen', 'require',
+	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'unlink', 'access', 'fsError', 'lstat', 'popen', 'require',
 		'type', 'match', 'sort', 'keys', 'join', 'length', 'split', 'int', 'substr', 'json', 'ARGV', 'printf', 'exit', source);
 	function access(path) {
 		if (path === '/usr/bin/awg' || path === '/sys/module/amneziawg') return true;
@@ -77,15 +82,23 @@ function awgHarness({ commandFailure, routes = [], marker, link, lane = 'vpn', p
 		};
 	}
 	invoke(
-		(path, limit) => files.has(path) ? files.get(path).slice(0, limit) : null,
+		(path, limit) => engineReceiptReadFailure && path === '/usr/share/autovpn/awg-engine.json'
+			? null : files.has(path) ? files.get(path).slice(0, limit) : null,
 		(path, value) => { files.set(path, value); return value.length; }, () => true,
-		(from, to) => { files.set(to, files.get(from)); files.delete(from); return true; }, path => files.delete(path), access, popen,
+		(from, to) => { files.set(to, files.get(from)); files.delete(from); return true; }, path => files.delete(path), access,
+		() => engineReceiptError || 'No such file or directory',
+		path => {
+			if (path !== '/usr/share/autovpn/awg-engine.json') return null;
+			if (engineReceiptInfo !== undefined) return engineReceiptInfo;
+			return engineReceipt === undefined ? null : { type: 'file', uid: 0 };
+		},
+		popen,
 		name => name === 'autovpn.process' ? { popen } : name === 'autovpn.lanes' ? lanes : null,
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : Number.isInteger(value) ? 'int' : typeof value,
 		(value, expression) => value.match(expression), value => Array.isArray(value) ? value.slice().sort() : Object.keys(value).sort(), Object.keys,
 		(separator, values) => values.join(separator), value => value.length, (value, separator) => value.split(separator),
 		value => Number.parseInt(value, 10), (value, start, length) => value.substr(start, length), JSON.parse,
-		['up', runtimeRoot + '/awg.json', lane], () => {}, value => { code = value; }
+		[action, runtimeRoot + '/awg.json', lane], () => {}, value => { code = value; }
 	);
 	return { code, calls, files, device, descriptor, alias, profile: value };
 }
@@ -119,6 +132,60 @@ test('AWG up makes a durable intent before atomically aliased link creation and 
 	assert.equal(argv.includes(profile().interface.private_key), false);
 	assert.equal(argv.includes(profile().peer.preshared_key), false);
 	assert.equal(env.files.get('/etc/autovpn/runtime/awg.conf').includes(profile().interface.private_key), true);
+	assert.doesNotMatch(env.files.get('/etc/autovpn/runtime/awg.conf'), /(?:S3|S4|AdvancedSecurity)/,
+		'no receipt preserves the existing AWG1 config bytes');
+});
+
+test('exact UAPI2 receipt renders the documented AWG1-on-UAPI2 fields in both lanes', () => {
+	const receipt = JSON.stringify({ schema_version: 1, config_mode: 'awg1-on-uapi2' });
+	const primary = awgHarness({ engineReceipt: receipt });
+	assert.equal(primary.code, 0);
+	const primaryConfig = primary.files.get('/etc/autovpn/runtime/awg.conf');
+	assert.match(primaryConfig, /S3 = 0\nS4 = 0\n/);
+	assert.match(primaryConfig, /\[Peer\][\s\S]*AdvancedSecurity = on\n/);
+	assert.doesNotMatch(primaryConfig, /\nI[1-5] =/);
+
+	const secondaryProfile = profile();
+	delete secondaryProfile.legacy_amnezia_vpn_import_key;
+	secondaryProfile.interface.private_key = 'D'.repeat(43) + '=';
+	secondaryProfile.interface.address = '10.66.66.9/32';
+	const secondary = awgHarness({ lane: 'vpn_zapret', profileValue: secondaryProfile, engineReceipt: receipt });
+	assert.equal(secondary.code, 0);
+	const secondaryConfig = secondary.files.get('/etc/autovpn/runtime-zapret/awg.conf');
+	assert.match(secondaryConfig, /S3 = 0\nS4 = 0\n/);
+	assert.match(secondaryConfig, /\[Peer\][\s\S]*AdvancedSecurity = on\n/);
+	assert.doesNotMatch(secondaryConfig, /\nI[1-5] =/);
+});
+
+test('present receipt must be the exact supported UAPI2 contract and otherwise fails closed', () => {
+	for (const receipt of [
+		'{',
+		JSON.stringify({ schema_version: 2, config_mode: 'awg1-on-uapi2' }),
+		JSON.stringify({ schema_version: '1', config_mode: 'awg1-on-uapi2' }),
+		JSON.stringify({ schema_version: 1, config_mode: 'unknown' }),
+		JSON.stringify({ schema_version: 1, config_mode: 'awg1-on-uapi2', extra: true }),
+		'x'.repeat(513),
+	]) {
+		const env = awgHarness({ engineReceipt: receipt });
+		assert.equal(env.code, 1);
+		assert.equal(env.files.has('/etc/autovpn/runtime/awg-owned'), false);
+		assert.equal(env.calls.some(argv => argv.includes('amneziawg')), false);
+		assert.equal(awgHarness({ engineReceipt: receipt, action: 'available' }).code, 1);
+	}
+});
+
+test('receipt read failures, non-files and non-root files never fall back to legacy AWG1', () => {
+	for (const options of [
+		{ engineReceiptError: 'Permission denied' },
+		{ engineReceipt: '{"schema_version":1,"config_mode":"awg1-on-uapi2"}', engineReceiptReadFailure: true },
+		{ engineReceipt: '{"schema_version":1,"config_mode":"awg1-on-uapi2"}', engineReceiptInfo: { type: 'directory', uid: 0 } },
+		{ engineReceipt: '{"schema_version":1,"config_mode":"awg1-on-uapi2"}', engineReceiptInfo: { type: 'file', uid: 1000 } },
+	]) {
+		const env = awgHarness(options);
+		assert.equal(env.code, 1);
+		assert.equal(env.files.has('/etc/autovpn/runtime/awg-owned'), false);
+		assert.equal(awgHarness({ ...options, action: 'available' }).code, 1);
+	}
 });
 
 test('secondary AWG owns a separate root, interface, alias and outer mark without an import key', () => {

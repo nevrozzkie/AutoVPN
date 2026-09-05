@@ -4,6 +4,21 @@
 kernel AmneziaWG implementation; it never translates the profile to ordinary
 WireGuard and never falls back to a plaintext/direct route.
 
+The typed snapshot is intentionally unchanged when a newer kernel uses the
+UAPI2 standalone module. The paired `amneziawg-tools` package installs the
+fixed, package-owned receipt `/usr/share/autovpn/awg-engine.json` with exactly:
+
+```json
+{"schema_version":1,"config_mode":"awg1-on-uapi2"}
+```
+
+Only that exact receipt enables the UAPI2 rendering branch. It preserves the
+AWG1 snapshot fields, adds `S3 = 0` and `S4 = 0`, and writes the upstream
+accepted `AdvancedSecurity = on` in the peer section. It never writes `I1`–`I5`
+and does not accept any UCI/user-selected mode. A missing receipt preserves the
+legacy AWG1 rendering for existing installations; a malformed, oversized or
+unsupported present receipt makes AWG unavailable (fail closed).
+
 ## Required target packages
 
 Install a kernel module and tools which provide both `amneziawg` link type and
@@ -44,7 +59,9 @@ refuses a collision instead of flushing a shared routing table.
 
 The controller owns this kernel interface directly; it does not create a second
 netifd AWG configuration. Profiles requiring AWG2 I-fields are not accepted by the
-current v1 snapshot contract. An available AWG candidate is prepared even with a
+current v1 snapshot contract. The UAPI2 receipt mode is not an AWG2 profile: it
+only adapts the fixed local `awg setconf` syntax for a pinned module/tools pair.
+An available AWG candidate is prepared even with a
 manually selected VLESS/Hysteria profile, so Ping all can inspect it without
 switching the client network. A failed unused AWG startup removes that optional
 candidate from the runtime; it does not prevent VLESS/Hysteria startup. Steady
@@ -68,11 +85,13 @@ is a trust decision, not a TLS-free mode.
 
 ## Validation boundary
 
-Host tests exercise rendering and command/secret/failure boundaries. They do not
-execute the AmneziaWG kernel, nftables or real packet routing. The real macOS
-sing-box check covers VLESS/Hysteria configuration, not Linux-only `routing_mark`.
-Before deployment, build the exact OpenWrt image and test AWG handshakes, DNS,
-fail-closed, reboot and rollback on the device.
+Host tests exercise rendering, receipt validation and command/secret/failure
+boundaries. They do not execute the AmneziaWG kernel, nftables or real packet
+routing. The real macOS sing-box check covers VLESS/Hysteria configuration, not
+Linux-only `routing_mark`. Before deployment, build packages against the exact
+installed OpenWrt SDK and test AWG handshakes, DNS, fail-closed, reboot and
+rollback on the device. Rebuilding or flashing the whole firmware is not
+required for this package-based workflow.
 
 Primary sources: [AWG config parser](https://github.com/amnezia-vpn/amneziawg-tools/blob/master/src/config.c),
 [kernel device](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/blob/master/src/device.c),

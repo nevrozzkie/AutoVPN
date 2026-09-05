@@ -5,7 +5,7 @@
  * The profile file is generated from the HTTPS-delivered, validated snapshot and is
  * mode 0600. This helper never puts a private key in an argv vector.
  */
-import { readfile, writefile, chmod, rename, unlink, access } from 'fs';
+import { readfile, writefile, chmod, rename, unlink, access, error as fsError, lstat } from 'fs';
 
 const processRunner = require('autovpn.process');
 const lanes = require('autovpn.lanes');
@@ -24,6 +24,28 @@ const ALIAS = LANE != null && LANE.id == 'vpn_zapret' ? 'autovpn-awg-zapret-v1' 
 const MARKER = ALIAS + '\n';
 const IP = '/sbin/ip';
 const MODPROBE = '/sbin/modprobe';
+/*
+ * An absent receipt preserves the AWG1 config syntax used by existing
+ * installations. A present receipt is an immutable package-owned statement
+ * about the paired module/tools ABI; malformed or unknown receipts must never
+ * make us guess which wire format a kernel accepts.
+ */
+const ENGINE_RECEIPT = '/usr/share/autovpn/awg-engine.json';
+
+function engineMode() {
+	let info = lstat(ENGINE_RECEIPT);
+	if (info == null) return fsError() == 'No such file or directory' ? 'awg1' : null;
+	if (info.type != 'file' || info.uid != 0) return null;
+	let raw = readfile(ENGINE_RECEIPT, 513);
+	if (raw == null || length(raw) > 512) return null;
+	try {
+		let value = json(raw);
+		if (!hasExactKeys(value, ['schema_version', 'config_mode']) ||
+			type(value.schema_version) != 'int' || value.schema_version != 1 ||
+			type(value.config_mode) != 'string' || value.config_mode != 'awg1-on-uapi2') return null;
+		return 'awg1-on-uapi2';
+	} catch (e) { return null; }
+}
 
 function awgBin() {
 	if (access('/usr/bin/awg', 'x') === true) return '/usr/bin/awg';
@@ -148,7 +170,7 @@ function moduleReady() {
 	return command([MODPROBE, 'amneziawg']) && access('/sys/module/amneziawg') === true;
 }
 function available() {
-	return awgBin() != null && moduleReady();
+	return engineMode() != null && awgBin() != null && moduleReady();
 }
 function down() {
 	/* Never delete an interface that was not created by this controller. */
@@ -166,7 +188,8 @@ function down() {
 }
 function up(path) {
 	let value = profile(path);
-	if (!valid(value) || !addressFree(value.interface.address)) return false;
+	let mode = engineMode();
+	if (mode == null || !valid(value) || !addressFree(value.interface.address)) return false;
 	if (!available() || !down()) return false;
 	/* Refuse a foreign/orphan link before recording a new creation intent. */
 	if (access('/sys/class/net/' + DEVICE) === true || !privateWrite(OWNED, MARKER)) return false;
@@ -176,8 +199,11 @@ function up(path) {
 	let o = value.obfuscation;
 	let config = '[Interface]\nPrivateKey = ' + value.interface.private_key + '\n' +
 		'Jc = ' + o.Jc + '\nJmin = ' + o.Jmin + '\nJmax = ' + o.Jmax + '\n' +
-		'S1 = ' + o.S1 + '\nS2 = ' + o.S2 + '\nH1 = ' + o.H1 + '\nH2 = ' + o.H2 + '\nH3 = ' + o.H3 + '\nH4 = ' + o.H4 + '\n\n' +
+		'S1 = ' + o.S1 + '\nS2 = ' + o.S2 + '\n' +
+		(mode == 'awg1-on-uapi2' ? 'S3 = 0\nS4 = 0\n' : '') +
+		'H1 = ' + o.H1 + '\nH2 = ' + o.H2 + '\nH3 = ' + o.H3 + '\nH4 = ' + o.H4 + '\n\n' +
 		'[Peer]\nPublicKey = ' + peer.public_key + '\nPresharedKey = ' + peer.preshared_key + '\n' +
+		(mode == 'awg1-on-uapi2' ? 'AdvancedSecurity = on\n' : '') +
 		'AllowedIPs = 0.0.0.0/0\nEndpoint = ' + peer.endpoint.host + ':' + peer.endpoint.port + '\n' +
 		'PersistentKeepalive = ' + peer.persistent_keepalive + '\n';
 	let awg = awgBin();
@@ -197,7 +223,7 @@ function up(path) {
 function check(path) {
 	let value = profile(path);
 	let awg = awgBin();
-	return awg != null && valid(value) && marker() && link() === true && command([awg, 'show', DEVICE]);
+	return engineMode() != null && awg != null && valid(value) && marker() && link() === true && command([awg, 'show', DEVICE]);
 }
 
 let action = ARGV[0];

@@ -1,8 +1,10 @@
-# OpenWrt 25.12.5 build inputs and AmneziaWG blocker
+# OpenWrt 25.12.5 build inputs and AmneziaWG compatibility
 
 This note records the inputs verified on 2026-09-05 for the Cudy WR3000S v1
-release. It is deliberately not a claim that an AmneziaWG package is compatible
-with this firmware. No OpenWrt SDK build or target load test has been completed.
+release. The earlier patch failures below are retained as audit evidence.
+The standalone replacement now has paired package recipes and a bounded
+AWG1-on-UAPI2 renderer; this is not a claim of a successful target load or
+handshake. SDK build evidence, when available, is recorded separately.
 
 ## Exact OpenWrt target and SDK
 
@@ -168,12 +170,20 @@ patch-on-current-WireGuard layout. However, it uses generic-netlink UAPI version
 2, adds `S3`, `S4`, `I1` through `I5`, and makes advanced security a peer-level
 setting.
 
-The current AutoVPN AWG renderer writes the AWG1 interface fields only and does
-not emit the newer peer `AdvancedSecurity` setting. Substituting one of these
-standalone tags would therefore change the protocol/configuration contract and
-is not a drop-in build fix. That path needs a separately designed renderer/API
-migration and interoperability tests; it must not be silently used for this
-AWG1 release.
+The original AutoVPN AWG renderer wrote AWG1 interface fields only and did not
+emit the newer peer `AdvancedSecurity` setting. It was not compatible with a
+silent replacement by these tags. The paired recipes under `openwrt/packages/`
+now address this explicitly: a package-owned receipt selects `S3 = 0`, `S4 = 0`
+and peer `AdvancedSecurity = on`, with no I-fields. Existing installations
+without the receipt retain the old syntax. See [amnezia.md](amnezia.md).
+
+The tools source is pinned to tag `v1.0.20250903`, commit
+`5c6ffd6168f7c69199200a91803fa02e1b8c4152`, SHA256
+`d729a6f54aafcd55b2cbb7324f09ca8f0d2536772970652bf822a271d0c907d7`.
+Its checked-in generic-netlink header is patched from UAPI 1 to UAPI 2 to match
+the module. The native parser test verifies configuration fields, not IPC or
+kernel interoperability; the SDK must apply that patch and build the complete
+binary before it can be considered an install candidate.
 
 ## Reproducible release gate
 
@@ -189,8 +199,9 @@ must take all of the following as explicit, logged inputs:
    public key passed to `prepare-release.py`;
 5. a new output directory and measured router `/overlay` and `/tmp` budgets.
 
-No `kmod-amneziawg` recipe is approved by this note. Before an AWG-capable
-release can be prepared, a Linux x86-64 build using this exact SDK must:
+The recipes are custom AutoVPN packaging of pinned official sources, not
+upstream-issued binary packages. Before an AWG-capable public release is
+approved, a Linux x86-64 build using this exact SDK must:
 
 1. build both the kmod and matching `amneziawg-tools` from pinned source without
    ignored patch failures;
