@@ -9,6 +9,9 @@ PUBLIC_KEY_SHA256='@AUTOVPN_SIGNING_KEY_SHA256@'
 MANIFEST_SHA256='@AUTOVPN_MANIFEST_SHA256@'
 CHECK_ONLY=0
 WORK=''
+TRUST_ROOT=/etc/autovpn
+RELEASE_RECEIPT="$TRUST_ROOT/release.json"
+RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
 
 fail() { printf 'AutoVPN: %s\n' "$*" >&2; exit 1; }
 say() { printf 'AutoVPN: %s\n' "$*"; }
@@ -33,7 +36,7 @@ for value in "$PUBLIC_KEY_SHA256" "$MANIFEST_SHA256"; do
 	printf '%s\n' "$value" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release pins are missing.'
 done
 [ "$(id -u)" = 0 ] || fail 'Run as root on the OpenWrt router.'
-for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod; do
+for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod sync; do
 	command -v "$tool" >/dev/null 2>&1 || fail "Missing $tool. Requires official OpenWrt 25.12 with APK; no firmware will be flashed."
 done
 if command -v curl >/dev/null 2>&1; then
@@ -79,6 +82,43 @@ check_hash() {
 	actual=$(sha256sum "$WORK/$1") || fail 'Cannot calculate checksum.'
 	[ "${actual%% *}" = "$2" ] || fail "Checksum mismatch: $1"
 }
+check_existing_trust() {
+	# A first install creates this trust root only after APK's transaction has
+	# succeeded.  A later invocation may reuse it only when it is exactly the
+	# release baked into this installer; never silently replace a pin.
+	[ ! -L "$TRUST_ROOT" ] || fail 'AutoVPN trust directory must not be a symlink.'
+	if [ ! -e "$RELEASE_RECEIPT" ] && [ ! -L "$RELEASE_RECEIPT" ] && \
+		[ ! -e "$RELEASE_KEY" ] && [ ! -L "$RELEASE_KEY" ]; then return 0; fi
+	[ -f "$RELEASE_RECEIPT" ] && [ ! -L "$RELEASE_RECEIPT" ] && \
+		[ -f "$RELEASE_KEY" ] && [ ! -L "$RELEASE_KEY" ] ||
+		fail 'Existing AutoVPN release trust is incomplete or unsafe; inspect it manually before reinstalling.'
+	[ "$(field "$RELEASE_RECEIPT" '@.schema_version')" = 1 ] && \
+		[ "$(field "$RELEASE_RECEIPT" '@.release_base')" = "$RELEASE_BASE" ] && \
+		[ "$(field "$RELEASE_RECEIPT" '@.signing_key_sha256')" = "$PUBLIC_KEY_SHA256" ] ||
+		fail 'Existing AutoVPN release trust conflicts with this installer; refusing to replace it.'
+	key_hash=$(sha256sum "$RELEASE_KEY") || fail 'Cannot validate existing AutoVPN signing key.'
+	[ "${key_hash%% *}" = "$PUBLIC_KEY_SHA256" ] ||
+		fail 'Existing AutoVPN signing key conflicts with this installer; refusing to replace it.'
+}
+persist_trust() {
+	# Called strictly after `apk add` succeeds. Both files are private so a LuCI
+	# update trusts a local pin rather than an arbitrary response from GitHub.
+	check_existing_trust
+	[ -e "$RELEASE_RECEIPT" ] && return 0
+	mkdir -p "$TRUST_ROOT"
+	chmod 0700 "$TRUST_ROOT"
+	key_tmp="$RELEASE_KEY.new.$$"
+	receipt_tmp="$RELEASE_RECEIPT.new.$$"
+	trap 'rm -f "$key_tmp" "$receipt_tmp"; cleanup' EXIT INT TERM
+	cp "$WORK/autovpn-signing.pem" "$key_tmp"
+	chmod 0600 "$key_tmp"
+	printf '{"schema_version":1,"release_base":"%s","signing_key_sha256":"%s","installed_version":"%s"}\n' \
+		"$RELEASE_BASE" "$PUBLIC_KEY_SHA256" "$controller_version" >"$receipt_tmp"
+	chmod 0600 "$receipt_tmp"
+	mv -f "$key_tmp" "$RELEASE_KEY"
+	mv -f "$receipt_tmp" "$RELEASE_RECEIPT"
+	sync
+}
 manifest="manifest-$release-$(printf '%s' "$target" | tr / -)-$architecture.json"
 say "Checking $release / $target / $architecture."
 download "$manifest" 64
@@ -92,6 +132,7 @@ MANIFEST="$WORK/$manifest"
 [ "$(field "$MANIFEST" '@.kernel_package')" = "$kernel_package" ] || fail 'Kernel package ABI mismatch. No force-install is permitted.'
 [ "$(field "$MANIFEST" '@.signing_key')" = autovpn-signing.pem ] || fail 'Unexpected signing key filename.'
 [ "$(field "$MANIFEST" '@.signing_key_sha256')" = "$PUBLIC_KEY_SHA256" ] || fail 'Signing key pin mismatch.'
+check_existing_trust
 min_free=$(field "$MANIFEST" '@.min_free_kib') || fail 'Missing flash budget.'
 min_tmp=$(field "$MANIFEST" '@.min_tmp_kib') || fail 'Missing temporary-space budget.'
 for value in "$min_free" "$min_tmp"; do
@@ -136,6 +177,7 @@ cp "$WORK/autovpn-signing.pem" "$WORK/keys/autovpn-signing.pem"
 count=0
 names=' '
 files=' '
+controller_version=''
 set --
 while [ "$count" -lt 4 ]; do
 	name=$(field "$MANIFEST" "@.packages[$count].name" || true)
@@ -153,10 +195,15 @@ while [ "$count" -lt 4 ]; do
 	download "$filename" 16384
 	check_hash "$filename" "$hash"
 	apk --keys-dir "$WORK/publisher-key" verify "$WORK/$filename" || fail "Invalid package signature: $name"
+	if [ "$name" = autovpn-controller ]; then
+		controller_version=$(field "$MANIFEST" "@.packages[$count].version") || fail 'Missing controller package version.'
+		printf '%s\n' "$controller_version" | grep -Eq '^[A-Za-z0-9._+~-]+$' || fail 'Invalid controller package version.'
+	fi
 	set -- "$@" "$WORK/$filename"
 	count=$((count + 1))
 done
 case "$names" in *' autovpn-controller '*) ;; *) fail 'Missing controller package.' ;; esac
+[ -n "$controller_version" ] || fail 'Missing controller package version.'
 awg=$(field "$MANIFEST" '@.capabilities.amneziawg') || fail 'Missing AmneziaWG capability.'
 case "$awg:$count" in
 	true:3) ;;
@@ -176,6 +223,14 @@ check_space flash
 say 'Installing signed packages; dependencies come from official OpenWrt feeds.'
 apk --keys-dir "$WORK/keys" --repositories-file "$WORK/repositories.sorted" --cache-dir "$WORK/cache" --cache-predownload add "kernel=$kernel_package" "$@" ||
 	fail 'Package installation failed. Existing network configuration was not changed by this installer; inspect APK errors before retrying.'
+apk query --installed --match name --fields version --format json autovpn-controller >"$WORK/installed-controller.json" ||
+	fail 'Installed controller version could not be verified.'
+installed_controller_version=$(field "$WORK/installed-controller.json" '@[0].version') ||
+	fail 'Installed controller version is missing.'
+[ "$installed_controller_version" = "$controller_version" ] ||
+	fail 'Installed controller version differs from the signed release manifest.'
+controller_version=$installed_controller_version
+persist_trust
 say 'Installed. Open LuCI → Services → AutoVPN → Setup.'
 say 'Enter the site URL, router ID/token, Wi-Fi name and WPA2 password there. LAN/SSID settings are not changed by this installer.'
 say 'Zapret transport is not implemented in this release; its prepared SSIDs remain disabled.'

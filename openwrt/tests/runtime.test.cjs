@@ -249,6 +249,7 @@ function fixture(t, scenario = '') {
 		fs.symlinkSync(path.join(__dirname, 'fake-runtime.cjs'), path.join(bin, name));
 	let source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-adapter'), 'utf8');
 	source = source.replace('ROOT=/etc/autovpn/runtime', 'ROOT=' + work)
+		.replace('GATE_ROOT=/etc/autovpn/state', 'GATE_ROOT=' + work)
 		.replace('SERVICE=/etc/init.d/autovpn-tunnel', 'SERVICE=' + path.join(bin, 'service'))
 		.replace('chmod 0700 /etc/autovpn "$ROOT"', 'chmod 0700 "$ROOT"');
 	const adapter = path.join(directory, 'adapter');
@@ -276,6 +277,20 @@ test('shell runtime checks candidate, closes guard before restart, opens only af
 	assert.equal(events.filter(event => event[0] === 'curl').length, 2);
 	assert.ok(events.some(event => event.join(' ').includes('priority 20192 iif br-avpn unreachable')));
 });
+test('maintenance gates block every runtime opening path including dangling symlinks', t => {
+	for (const gate of ['maintenance.lock', 'update.lock']) {
+		const env = fixture(t);
+		fs.symlinkSync('missing-target', path.join(env.work, gate));
+		for (const action of ['prepare', 'activate', 'verify', 'rollback', 'restore']) {
+			const result = env.run(action);
+			assert.equal(result.status, 1);
+			assert.equal(JSON.parse(result.stdout).code, 'maintenance_locked');
+		}
+		assert.equal(env.events().some(event => event.join(' ').includes('guard-open.nft')), false);
+		assert.equal(env.events().some(event => event.join(' ').includes('service start')), false);
+	}
+});
+
 test('runtime refuses to activate while SSID transaction needs confirmation', t => {
 	const env = fixture(t, 'networks-pending');
 	assert.equal(env.run('activate').status, 1);

@@ -51,29 +51,102 @@ set_router_id() {
 setup_action() {
 	local action result status
 	action="$1"
+	if [ "$action" = resume ]; then
+		resume_backup_prepare || {
+			printf '%s\n' '{"ok":false,"code":"maintenance_backup_failed"}'
+			return 1
+		}
+	fi
 	if result="$(/usr/bin/ucode /usr/libexec/autovpn/setup-helper.uc "$action" "${2:-}")"; then
 		status=0
 	else
 		status=$?
 	fi
-	if [ "$action" = activate ] && [ "$status" -eq 0 ]; then
+	if [ "$action" = resume ] && [ "$status" -ne 0 ]; then
+		resume_backup_discard
+	fi
+	if { [ "$action" = activate ] || [ "$action" = resume ]; } && [ "$status" -eq 0 ]; then
 		# The loop may refresh immediately, so release before starting it.
 		trap - EXIT INT TERM
+		if [ "$action" = resume ]; then
+			# Between gate removal and init success, preserve an interrupt-safe
+			# route back to the exact ready gate the user approved.
+			trap 'resume_backup_restore >/dev/null 2>&1 || true; exit 1' INT TERM
+		fi
 		lock -u "$LOCK_FILE"
 		# No restart: its stop hook would invoke the controller recursively.
 		if ! /etc/init.d/autovpn enable >/dev/null 2>&1 || ! /etc/init.d/autovpn start >/dev/null 2>&1; then
 			uci set autovpn.main.enabled=0
 			uci set autovpn.main.setup_prepared=1
 			uci commit autovpn
+			[ "$action" != resume ] || resume_backup_restore || true
 			printf '%s\n' '{"ok":false,"code":"service_start_failed"}'
 			return 1
+		fi
+		if [ "$action" = resume ]; then
+			resume_backup_discard
+			trap - INT TERM
 		fi
 	fi
 	[ -n "$result" ] && printf '%s\n' "$result"
 	return "$status"
 }
 
+RESUME_MAINTENANCE_BACKUP=/etc/autovpn/state/.resume-maintenance.lock
+RESUME_UPDATE_BACKUP=/etc/autovpn/state/.resume-update.lock
+
+resume_backup_prepare() {
+	rm -f "$RESUME_MAINTENANCE_BACKUP" "$RESUME_UPDATE_BACKUP"
+	if [ -f /etc/autovpn/state/maintenance.lock ]; then
+		cp -p /etc/autovpn/state/maintenance.lock "$RESUME_MAINTENANCE_BACKUP" || return 1
+		chmod 0600 "$RESUME_MAINTENANCE_BACKUP" || return 1
+	fi
+	if [ -f /etc/autovpn/state/update.lock ]; then
+		cp -p /etc/autovpn/state/update.lock "$RESUME_UPDATE_BACKUP" || return 1
+		chmod 0600 "$RESUME_UPDATE_BACKUP" || return 1
+	fi
+	return 0
+}
+
+resume_backup_restore() {
+	local restored=1
+	if [ -f "$RESUME_MAINTENANCE_BACKUP" ]; then
+		mv -f "$RESUME_MAINTENANCE_BACKUP" /etc/autovpn/state/maintenance.lock && restored=0
+	fi
+	if [ -f "$RESUME_UPDATE_BACKUP" ]; then
+		mv -f "$RESUME_UPDATE_BACKUP" /etc/autovpn/state/update.lock && restored=0
+	fi
+	return "$restored"
+}
+
+resume_backup_discard() {
+	rm -f "$RESUME_MAINTENANCE_BACKUP" "$RESUME_UPDATE_BACKUP"
+}
+
+maintenance_action() {
+	local nonce
+	nonce="${1:-}"
+	case "$nonce" in
+		????????????????*) ;;
+		*) printf '%s\n' '{"ok":false,"code":"invalid_maintenance_nonce"}' >&2; return 64 ;;
+	esac
+	# The JSON request, including a pairing token, stays on stdin for ucode.
+	# It must not be copied to argv, UCI, stdout, or the shell's command line.
+	/usr/bin/ucode /usr/libexec/autovpn/maintenance-helper.uc "$nonce"
+}
+
 command="${1:-status}"
+case "$command" in
+	update-check)
+		exec /usr/libexec/autovpn/update-helper check "${2:-}"
+		;;
+	update-apply)
+		exec /usr/libexec/autovpn/update-helper queue "${2:-}"
+		;;
+	update-status)
+		exec /usr/libexec/autovpn/update-helper status
+		;;
+esac
 acquire_lock
 case "$command" in
 	set-credential)
@@ -88,6 +161,12 @@ case "$command" in
 	setup-activate)
 		setup_action activate
 		;;
+	maintenance-resume|setup-resume)
+		setup_action resume
+		;;
+	maintenance)
+		maintenance_action "${2:-}"
+		;;
 	status|refresh|recover|apply-policy|stop)
 		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command"
 		;;
@@ -98,7 +177,7 @@ case "$command" in
 		/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc "$command" "${2:-}"
 		;;
 	*)
-		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate}\n' >&2
+		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
 		exit 64
 		;;
 esac

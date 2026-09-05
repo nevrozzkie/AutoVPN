@@ -6,8 +6,9 @@
  * First-run setup deliberately receives the pairing token on stdin.  It must
  * never become a process argument, UCI value, log line, or RPC result.
  */
-import { access, chmod, error as fsError, mkdir, readfile, rename, stat, unlink, writefile } from 'fs';
+import { access, chmod, error as fsError, lstat, mkdir, readfile, rename, stat, unlink, writefile } from 'fs';
 import { cursor } from 'uci';
+const processRunner = require('autovpn.process');
 
 const ROOT = '/etc/autovpn';
 const REQUEST_LIMIT = 4096;
@@ -78,6 +79,52 @@ function presence(path) {
 		: { present: false, error: true };
 }
 
+function readyGate(path, maintenance) {
+	let info = lstat(path);
+	if (info == null) return fsError() == 'No such file or directory'
+		? { present: false, ready: false, invalid: false }
+		: { present: true, ready: false, invalid: true };
+	/* A maintenance gate is a root-only regular JSON file, never a symlink,
+	 * directory, FIFO, or best-effort hint. */
+	if (info.type != 'file') return { present: true, ready: false, invalid: true };
+	let raw = readfile(path, 4097);
+	let gate;
+	try { gate = raw != null && length(raw) <= 4096 ? json(raw) : null; } catch (e) { gate = null; }
+	if (type(gate) != 'object' || gate.schema_version != 1 || gate.phase != 'ready')
+		return { present: true, ready: false, invalid: true };
+	if (maintenance && (gate.action != 'rebind' && gate.action != 'reset'))
+		return { present: true, ready: false, invalid: true };
+	return { present: true, ready: true, invalid: false };
+}
+
+function defaultControllerPaths(ctx) {
+	return credentialPath(ctx) == '/etc/autovpn/credentials' &&
+		(ctx.get('autovpn', 'main', 'state_dir') || '/etc/autovpn/state') == '/etc/autovpn/state' &&
+		(ctx.get('autovpn', 'main', 'runtime_adapter') || '/usr/libexec/autovpn/runtime-adapter') == '/usr/libexec/autovpn/runtime-adapter' &&
+		(ctx.get('autovpn', 'main', 'http_adapter') || '/usr/libexec/autovpn/http-adapter') == '/usr/libexec/autovpn/http-adapter';
+}
+
+function networkConfirmed() {
+	let network = readfile('/etc/autovpn/networks/journal.json', 1048577);
+	let state;
+	try { state = network != null ? json(network) : null; } catch (e) { state = null; }
+	if (type(state) != 'object' || state.phase != 'confirmed') return false;
+	let process = processRunner.popen(['/usr/libexec/autovpn/network-helper.uc', 'network-gate'], 'r');
+	if (process == null) return false;
+	let raw = process.read(4097) || '';
+	let status = process.close();
+	let response;
+	try { response = json(raw); } catch (e) { response = null; }
+	return status == 0 && type(response) == 'object' && response.ok === true;
+}
+
+function gates() {
+	let maintenance = readyGate(ROOT + '/state/maintenance.lock', true);
+	let update = readyGate(ROOT + '/state/update.lock', false);
+	if (maintenance.invalid || update.invalid) return { ok: false, code: 'maintenance_gate_invalid' };
+	return { ok: true, maintenance: maintenance, update: update };
+}
+
 function firstRunAllowed(ctx, identityMatches, credential) {
 	let prepared = ctx.get('autovpn', 'main', 'setup_prepared') == '1';
 	let controller = presence(ROOT + '/state/journal.json');
@@ -127,6 +174,9 @@ function configure(nonce) {
 	if (type(request) != 'object' || !validBaseUrl(request.base_url) || !validRouterId(request.router_id) ||
 		!validCredential(request.credential) || !validSsid(request.base_ssid) || !validWifiKey(request.password))
 		return { ok: false, code: 'setup_request_invalid' };
+	let blocking = gates();
+	if (!blocking.ok || blocking.maintenance.present || blocking.update.present)
+		return { ok: false, code: blocking.ok ? 'maintenance_pending' : blocking.code };
 	let wan = configuredWan(request.wan_device);
 	if (wan == null) return { ok: false, code: 'wan_not_ready' };
 	let ctx = cursor();
@@ -154,10 +204,10 @@ function configure(nonce) {
 }
 
 function activate() {
-	let network = readfile('/etc/autovpn/networks/journal.json', 1048577);
-	let state;
-	try { state = network != null ? json(network) : null; } catch (e) { state = null; }
-	if (type(state) != 'object' || state.phase != 'confirmed') return { ok: false, code: 'networks_not_confirmed' };
+	let blocking = gates();
+	if (!blocking.ok || blocking.maintenance.present || blocking.update.present)
+		return { ok: false, code: blocking.ok ? 'maintenance_pending' : blocking.code };
+	if (!networkConfirmed()) return { ok: false, code: 'networks_not_confirmed' };
 	let ctx = cursor();
 	if (!ctx.load('autovpn')) return { ok: false, code: 'config_load_failed' };
 	let path = credentialPath(ctx);
@@ -172,11 +222,41 @@ function activate() {
 	return { ok: true, enabled: true };
 }
 
+function resume() {
+	let blocking = gates();
+	if (!blocking.ok) return blocking;
+	if (!blocking.maintenance.present && !blocking.update.present)
+		return { ok: false, code: 'maintenance_not_ready' };
+	if (!networkConfirmed()) return { ok: false, code: 'networks_not_confirmed' };
+	let ctx = cursor();
+	if (!ctx.load('autovpn') || !uciClean(ctx, 'autovpn')) return { ok: false, code: 'config_not_clean' };
+	let path = credentialPath(ctx);
+	let credential = path != null ? readfile(path, 257) : null;
+	if (!defaultControllerPaths(ctx) || path == null || !validBaseUrl(ctx.get('autovpn', 'main', 'base_url')) ||
+		!validRouterId(ctx.get('autovpn', 'main', 'router_id')) || !validCredential(trim(credential || '')))
+		return { ok: false, code: 'setup_incomplete' };
+	/* Commit enable first.  If removal cannot complete, immediately restore the
+	 * administrative disable; the persistent gate also protects a failed UCI
+	 * rollback or a reboot in between. */
+	if (!ctx.set('autovpn', 'main', 'enabled', '1') ||
+		!ctx.set('autovpn', 'main', 'setup_prepared', '0') || !ctx.commit('autovpn'))
+		return { ok: false, code: 'config_write_failed' };
+	let cleared = (!blocking.maintenance.present || unlink(ROOT + '/state/maintenance.lock') != null) &&
+		(!blocking.update.present || unlink(ROOT + '/state/update.lock') != null);
+	if (!cleared) {
+		ctx.set('autovpn', 'main', 'enabled', '0');
+		ctx.set('autovpn', 'main', 'setup_prepared', '1');
+		ctx.commit('autovpn');
+		return { ok: false, code: 'maintenance_gate_clear_failed' };
+	}
+	return { ok: true, enabled: true, resumed: true };
+}
+
 let action = ARGV[0];
 let nonce = ARGV[1];
 let response;
 try {
-	response = action == 'configure' ? configure(nonce) : action == 'activate' ? activate() : { ok: false, code: 'unknown_setup_action' };
+	response = action == 'configure' ? configure(nonce) : action == 'activate' ? activate() : action == 'resume' ? resume() : { ok: false, code: 'unknown_setup_action' };
 }
 catch (e) { response = { ok: false, code: 'setup_failed' }; }
 

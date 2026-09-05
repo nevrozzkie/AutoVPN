@@ -37,18 +37,23 @@ function helperFixture(overrides = {}) {
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/setup-helper.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import .*?;\s*$/gm, '')
 		.replace("const setupPolicy = require('autovpn.setup-policy');", 'const setupPolicy = injectedPolicy;')
-		.replace(/let action = ARGV\[0\];[\s\S]*$/, 'return { configure, activate, saveResult };');
-	const api = new Function('access', 'chmod', 'fsError', 'mkdir', 'readfile', 'rename', 'stat', 'unlink', 'writefile', 'cursor',
-		'injectedPolicy', 'type', 'length', 'keys', 'match', 'substr', 'rindex', 'json', 'sprintf', 'trim', source)(
-		access, () => true, () => lastError, () => true,
+		.replace("const processRunner = require('autovpn.process');", 'const processRunner = injectedProcess;')
+		.replace(/let action = ARGV\[0\];[\s\S]*$/, 'return { configure, activate, resume, saveResult };');
+	const api = new Function('access', 'chmod', 'fsError', 'lstat', 'mkdir', 'readfile', 'rename', 'stat', 'unlink', 'writefile', 'cursor',
+		'injectedPolicy', 'injectedProcess', 'type', 'length', 'keys', 'match', 'substr', 'rindex', 'json', 'sprintf', 'trim', source)(
+		access, () => true, () => lastError, name => {
+			if (files.has(name)) return { type: 'file' };
+			lastError = 'No such file or directory'; return null;
+		}, () => true,
 		(name) => files.get(name) ?? null,
 		(from, to) => { if (overrides.renameFails && to === '/etc/autovpn/credentials') return null; files.set(to, files.get(from)); files.delete(from); return true; },
 		name => {
 			if (overrides.unreadable === name) { lastError = 'Permission denied'; return null; }
-			if (files.has(name)) return {};
+		if (files.has(name)) return { type: 'file' };
 			lastError = 'No such file or directory'; return null;
 		}, name => files.delete(name),
 		(name, value) => { files.set(name, value); return value.length; }, () => ctx, policy,
+		{ popen: () => ({ read: () => JSON.stringify({ ok: !overrides.invalidNetwork }), close: () => overrides.invalidNetwork ? 1 : 0 }) },
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value === 'number' ? 'int' : typeof value,
 		value => typeof value === 'string' ? Buffer.byteLength(value) : value.length, Object.keys,
 		(value, expression) => value.match(expression), (value, start, count) => count === undefined ? value.substring(start) : value.substring(start, start + count),
@@ -144,8 +149,44 @@ test('first-run activation is gated by a confirmed network transaction', () => {
 	assert.match(cli, /\/etc\/init\.d\/autovpn enable/);
 	assert.match(cli, /\/etc\/init\.d\/autovpn start/);
 	assert.doesNotMatch(cli, /\/etc\/init\.d\/autovpn restart/);
-	assert.match(cli, /trap - EXIT INT TERM\s+lock -u "\$LOCK_FILE"\s+[\s\S]*\/etc\/init\.d\/autovpn enable/);
+	assert.match(cli, /trap - EXIT INT TERM[\s\S]*lock -u "\$LOCK_FILE"\s+[\s\S]*\/etc\/init\.d\/autovpn enable/);
 	assert.match(cli, /uci set autovpn\.main\.enabled=0/);
+});
+
+test('configure and ordinary activation refuse every maintenance/update gate', () => {
+	const request = validRequest();
+	for (const [path, gate] of [
+		['/etc/autovpn/state/maintenance.lock', { schema_version: 1, action: 'rebind', phase: 'ready' }],
+		['/etc/autovpn/state/update.lock', { schema_version: 1, phase: 'ready' }],
+		['/etc/autovpn/state/maintenance.lock', { schema_version: 1, action: 'rebind', phase: 'running' }]
+	]) {
+		const configured = helperFixture({ files: { '/dev/stdin': request, [path]: JSON.stringify(gate) } });
+		assert.equal(configured.api.configure('nonce-0123456789').code, gate.phase == 'ready' ? 'maintenance_pending' : 'maintenance_gate_invalid');
+		const active = helperFixture({ files: {
+			[path]: JSON.stringify(gate), '/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'confirmed' }),
+			'/etc/autovpn/credentials': 'avrt_abcdefgh.' + 's'.repeat(43) + '\n'
+		}, values: { 'main.setup_prepared': '1', 'main.base_url': 'https://vpn.example', 'main.router_id': 'router_123' } });
+		assert.equal(active.api.activate().code, gate.phase == 'ready' ? 'maintenance_pending' : 'maintenance_gate_invalid');
+	}
+});
+
+test('resume requires a strict ready gate, clean valid binding and confirmed networks, then clears only ready locks', () => {
+	const files = {
+		'/etc/autovpn/state/maintenance.lock': JSON.stringify({ schema_version: 1, action: 'rebind', phase: 'ready' }),
+		'/etc/autovpn/state/update.lock': JSON.stringify({ schema_version: 1, phase: 'ready' }),
+		'/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'confirmed' }),
+		'/etc/autovpn/credentials': 'avrt_abcdefgh.' + 's'.repeat(43) + '\n'
+	};
+	const env = helperFixture({ files, values: { 'main.base_url': 'https://vpn.example', 'main.router_id': 'router_123' } });
+	assert.deepEqual(env.api.resume(), { ok: true, enabled: true, resumed: true });
+	assert.equal(env.values['main.enabled'], '1');
+	assert.equal(env.files.has('/etc/autovpn/state/maintenance.lock'), false);
+	assert.equal(env.files.has('/etc/autovpn/state/update.lock'), false);
+	assert.equal(helperFixture({ files: { '/etc/autovpn/state/maintenance.lock': JSON.stringify({ schema_version: 1, action: 'reset', phase: 'failed' }) } }).api.resume().code, 'maintenance_gate_invalid');
+	const invalid = helperFixture({ files, values: { 'main.base_url': 'https://vpn.example', 'main.router_id': 'router_123' }, invalidNetwork: true });
+	assert.equal(invalid.api.resume().code, 'networks_not_confirmed');
+	assert.equal(invalid.files.has('/etc/autovpn/state/maintenance.lock'), true);
+	assert.equal(invalid.values['main.enabled'], '0');
 });
 
 test('wizard asks rpcd to detect WAN and leaves radio/offload policy to LuCI', () => {
@@ -169,6 +210,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_LOG, JSON.stringify([name,...args]) + '\\n');
 if (name === 'uci' && args.includes('get')) process.stdout.write('/etc/autovpn/credentials\\n');
 if (name === 'ucode') {
+  if (args.includes('resume') && process.env.MOCK_STATE) fs.unlinkSync(process.env.MOCK_STATE + '/maintenance.lock');
   process.stdout.write(JSON.stringify(process.env.MOCK_HELPER_FAIL ? {ok:false,code:'networks_not_confirmed'} : {ok:true,enabled:true})+'\\n');
   process.exit(process.env.MOCK_HELPER_FAIL ? 1 : 0);
 }
@@ -176,13 +218,14 @@ if (name === 'init-autovpn' && args[0] === 'start' && process.env.MOCK_START_FAI
 `;
 	for (const name of ['lock', 'uci', 'ucode', 'init-autovpn']) fs.writeFileSync(path.join(tmp, name), program, { mode: 0o755 });
 	const script = read('files/usr/sbin/autovpnctl')
+		.replaceAll('/etc/autovpn/state', path.join(tmp, 'state'))
 		.replace('/usr/libexec/autovpn/credential.sh', path.join(root, 'files/usr/libexec/autovpn/credential.sh'))
 		.replaceAll('/usr/bin/ucode', path.join(tmp, 'ucode'))
 		.replaceAll('/etc/init.d/autovpn', path.join(tmp, 'init-autovpn'));
 	fs.writeFileSync(path.join(tmp, 'ctl'), script);
-	const run = env => {
+	const run = (env, command = 'setup-activate') => {
 		fs.writeFileSync(log, '');
-		const result = spawnSync('/bin/sh', [path.join(tmp, 'ctl'), 'setup-activate'], {
+		const result = spawnSync('/bin/sh', [path.join(tmp, 'ctl'), command], {
 			encoding: 'utf8', timeout: 10000,
 			env: { ...process.env, PATH: tmp + ':' + process.env.PATH, MOCK_LOG: log, ...env }
 		});
@@ -205,4 +248,33 @@ if (name === 'init-autovpn' && args[0] === 'start' && process.env.MOCK_START_FAI
 	const denied = run({ MOCK_HELPER_FAIL: '1' });
 	assert.notEqual(denied.status, 0);
 	assert.equal(denied.events.some(e => e[0] === 'init-autovpn'), false);
+	const resumed = run({}, 'setup-resume');
+	assert.equal(resumed.status, 0, resumed.stderr);
+	const resumeUnlock = resumed.events.findIndex(e => e[0] === 'lock' && e[1] === '-u');
+	const resumeStart = resumed.events.findIndex(e => e[0] === 'init-autovpn' && e[1] === 'start');
+	assert.ok(resumeUnlock >= 0 && resumeStart > resumeUnlock);
+	const state = path.join(tmp, 'state');
+	fs.mkdirSync(state);
+	fs.writeFileSync(path.join(state, 'maintenance.lock'), JSON.stringify({ schema_version: 1, action: 'rebind', phase: 'ready' }));
+	const restoreCtl = script.replaceAll('/etc/autovpn/state', state);
+	fs.writeFileSync(path.join(tmp, 'restore-ctl'), restoreCtl, { mode: 0o755 });
+	fs.writeFileSync(log, '');
+	const restored = spawnSync('/bin/sh', [path.join(tmp, 'restore-ctl'), 'maintenance-resume'], {
+		encoding: 'utf8', timeout: 10000,
+		env: { ...process.env, PATH: tmp + ':' + process.env.PATH, MOCK_LOG: log, MOCK_START_FAIL: '1', MOCK_STATE: state }
+	});
+	assert.notEqual(restored.status, 0);
+	assert.equal(JSON.parse(restored.stdout).code, 'service_start_failed');
+	assert.deepEqual(JSON.parse(fs.readFileSync(path.join(state, 'maintenance.lock'), 'utf8')), { schema_version: 1, action: 'rebind', phase: 'ready' });
+	assert.equal(fs.existsSync(path.join(state, '.resume-maintenance.lock')), false);
+});
+
+test('update commands bypass the controller lock and dispatch only the fixed update helper actions', () => {
+	const cli = read('files/usr/sbin/autovpnctl');
+	assert.match(cli, /case "\$command" in\s+update-check\)/);
+	assert.match(cli, /exec \/usr\/libexec\/autovpn\/update-helper check "\$\{2:-\}"/);
+	assert.match(cli, /update-apply\)[\s\S]*update-helper queue/);
+	assert.match(cli, /update-status\)[\s\S]*update-helper status/);
+	const beforeLock = cli.indexOf('update-check)');
+	assert.ok(beforeLock >= 0 && beforeLock < cli.lastIndexOf('acquire_lock'));
 });

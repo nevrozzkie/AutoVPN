@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.6.0
+PKG_VERSION:=0.7.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -30,6 +30,10 @@ define Package/autovpn-controller/conffiles
 /etc/autovpn/state/journal.json
 /etc/autovpn/runtime/
 /etc/autovpn/networks/journal.json
+/etc/autovpn/release.json
+/etc/autovpn/release-signing.pem
+/etc/autovpn/state/maintenance.lock
+/etc/autovpn/state/update.lock
 endef
 
 Build/Compile=
@@ -52,6 +56,8 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/setup-helper.uc $(1)/usr/libexec/autovpn/setup-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/maintenance-helper.uc $(1)/usr/libexec/autovpn/maintenance-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/update-helper $(1)/usr/libexec/autovpn/update-helper
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-watchdog $(1)/usr/libexec/autovpn/network-watchdog
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./files/usr/sbin/autovpnctl $(1)/usr/sbin/autovpnctl
@@ -85,6 +91,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/settings.js $(1)/www/luci-static/resources/view/autovpn/settings.js
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/networks.js $(1)/www/luci-static/resources/view/autovpn/networks.js
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/setup.js $(1)/www/luci-static/resources/view/autovpn/setup.js
+	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/maintenance.js $(1)/www/luci-static/resources/view/autovpn/maintenance.js
 endef
 
 define Package/autovpn-controller/postinst

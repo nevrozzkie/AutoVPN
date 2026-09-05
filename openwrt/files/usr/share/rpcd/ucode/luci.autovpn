@@ -89,8 +89,59 @@ function configureSetup(request) {
 	return setupResult(nonce);
 }
 
+function maintain(request) {
+	let args = request.args;
+	if (!validSetupNonce(args.nonce)) return { ok: false, code: 'invalid_nonce' };
+	if (args.action != 'rotate' && args.action != 'rebind' && args.action != 'reset')
+		return { ok: false, code: 'invalid_maintenance_action' };
+	let encoded = sprintf('%J\n', {
+		action: args.action, base_url: args.base_url, router_id: args.router_id,
+		credential: args.credential, confirmation: args.confirmation,
+	});
+	if (length(encoded) > 4096) return { ok: false, code: 'maintenance_request_too_large' };
+	let path = '/etc/autovpn/state/maintenance-result.' + args.nonce + '.json';
+	unlink(path);
+	let process = processRunner.popen(['/usr/sbin/autovpnctl', 'maintenance', args.nonce], 'w');
+	if (process == null) return { ok: false, code: 'maintenance_start_failed' };
+	let wrote = process.write(encoded);
+	let status = process.close();
+	let raw = readfile(path, 4097);
+	unlink(path);
+	if (raw == null || length(raw) > 4096) return { ok: false, code: 'maintenance_result_missing' };
+	let result;
+	try { result = json(raw); } catch (e) { return { ok: false, code: 'maintenance_result_invalid' }; }
+	if (type(result) != 'object' || type(result.ok) != 'bool') return { ok: false, code: 'maintenance_result_invalid' };
+	if ((wrote != length(encoded) || status != 0) && result.ok)
+		return { ok: false, code: 'maintenance_failed' };
+	return result;
+}
+
 return {
 	'luci.autovpn': {
+		maintenance_action: {
+			args: { nonce: '', action: '', base_url: '', router_id: '', credential: '', confirmation: '' },
+			call: function(request) { return maintain(request); },
+		},
+		maintenance_resume: { call: function() { return callController('maintenance-resume'); } },
+		update_status: { call: function() { return callController('update-status'); } },
+		update_check: {
+			args: { tag: '' },
+			call: function(request) {
+				let tag = request.args.tag;
+				if (type(tag) != 'string' || match(tag, /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/) == null)
+					return { ok: false, code: 'invalid_update_tag' };
+				return callController('update-check', tag);
+			},
+		},
+		update_apply: {
+			args: { candidate_id: '' },
+			call: function(request) {
+				let id = request.args.candidate_id;
+				if (type(id) != 'string' || match(id, /^[0-9]+-[0-9a-f]{12}$/) == null)
+					return { ok: false, code: 'invalid_update_id' };
+				return callController('update-apply', id);
+			},
+		},
 		setup_configure: {
 			args: { nonce: '', base_url: '', router_id: '', credential: '', base_ssid: '', password: '' },
 			call: function(request) { return configureSetup(request); },

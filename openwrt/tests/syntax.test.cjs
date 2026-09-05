@@ -20,6 +20,7 @@ const sources = [
 	'files/usr/libexec/autovpn/awg-helper.uc',
 	'files/usr/libexec/autovpn/network-helper.uc',
 	'files/usr/libexec/autovpn/setup-helper.uc',
+	'files/usr/libexec/autovpn/maintenance-helper.uc',
 	'files/usr/share/ucode/autovpn/networks.uc',
 	'files/usr/share/ucode/autovpn/network-transaction.uc',
 	'files/usr/share/ucode/autovpn/setup-policy.uc',
@@ -66,8 +67,8 @@ test('menu-bound ACL grants the authenticated first-run action but no file acces
 	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json'), 'utf8'));
 	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json'), 'utf8'));
 	assert.deepEqual(Object.keys(acl), ['luci-app-autovpn']);
-	assert.deepEqual(acl['luci-app-autovpn'].read.ubus['luci.autovpn'], ['status', 'network_status']);
-	assert.deepEqual(acl['luci-app-autovpn'].write.ubus['luci.autovpn'], ['refresh', 'apply_policy', 'network_setup', 'network_confirm', 'setup_configure', 'setup_activate']);
+	assert.deepEqual(acl['luci-app-autovpn'].read.ubus['luci.autovpn'], ['status', 'network_status', 'update_status']);
+	assert.deepEqual(acl['luci-app-autovpn'].write.ubus['luci.autovpn'], ['refresh', 'apply_policy', 'network_setup', 'network_confirm', 'setup_configure', 'setup_activate', 'maintenance_action', 'maintenance_resume', 'update_check', 'update_apply']);
 	assert.deepEqual(acl['luci-app-autovpn'].write.uci, ['autovpn']);
 	assert.deepEqual(menu['admin/services/autovpn'].depends.acl, ['luci-app-autovpn']);
 	assert.equal(JSON.stringify(acl).includes('/etc/autovpn'), false);

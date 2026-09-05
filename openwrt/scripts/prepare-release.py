@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 ALLOWED_PACKAGES = {"autovpn-controller", "kmod-amneziawg", "amneziawg-tools"}
 RELEASE_RE = re.compile(r"25\.12\.\d+")
 SAFE_OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -233,7 +233,17 @@ def main(argv: list[str]) -> int:
                 die(f"duplicate package name: {expected_name}")
             seen_filenames.add(filename)
             seen_names.add(expected_name)
-            packages.append({"name": expected_name, "filename": filename, "sha256": sha256(package), "source": package})
+            entry = {"name": expected_name, "filename": filename,
+                     "sha256": sha256(package), "source": package}
+            if expected_name == "autovpn-controller":
+                version = info.get("version")
+                if not isinstance(version, str) or not version or any(char.isspace() for char in version):
+                    die("autovpn-controller has no safe metadata version")
+                # A LuCI update approval is bound to this exact metadata
+                # version, not a filename that could be misleading after a
+                # release asset is republished.
+                entry["version"] = version
+            packages.append(entry)
 
         if "autovpn-controller" not in seen_names:
             die("release must contain autovpn-controller")

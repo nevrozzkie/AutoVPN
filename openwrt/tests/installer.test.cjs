@@ -33,12 +33,12 @@ function fixture(t, options = {}) {
 	const names = options.awg ? ['autovpn-controller', 'amneziawg-tools', 'kmod-amneziawg'] : ['autovpn-controller'];
 	const packages = names.map(name => {
 		const data = 'test signed APK: ' + name;
-		const filename = name + '-0.6.0-r1.apk';
+		const filename = name + '-0.7.0-r1.apk';
 		fs.writeFileSync(path.join(assets, filename), data);
-		return { name, filename, sha256: hash(data) };
+		return { name, filename, sha256: hash(data), ...(name === 'autovpn-controller' ? { version: '0.7.0-r1' } : {}) };
 	});
 	const manifest = {
-		schema_version: 1, version: '0.6.0', release: '25.12.5',
+		schema_version: 1, version: '0.7.0', release: '25.12.5',
 		target: 'mediatek/filogic', architecture: 'aarch64_cortex-a53',
 		kernel_release: '6.12.85', kernel_package: '6.12.85~fixture-r1',
 		min_free_kib: 20000, min_tmp_kib: 32000,
@@ -50,10 +50,11 @@ function fixture(t, options = {}) {
 	const manifestName = 'manifest-25.12.5-mediatek-filogic-aarch64_cortex-a53.json';
 	fs.writeFileSync(path.join(assets, manifestName), encoded);
 	const installer = source
-		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/router/releases/download/v0.6.0')
+		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/router/releases/download/v0.7.0')
 		.replace('@AUTOVPN_SIGNING_KEY_SHA256@', hash(key))
 		.replace('@AUTOVPN_MANIFEST_SHA256@', options.badManifestHash ? '0'.repeat(64) : hash(encoded))
 		.replaceAll('/etc/apk/', etc + '/')
+		.replaceAll('/etc/autovpn', path.join(root, 'autovpn'))
 		.replaceAll('/lib/apk/', path.join(root, 'lib-apk') + '/');
 	const script = path.join(root, 'install.sh');
 	fs.writeFileSync(script, installer);
@@ -84,7 +85,10 @@ else if (name === 'jsonfilter') {
   fs.copyFileSync(path.join(env.MOCK_ASSETS, path.basename(url)), args[args.indexOf('--output')+1]);
 } else if (name === 'apk') {
   if (args.includes('--print-arch')) output('aarch64_cortex-a53');
-  else if (args.includes('query')) output([{name:'kernel',version:'6.12.85~fixture-r1'}]);
+  else if (args.includes('query')) {
+    if (args.includes('autovpn-controller')) output([{name:'autovpn-controller',version:env.MOCK_INSTALLED_CONTROLLER || '0.7.0-r1'}]);
+    else output([{name:'kernel',version:'6.12.85~fixture-r1'}]);
+  }
   else {
     const entry = {name,args};
     if (args.includes('--repositories-file')) entry.repositories = fs.readFileSync(args[args.indexOf('--repositories-file')+1], 'utf8');
@@ -101,6 +105,7 @@ else if (name === 'jsonfilter') {
 	}
 	const logFile = path.join(root, 'calls.jsonl');
 	return {
+		trustRoot: path.join(root, 'autovpn'),
 		run(args = [], env = {}) {
 			const result = spawnSync('/bin/sh', [script, ...args], {
 				encoding: 'utf8', timeout: 30000,
@@ -138,7 +143,8 @@ test('check-only verifies signatures and simulates without installing; custom fe
 });
 
 test('install commits exact signed package set with kernel pinned, without configuring Wi-Fi', t => {
-	const result = fixture(t, { awg: true }).run();
+	const f = fixture(t, { awg: true });
+	const result = f.run();
 	assert.equal(result.status, 0, result.stderr);
 	const commits = result.calls.filter(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate'));
 	assert.equal(commits.length, 1);
@@ -146,6 +152,49 @@ test('install commits exact signed package set with kernel pinned, without confi
 	assert.equal(commits[0].args.filter(arg => arg.endsWith('.apk')).length, 3);
 	assert.match(result.stdout, /LuCI.*Setup/);
 	assert.doesNotMatch(source, /uci (set|commit)|sysupgrade|mtd write|--allow-untrusted|--force-overwrite/);
+	const receipt = JSON.parse(fs.readFileSync(path.join(f.trustRoot, 'release.json'), 'utf8'));
+	assert.deepEqual(receipt, {
+		schema_version: 1,
+		release_base: 'https://github.com/example/router/releases/download/v0.7.0',
+		signing_key_sha256: hash('-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----\n'),
+		installed_version: '0.7.0-r1'
+	});
+	assert.equal(fs.statSync(path.join(f.trustRoot, 'release-signing.pem')).mode & 0o777, 0o600);
+});
+
+test('check-only and failed APK install do not create a release trust receipt', t => {
+	const check = fixture(t);
+	const checked = check.run(['--check']);
+	assert.equal(checked.status, 0, checked.stderr);
+	assert.equal(fs.existsSync(path.join(check.trustRoot, 'release.json')), false);
+	const failed = fixture(t);
+	const result = failed.run([], { MOCK_BAD_COMMIT: '1' });
+	assert.notEqual(result.status, 0);
+	assert.equal(fs.existsSync(path.join(failed.trustRoot, 'release.json')), false);
+});
+
+test('conflicting pinned trust is rejected before any package commit', t => {
+	const f = fixture(t);
+	fs.mkdirSync(f.trustRoot, { recursive: true });
+	fs.writeFileSync(path.join(f.trustRoot, 'release.json'), JSON.stringify({
+		schema_version: 1,
+		release_base: 'https://github.com/other/router/releases/download/v1',
+		signing_key_sha256: '0'.repeat(64),
+		installed_version: '1-r1'
+	}));
+	fs.writeFileSync(path.join(f.trustRoot, 'release-signing.pem'), 'other key');
+	const result = f.run();
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /release trust conflicts/i);
+	noCommit(result);
+});
+
+test('receipt uses the actually installed controller version, never only the manifest', t => {
+	const f = fixture(t);
+	const result = f.run([], { MOCK_INSTALLED_CONTROLLER: '0.7.0-r9' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /differs from the signed release manifest/);
+	assert.equal(fs.existsSync(path.join(f.trustRoot, 'release.json')), false);
 });
 
 for (const [description, options, env, message] of [

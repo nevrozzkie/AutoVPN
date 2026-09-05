@@ -4,8 +4,9 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-node --test "$ROOT/tests/state.test.cjs" "$ROOT/tests/http.test.cjs" "$ROOT/tests/syntax.test.cjs" "$ROOT/tests/runtime.test.cjs" "$ROOT/tests/awg.test.cjs" "$ROOT/tests/networks.test.cjs" "$ROOT/tests/network-helper.test.cjs" "$ROOT/tests/setup.test.cjs" "$ROOT/tests/installer.test.cjs" "$ROOT/tests/release.test.cjs" "$ROOT/tests/process.test.cjs"
+node --test "$ROOT/tests/state.test.cjs" "$ROOT/tests/http.test.cjs" "$ROOT/tests/syntax.test.cjs" "$ROOT/tests/runtime.test.cjs" "$ROOT/tests/awg.test.cjs" "$ROOT/tests/networks.test.cjs" "$ROOT/tests/network-helper.test.cjs" "$ROOT/tests/setup.test.cjs" "$ROOT/tests/installer.test.cjs" "$ROOT/tests/release.test.cjs" "$ROOT/tests/process.test.cjs" "$ROOT/tests/update.test.cjs" "$ROOT/tests/maintenance.test.cjs" "$ROOT/tests/maintenance-rpc.test.cjs"
 sh "$ROOT/tests/credential-boundaries.sh"
+node --test "$ROOT/tests/update-behavior.test.cjs"
 
 for script in \
 	"$ROOT/scripts/install.sh" \
@@ -17,6 +18,7 @@ for script in \
 	"$ROOT/files/usr/libexec/autovpn/http-adapter" \
 	"$ROOT/files/usr/libexec/autovpn/runtime-adapter" \
 	"$ROOT/files/usr/libexec/autovpn/credential.sh" \
+	"$ROOT/files/usr/libexec/autovpn/update-helper" \
 	"$ROOT/files/usr/sbin/autovpnctl"
 do
 	sh -n "$script"
@@ -29,6 +31,7 @@ node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/settings.js"
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/networks.js"
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/setup.js"
+node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/maintenance.js"
 
 for source in $(grep -oE '\./files/[^[:space:]\\]+' "$ROOT/Makefile" | sort -u); do
 	[ -e "$ROOT/${source#./}" ] || {

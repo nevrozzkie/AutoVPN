@@ -2,7 +2,7 @@
 
 'use strict';
 
-import { access, chmod, mkdir, readfile, rename, unlink, writefile } from 'fs';
+import { access, chmod, mkdir, readfile, rename, unlink, writefile, lstat, error as fsError } from 'fs';
 import { cursor } from 'uci';
 
 const stateMachine = require('autovpn.state');
@@ -320,7 +320,25 @@ function summary(config, state) {
 	};
 }
 
+function maintenanceBlocked() {
+	for (let path in ['/etc/autovpn/state/maintenance.lock', '/etc/autovpn/state/update.lock']) {
+		if (lstat(path) != null || fsError() != 'No such file or directory') return true;
+	}
+	return false;
+}
+
 let config = configuration();
+let command = ARGV[0] || 'status';
+/* Never read/recover an old journal while maintenance owns the runtime. */
+if (maintenanceBlocked()) {
+	let result = command == 'stop' ? runtimeAction(config, 'fail-closed') : {
+		ok: command == 'status', code: 'maintenance_locked', phase: 'MAINTENANCE',
+		runtime_running: false, runtime_error: 'maintenance_locked', router_id: config.router_id,
+		credential_configured: access(config.credential_file, 'r') === true,
+	};
+	printf('%J\n', result);
+	exit(result.ok === true ? 0 : 1);
+}
 let state = loadState(config);
 let journalGuard = orchestration.guardJournal(state, operationsFor(config));
 if (!journalGuard.ok) {
@@ -328,7 +346,6 @@ if (!journalGuard.ok) {
 	exit(65);
 }
 
-let command = ARGV[0] || 'status';
 let result;
 if (command == 'status')
 	result = summary(config, state);

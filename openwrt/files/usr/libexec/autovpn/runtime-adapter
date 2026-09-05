@@ -3,6 +3,7 @@ set -eu
 umask 077
 
 ROOT=/etc/autovpn/runtime
+GATE_ROOT=/etc/autovpn/state
 HELPER=/usr/libexec/autovpn/runtime-helper.uc
 SERVICE=/etc/init.d/autovpn-tunnel
 SHARE=/usr/share/autovpn
@@ -125,6 +126,16 @@ preflight() {
 mkdir -p "$ROOT"
 chmod 0700 /etc/autovpn "$ROOT"
 JOURNAL="${2:-}"
+case "${1:-}" in
+	prepare|activate|verify|rollback|restore)
+		for gate in "$GATE_ROOT/maintenance.lock" "$GATE_ROOT/update.lock"; do
+			if [ -e "$gate" ] || [ -L "$gate" ]; then
+				closed || error fail_closed_unconfirmed
+				error maintenance_locked
+			fi
+		done
+		;;
+esac
 case "${1:-}" in
 	status)
 		if "$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1 && \

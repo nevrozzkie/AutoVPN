@@ -23,7 +23,7 @@ if [ "$1" = verify ]; then exit 0; fi
 if [ "$1" = adbdump ]; then
   file="${'$'}4"
   case "${'$'}file" in
-    *autovpn-controller*) echo '{"info":{"name":"autovpn-controller","version":"0.6.0-r1","arch":"all","depends":[]}}' ;;
+    *autovpn-controller*) echo '{"info":{"name":"autovpn-controller","version":"0.7.0-r1","arch":"all","depends":[]}}' ;;
     *kmod-amneziawg*) echo '{"info":{"name":"kmod-amneziawg","arch":"aarch64_cortex-a53","depends":["kernel=6.6.99~fixture"]}}' ;;
     *amneziawg-tools*) echo '{"info":{"name":"amneziawg-tools","arch":"aarch64_cortex-a53","depends":[]}}' ;;
     *) exit 4 ;;
@@ -37,7 +37,7 @@ exit 5
   writeFileSync(key, '-----BEGIN PUBLIC KEY-----\nfixture-public-key\n-----END PUBLIC KEY-----\n');
   const template = join(dir, 'install.template.sh');
   writeFileSync(template, '#!/bin/sh\nbase=@AUTOVPN_RELEASE_BASE@\nkey=@AUTOVPN_SIGNING_KEY_SHA256@\nmanifest=@AUTOVPN_MANIFEST_SHA256@\n');
-  const controller = join(dir, 'autovpn-controller-0.6.0-r1.apk');
+  const controller = join(dir, 'autovpn-controller-0.7.0-r1.apk');
   const module = join(dir, 'kmod-amneziawg-1-r1.apk');
   const tools = join(dir, 'amneziawg-tools-1-r1.apk');
   for (const path of [controller, module, tools]) writeFileSync(path, `fixture ${path}`);
@@ -52,7 +52,7 @@ function run(f, output, packages = [f.controller, f.module, f.tools], extra = []
     '--architecture', 'aarch64_cortex-a53',
     '--kernel-release', '6.6.99',
     '--kernel-package', '6.6.99~fixture',
-    '--release-base', 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.6.0',
+    '--release-base', 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.7.0',
     '--signing-key', f.key,
     '--min-free-kib', '32768',
     '--min-tmp-kib', '8192',
@@ -83,12 +83,13 @@ test('assembles immutable release artifacts and pins the manifest', () => {
   const manifestPath = join(output, 'manifest-25.12.3-mediatek-filogic-aarch64_cortex-a53.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.schema_version, 1);
-  assert.equal(manifest.version, '0.6.0');
+  assert.equal(manifest.version, '0.7.0');
   assert.equal(manifest.kernel_package, '6.6.99~fixture');
+  assert.equal(manifest.packages[0].version, '0.7.0-r1');
   assert.equal(manifest.capabilities.amneziawg, true);
   assert.deepEqual(manifest.packages.map((pkg) => pkg.name), ['autovpn-controller', 'kmod-amneziawg', 'amneziawg-tools']);
   const install = readFileSync(join(output, 'install.sh'), 'utf8');
-  assert.match(install, /https:\/\/github\.com\/nevrozzkie\/AutoVPN\/releases\/download\/router-v0\.6\.0/);
+  assert.match(install, /https:\/\/github\.com\/nevrozzkie\/AutoVPN\/releases\/download\/router-v0\.7\.0/);
   assert.match(install, new RegExp(sha256(manifestPath)));
   assert.equal(existsSync(join(output, 'autovpn-signing.pem')), true);
 });
