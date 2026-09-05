@@ -47,7 +47,9 @@ Artifacts are kept outside Git in `build-artifacts/wr3000s-25.12.5-20260906/`:
 `public/` contains APKs, public key and SHA256SUMS; `sources/` contains pinned
 source archives; `audit/` contains logs/metadata; `private/` contains the signing
 key at mode 0600 inside a 0700 directory. **Never publish `private/` or the whole
-build-artifacts directory.** No GitHub release or upload was made.
+build-artifacts directory.** The original build itself did not publish anything.
+Subsequently, the binary preview r1 and [installer preview r2](installer-release-r2.md)
+were prepared for GitHub publication; hardware validation is still pending.
 
 The original VPS AutoVPN service retained its PID throughout the work. Build
 jobs are stopped/completed; the separate build directory remains approximately
