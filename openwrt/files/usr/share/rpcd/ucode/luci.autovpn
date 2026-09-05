@@ -29,6 +29,13 @@ function callController(command, argument) {
 	return response;
 }
 
+function pingAll(request) {
+	let target = request.args.target;
+	if (type(target) != 'string' || (target != 'youtube' && target != 'instagram'))
+		return { ok: false, code: 'invalid_ping_target' };
+	return callController('ping-all', target);
+}
+
 function validSetupNonce(value) {
 	return type(value) == 'string' && match(value, /^[A-Za-z0-9_-]{16,48}$/) != null;
 }
@@ -178,6 +185,10 @@ return {
 			call: function() {
 				return callController('apply-policy');
 			},
+		},
+		ping_all: {
+			args: { target: '' },
+			call: function(request) { return pingAll(request); },
 		},
 	},
 };

@@ -1,14 +1,20 @@
 #!/bin/sh
 
+next_refresh=0
 while :; do
 	# An already running procd loop must respect a persistent maintenance pause.
 	if [ "$(uci -q get autovpn.main.enabled)" = 1 ]; then
-		/usr/sbin/autovpnctl refresh >/dev/null
+		now="$(date +%s)"
+		if [ "$now" -ge "$next_refresh" ]; then
+			/usr/sbin/autovpnctl refresh >/dev/null
+			interval="$(uci -q get autovpn.main.poll_interval)"
+			case "$interval" in ''|*[!0-9]*) interval=300 ;; esac
+			[ "$interval" -ge 30 ] 2>/dev/null || interval=30
+			[ "$interval" -le 86400 ] 2>/dev/null || interval=86400
+			next_refresh=$((now + interval))
+		fi
+		/usr/sbin/autovpnctl health-tick >/dev/null
 	fi
-	interval="$(uci -q get autovpn.main.poll_interval)"
-	case "$interval" in
-		''|*[!0-9]*) interval=300 ;;
-	esac
-	[ "$interval" -ge 30 ] 2>/dev/null || interval=30
-	sleep "$interval"
+	# Health polling is independent of subscription refresh and works offline.
+	sleep 30
 done

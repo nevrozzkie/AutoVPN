@@ -47,6 +47,34 @@ function policy() {
 		awg_available: awgAvailable(),
 	};
 }
+function fixedProfile(value) {
+	if (type(value) == 'object' && index(['vless-reality', 'hysteria2', 'amneziawg'], value.profile) >= 0)
+		return value.profile;
+	return null;
+}
+function upgrade(value, entry, preferred) {
+	if (value.version != 1) return { ok: true, value: value };
+	let own = fixedProfile(value);
+	return runtime.bundle(entry, value.policy, machine, own != null ? own : preferred);
+}
+function probeEntry(state) {
+	if ((state.phase == 'ACTIVATING' || state.phase == 'VERIFYING') && state.desired != null) return state.desired;
+	if ((state.phase == 'IDLE' || state.phase == 'ROLLING_BACK') && state.applied != null) return state.applied;
+	return null;
+}
+function optionalAwgEntry(state) {
+	if ((state.phase == 'ACTIVATING' || state.phase == 'VERIFYING') && state.desired != null)
+		return state.desired;
+	if ((state.phase == 'IDLE' || state.phase == 'ROLLING_BACK') && state.applied != null)
+		return state.applied;
+	return null;
+}
+function sameCommitPolicy(current, staged) {
+	if (sprintf('%J', staged) == sprintf('%J', current)) return true;
+	let downgraded = json(sprintf('%J', current));
+	downgraded.awg_available = false;
+	return current.awg_available === true && sprintf('%J', staged) == sprintf('%J', downgraded);
+}
 function run() {
 	let action = ARGV[0];
 	if (type(ARGV[1]) != 'string' || match(ARGV[1], /^\/etc\/autovpn\/[A-Za-z0-9_.-]+\/journal\.json$/) == null)
@@ -62,11 +90,90 @@ function run() {
 		if (entry != null && entry.snapshot.router_id != routerId)
 			return { ok: false, code: 'router_identity_mismatch' };
 	}
+	if (action == 'disable-awg' || action == 'fallback-awg') {
+		let activeEntry = optionalAwgEntry(state);
+		if (activeEntry == null) return { ok: false, code: 'invalid_phase' };
+		let candidate = readJson(ROOT + '/candidate.json', 65536);
+		let chosen = null;
+		let file = null;
+		let bundleFiles = ['failover', 'current'];
+		for (let i = 0; i < length(bundleFiles); i++) {
+			let name = bundleFiles[i];
+			let value = readJson(ROOT + '/' + name + '.json', 65536);
+			if (runtime.matchesBundle(value, activeEntry, machine) && value.version == 2 &&
+				sprintf('%J', value.config) == sprintf('%J', candidate)) {
+				chosen = value;
+				file = name;
+				break;
+			}
+		}
+		if (chosen == null) return { ok: false, code: 'runtime_bundle_mismatch' };
+		if (action == 'disable-awg' && chosen.profile == 'amneziawg') return { ok: false, code: 'active_awg_required' };
+		if (action == 'fallback-awg' && chosen.policy.selection != 'auto')
+			return { ok: false, code: 'selection_not_auto' };
+		let fallbackPolicy = json(sprintf('%J', chosen.policy));
+		fallbackPolicy.awg_available = false;
+		let preferred = action == 'fallback-awg' ? ARGV[2] : chosen.profile;
+		if (action == 'fallback-awg') file = 'failover';
+		let fallback = runtime.bundle(activeEntry, fallbackPolicy, machine, preferred);
+		if (!fallback.ok || (action == 'disable-awg' && fallback.value.profile != chosen.profile))
+			return { ok: false, code: 'selected_vpn_unavailable' };
+		if (!writePrivate(ROOT + '/candidate.json', fallback.value.config) ||
+			!writePrivate(ROOT + '/awg.json', null) ||
+			!writePrivate(ROOT + '/' + file + '.json', fallback.value))
+			return { ok: false, code: 'runtime_write_failed' };
+		return { ok: true, active_profile: fallback.value.profile, capabilities: fallback.value.capabilities };
+	}
+	if (action == 'probe-info' || action == 'probe-info-live' || action == 'select-profile' || action == 'commit-profile') {
+		let activeEntry = probeEntry(state);
+		if (activeEntry == null) return { ok: false, code: 'invalid_phase' };
+		let current = readJson(ROOT + '/current.json', 65536);
+		if (!runtime.matchesBundle(current, activeEntry, machine))
+			return { ok: false, code: 'runtime_bundle_mismatch' };
+		if (current.version != 2) return { ok: false, code: 'runtime_upgrade_required' };
+		if (action == 'probe-info-live' &&
+			sprintf('%J', current.config) != sprintf('%J', readJson(ROOT + '/run.json', 65536)))
+			return { ok: false, code: 'runtime_bundle_mismatch' };
+		let identity = current.etag + ':' + current.attempt + ':' + current.profile;
+		if (action == 'probe-info' || action == 'probe-info-live') return {
+			ok: true,
+			active_profile: current.profile,
+			selection: current.policy.selection == 'auto' ? 'auto' : 'manual',
+			candidates: current.candidates,
+			identity: identity,
+		};
+		let requested = ARGV[2];
+		if (index(['vless-reality', 'hysteria2', 'amneziawg'], requested) < 0)
+			return { ok: false, code: 'unsupported_profile' };
+		if (current.policy.selection != 'auto') return { ok: false, code: 'selection_not_auto' };
+		if (index(current.candidates, requested) < 0) return { ok: false, code: 'selected_vpn_unavailable' };
+		if (action == 'commit-profile') {
+			let staged = readJson(ROOT + '/failover.json', 65536);
+			let candidate = readJson(ROOT + '/candidate.json', 65536);
+			if (!runtime.matchesBundle(staged, activeEntry, machine) || staged.version != 2 ||
+				staged.profile != requested || staged.policy.selection != 'auto' ||
+				!sameCommitPolicy(current.policy, staged.policy) ||
+				sprintf('%J', staged.config) != sprintf('%J', candidate))
+				return { ok: false, code: 'failover_bundle_mismatch' };
+			if (!writePrivate(ROOT + '/current.json', staged)) return { ok: false, code: 'runtime_write_failed' };
+			return { ok: true, active_profile: staged.profile, capabilities: staged.capabilities };
+		}
+		let selected = runtime.bundle(activeEntry, current.policy, machine, requested);
+		if (!selected.ok) return selected;
+		if (!writePrivate(ROOT + '/failover.json', selected.value) ||
+			!writePrivate(ROOT + '/candidate.json', selected.value.config) ||
+			!writePrivate(ROOT + '/awg.json', selected.value.awg))
+			return { ok: false, code: 'runtime_write_failed' };
+		return { ok: true, active_profile: selected.value.profile, capabilities: selected.value.capabilities };
+	}
 	let entry = action == 'prepare' || action == 'activate' || action == 'verify' ? state.desired : state.applied;
 	if (entry == null) return { ok: true, empty: true };
 	let value;
 	if (action == 'prepare') {
-		let result = runtime.bundle(entry, policy(), machine);
+		let current = readJson(ROOT + '/current.json', 65536);
+		let preferred = state.applied != null && runtime.matchesBundle(current, state.applied, machine)
+			? fixedProfile(current) : null;
+		let result = runtime.bundle(entry, policy(), machine, preferred);
 		if (!result.ok) return result;
 		value = result.value;
 		if (!writePrivate(ROOT + '/prepared.json', value)) return { ok: false, code: 'runtime_write_failed' };
@@ -79,6 +186,17 @@ function run() {
 			value = readJson(ROOT + '/previous.json', 65536);
 			if (!runtime.matchesBundle(value, entry, machine)) return { ok: false, code: 'rollback_bundle_missing' };
 		}
+		let preferred = null;
+		if (action == 'activate') {
+			let current = readJson(ROOT + '/current.json', 65536);
+			if (state.applied != null && runtime.matchesBundle(current, state.applied, machine))
+				preferred = fixedProfile(current);
+		}
+		let converted = upgrade(value, entry, preferred);
+		if (!converted.ok) return converted;
+		value = converted.value;
+		if (action == 'activate' && !writePrivate(ROOT + '/prepared.json', value))
+			return { ok: false, code: 'runtime_write_failed' };
 	}
 	if (action == 'activate') {
 		let current = readJson(ROOT + '/current.json', 65536);

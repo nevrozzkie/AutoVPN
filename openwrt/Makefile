@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.7.0
+PKG_VERSION:=0.8.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -15,7 +15,7 @@ define Package/autovpn-controller
   SUBMENU:=VPN
   TITLE:=Native AutoVPN controller
   PKGARCH:=all
-  DEPENDS:=+busybox +ca-bundle +curl +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat
+  DEPENDS:=+busybox +ca-bundle +curl +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat
 endef
 
 define Package/autovpn-controller/description
@@ -53,6 +53,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/http-helper.uc $(1)/usr/libexec/autovpn/http-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-adapter $(1)/usr/libexec/autovpn/runtime-adapter
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/runtime-helper.uc $(1)/usr/libexec/autovpn/runtime-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/probe-helper.uc $(1)/usr/libexec/autovpn/probe-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/setup-helper.uc $(1)/usr/libexec/autovpn/setup-helper.uc
@@ -65,6 +66,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/state.uc $(1)/usr/share/ucode/autovpn/state.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/journal.uc $(1)/usr/share/ucode/autovpn/journal.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/health.uc $(1)/usr/share/ucode/autovpn/health.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/probes.uc $(1)/usr/share/ucode/autovpn/probes.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/orchestration.uc $(1)/usr/share/ucode/autovpn/orchestration.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/http.uc $(1)/usr/share/ucode/autovpn/http.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc

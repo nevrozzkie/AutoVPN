@@ -99,7 +99,8 @@ function validateAwg(profile) {
 	return true;
 }
 
-function render(snapshot, policy, machine) {
+/* Kept byte-for-byte compatible with version 1 bundle validation. */
+function renderLegacy(snapshot, policy, machine) {
 	if (!machine.validateSnapshot(snapshot).ok) return fail('snapshot_validation_failed');
 	let validated = validatePolicy(policy);
 	if (!validated.ok) return validated;
@@ -176,9 +177,9 @@ function render(snapshot, policy, machine) {
 	};
 }
 
-function bundle(entry, policy, machine) {
+function legacyBundle(entry, policy, machine) {
 	if (entry == null) return fail('snapshot_not_applied');
-	let result = render(entry.snapshot, policy, machine);
+	let result = renderLegacy(entry.snapshot, policy, machine);
 	if (!result.ok) return result;
 	let value = { version: 1, router_id: entry.snapshot.router_id, etag: entry.etag, attempt: entry.attempt,
 		policy: copy(policy), config: result.config, profile: result.profile, capabilities: result.capabilities };
@@ -187,11 +188,106 @@ function bundle(entry, policy, machine) {
 	return { ok: true, value: value };
 }
 
+function render(snapshot, policy, machine, preferredProfile) {
+	if (!machine.validateSnapshot(snapshot).ok) return fail('snapshot_validation_failed');
+	let validated = validatePolicy(policy);
+	if (!validated.ok) return validated;
+	let effective = normalizedPolicy(policy);
+	/* Avoid WAN DNS bootstrap dependencies/cycles; current AutoVPN publishes IPs. */
+	if (!ipv4(snapshot.server.endpoint)) return fail('endpoint_ipv4_required');
+	let outbounds = [];
+	let candidates = [];
+	let capabilities = machine.normalizeCapabilities({});
+	for (let i = 0; i < 2; i++) {
+		let name = ['vless', 'hysteria2'][i];
+		let slot = snapshot.protocols[name];
+		if (!slot.enabled) continue;
+		if (name == 'hysteria2' && slot.outbound.tls.insecure && effective.hysteria_tls_mode == 'strict') {
+			if (effective.selection == 'hysteria2') return fail('hysteria_tls_unverified');
+			continue;
+		}
+		let outbound = copy(slot.outbound);
+		outbound.bind_interface = effective.wan_device;
+		push(outbounds, outbound);
+		push(candidates, outbound.tag);
+		capabilities[name] = true;
+	}
+	let awg = null;
+	let awgSlot = snapshot.protocols.amneziawg;
+	/* Keep AWG prepared for diagnostics even while another manual profile is active. */
+	if (awgSlot.enabled && effective.awg_available && validateAwg(awgSlot.profile)) {
+		awg = copy(awgSlot.profile);
+		push(outbounds, { type: 'direct', tag: 'amneziawg', bind_interface: 'avpnwg0',
+			routing_mark: 20193, domain_resolver: 'awg-dns' });
+		push(candidates, 'amneziawg');
+		capabilities.amneziawg = true;
+	}
+	if (length(candidates) == 0) return fail('no_supported_vpn');
+	if (effective.selection != 'auto' && index(candidates, effective.selection) < 0)
+		return fail('selected_vpn_unavailable');
+	let selected = effective.selection;
+	if (selected == 'auto')
+		selected = index(candidates, preferredProfile) >= 0 ? preferredProfile : candidates[0];
+	push(outbounds, { type: 'direct', tag: 'direct', bind_interface: effective.wan_device });
+
+	/* Forced probe routes precede DNS interception and every user direct exception. */
+	let rules = [{ inbound: ['health'], action: 'route', outbound: selected }];
+	let inbounds = [
+		{ type: 'tun', tag: 'vpn-net', interface_name: 'avpn0', address: ['172.30.255.1/30'], mtu: 1400,
+			auto_route: false, auto_redirect: false, stack: 'system' },
+		{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: 1088 },
+	];
+	let probePorts = { 'vless-reality': 1089, hysteria2: 1090, amneziawg: 1091 };
+	for (let i = 0; i < length(candidates); i++) {
+		let candidate = candidates[i];
+		let inbound = 'probe-' + candidate;
+		push(inbounds, { type: 'socks', tag: inbound, listen: '127.0.0.1', listen_port: probePorts[candidate] });
+		push(rules, { inbound: [inbound], action: 'route', outbound: candidate });
+	}
+	push(rules, { port: 53, action: 'hijack-dns' });
+	push(rules, { action: 'sniff', timeout: '300ms' });
+	push(rules, { ip_version: 6, action: 'reject' });
+	push(rules, { ip_is_private: true, action: 'reject' });
+	if (length(effective.direct_domains))
+		push(rules, { domain_suffix: effective.direct_domains, action: 'route', outbound: 'direct' });
+	if (length(effective.direct_cidrs))
+		push(rules, { ip_cidr: effective.direct_cidrs, action: 'route', outbound: 'direct' });
+
+	let dnsServers = [{ type: 'udp', tag: 'tunnel-dns', server: effective.dns_server, server_port: 53, detour: selected }];
+	if (awg != null)
+		push(dnsServers, { type: 'udp', tag: 'awg-dns', server: effective.dns_server, server_port: 53, detour: 'amneziawg' });
+	capabilities.policy_routing = true;
+	return {
+		ok: true, profile: selected, candidates: candidates, capabilities: capabilities, awg: awg,
+		config: {
+			log: { disabled: true },
+			dns: { servers: dnsServers, final: 'tunnel-dns', strategy: 'ipv4_only', reverse_mapping: true },
+			inbounds: inbounds,
+			outbounds: outbounds,
+			route: { rules: rules, final: selected, default_domain_resolver: 'tunnel-dns' },
+		},
+	};
+}
+
+function bundle(entry, policy, machine, preferredProfile) {
+	if (entry == null) return fail('snapshot_not_applied');
+	let result = render(entry.snapshot, policy, machine, preferredProfile);
+	if (!result.ok) return result;
+	let value = { version: 2, router_id: entry.snapshot.router_id, etag: entry.etag, attempt: entry.attempt,
+		policy: copy(policy), config: result.config, profile: result.profile, candidates: result.candidates,
+		capabilities: result.capabilities };
+	if (result.awg != null) value.awg = result.awg;
+	if (length(sprintf('%J', value)) >= 65536) return fail('runtime_bundle_too_large');
+	return { ok: true, value: value };
+}
+
 /* Re-render before using persistent generated files; reject tampering/corruption. */
 function matchesBundle(value, entry, machine) {
 	if (type(value) != 'object' || entry == null || value.router_id != entry.snapshot.router_id ||
-		value.etag != entry.etag || value.attempt != entry.attempt || value.version != 1) return false;
-	let expected = bundle(entry, value.policy, machine);
+		value.etag != entry.etag || value.attempt != entry.attempt || index([1, 2], value.version) < 0) return false;
+	let expected = value.version == 1
+		? legacyBundle(entry, value.policy, machine)
+		: bundle(entry, value.policy, machine, value.profile);
 	return expected.ok && sprintf('%J', expected.value) == sprintf('%J', value);
 }
 

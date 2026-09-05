@@ -149,6 +149,7 @@ function clearRuntimeState() {
 	let files = [
 		STATE + '/journal.json',
 		RUNTIME + '/prepared.json', RUNTIME + '/current.json', RUNTIME + '/previous.json',
+		RUNTIME + '/failover.json',
 		RUNTIME + '/candidate.json', RUNTIME + '/run.json', RUNTIME + '/awg.json',
 		RUNTIME + '/awg-run.json', RUNTIME + '/awg-owned', RUNTIME + '/awg.conf'
 	];

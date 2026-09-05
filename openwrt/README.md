@@ -143,11 +143,12 @@ host. Проверка Linux networking на самом роутере ещё н
   касаться только WAN flow к endpoint IP/port конкретного VPN-кандидата: TCP для
   VLESS, UDP для Hysteria2 и AWG. Capability каждого протокола с zapret остаётся
   `unavailable` до отдельного packet-level теста;
-- подключение собственной health state machine с cooldown к runtime; сейчас auto
-  использует HTTPS URLTest sing-box, а apply/restore — две HTTPS-проверки через VPN;
 - router-side и hardware-in-the-loop тесты.
 
 Текущий server snapshot v3 содержит stable `router_id` и protocol credentials.
+В версии 0.8 `auto` переключает только после отказа текущего VPN. В LuCI добавлена
+ручная диагностика `Ping all` через YouTube/Instagram без изменения выбора.
+Подробности и ограничения: [runtime](docs/runtime.md).
 Локальная policy хранится в UCI и проходит отдельную строгую проверку перед рендером;
 сервер не может прислать shell-команды или глобальный JSON sing-box.
 

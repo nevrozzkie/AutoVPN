@@ -357,10 +357,27 @@ else if (command == 'stop')
 	result = runtimeAction(config, 'fail-closed');
 else if (command == 'refresh')
 	result = refresh(config, state);
+else if (command == 'health-tick' || command == 'ping-all') {
+	if (state.phase != 'IDLE' || state.applied == null)
+		result = { ok: false, code: 'runtime_not_ready' };
+	else if (command == 'ping-all') {
+		let target = ARGV[1] || 'youtube';
+		result = index(['youtube', 'instagram'], target) < 0 ? { ok: false, code: 'invalid_probe_target' } :
+			adapterCall([config.runtime_adapter, 'ping-all', config.state_dir + '/journal.json', target]);
+	}
+	else {
+		result = runtimeAction(config, 'health-tick');
+		if (result.ok && safeActiveProfile(result.active_profile) != state.active_profile) {
+			state.active_profile = safeActiveProfile(result.active_profile);
+			/* Apply reports are immutable; failover updates local status only. */
+			if (!saveState(config, state)) result = { ok: false, code: 'journal_write_failed' };
+		}
+	}
+}
 else
 	result = { ok: false, code: 'unknown_command' };
 
-if (command == 'status')
+if (command == 'status' || command == 'ping-all')
 	printf('%J\n', result);
 else
 	printf('%J\n', {

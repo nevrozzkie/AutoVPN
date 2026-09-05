@@ -3,19 +3,26 @@ set -eu
 umask 077
 
 ROOT=/etc/autovpn/runtime
+SCRATCH="$(mktemp -d /tmp/autovpn-runtime.XXXXXX)" || exit 1
+cleanup() {
+	rm -f "$SCRATCH/result.json" "$SCRATCH/table.txt" "$SCRATCH/rules.txt" "$SCRATCH/all-routes.txt" "$SCRATCH/routes.txt" "$SCRATCH/awg-routes.txt" "$SCRATCH/probe-result.json"
+	rmdir "$SCRATCH"
+}
+trap cleanup EXIT
 GATE_ROOT=/etc/autovpn/state
 HELPER=/usr/libexec/autovpn/runtime-helper.uc
 SERVICE=/etc/init.d/autovpn-tunnel
 SHARE=/usr/share/autovpn
 AWG_HELPER=/usr/libexec/autovpn/awg-helper.uc
+PROBE_HELPER=/usr/libexec/autovpn/probe-helper.uc
 
 error() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
 ok() { printf '%s\n' '{"ok":true}'; }
 
 guard() {
 	# Never replace an unrelated table with the same name.
-	if nft list table inet autovpn >"$ROOT/table.txt" 2>/dev/null; then
-		grep -q 'chain ownership_autovpn_v1' "$ROOT/table.txt" || return 1
+	if nft list table inet autovpn >"$SCRATCH/table.txt" 2>/dev/null; then
+		grep -q 'chain ownership_autovpn_v1' "$SCRATCH/table.txt" || return 1
 	fi
 	nft -f "$SHARE/guard-$1.nft" >/dev/null 2>&1
 }
@@ -28,11 +35,12 @@ closed() {
 	[ "$guard_ok" -eq 1 ]
 }
 helper() {
-	ucode "$HELPER" "$1" "$JOURNAL" 2>/dev/null >"$ROOT/result.json"
+	ucode "$HELPER" "$1" "$JOURNAL" "${2:-}" 2>/dev/null >"$SCRATCH/result.json"
 }
-empty() { grep -Eq '"empty"[[:space:]]*:[[:space:]]*true' "$ROOT/result.json"; }
+empty() { grep -Eq '"empty"[[:space:]]*:[[:space:]]*true' "$SCRATCH/result.json"; }
 check() { sing-box check -c "$ROOT/candidate.json" >/dev/null 2>&1; }
 awg_active() { grep -q '"private_key"' "$ROOT/awg.json" 2>/dev/null; }
+selected_awg() { grep -Eq '"active_profile"[[:space:]]*:[[:space:]]*"amneziawg"' "$SCRATCH/result.json"; }
 awg_up() { ucode "$AWG_HELPER" up "$ROOT/awg.json" >/dev/null 2>&1; }
 awg_healthy() {
 	awg_active && cmp -s "$ROOT/awg.json" "$ROOT/awg-run.json" &&
@@ -41,9 +49,9 @@ awg_healthy() {
 
 routes() {
 	# Fixed table/priority ownership. Refuse collisions; never flush a route table.
-	ip -4 rule show >"$ROOT/rules.txt" 2>/dev/null || return 1
+	ip -4 rule show >"$SCRATCH/rules.txt" 2>/dev/null || return 1
 	for priority in 20191 20192; do
-		lines="$(grep -E "^$priority:" "$ROOT/rules.txt" || true)"
+		lines="$(grep -E "^$priority:" "$SCRATCH/rules.txt" || true)"
 		if [ "$priority" = 20191 ]; then
 			expected="$priority: from all iif br-avpn lookup 20191"
 		else
@@ -53,20 +61,20 @@ routes() {
 	done
 	# Dump all tables: querying an empty numbered table alone can return ENOENT.
 	# Numeric output also prevents rt_tables aliases from hiding a collision.
-	ip -N -4 route show table all >"$ROOT/all-routes.txt" 2>/dev/null || return 1
-	grep -E ' table 20191( |$)' "$ROOT/all-routes.txt" >"$ROOT/routes.txt" || true
+	ip -N -4 route show table all >"$SCRATCH/all-routes.txt" 2>/dev/null || return 1
+	grep -E ' table 20191( |$)' "$SCRATCH/all-routes.txt" >"$SCRATCH/routes.txt" || true
 	while IFS= read -r route; do
 		case "$route" in 'default dev avpn0 table 20191'|'default dev avpn0 table 20191 scope 253') ;; *) return 1 ;; esac
-	done <"$ROOT/routes.txt"
+	done <"$SCRATCH/routes.txt"
 	# The unreachable rule survives TUN disappearance, preventing main-table fallback.
-	grep -q '^20192:' "$ROOT/rules.txt" || ip -4 rule add priority 20192 iif br-avpn unreachable || return 1
-	grep -q '^20191:' "$ROOT/rules.txt" || ip -4 rule add priority 20191 iif br-avpn lookup 20191 || return 1
-	ip -4 route replace default dev avpn0 table 20191 >/dev/null 2>&1
+	grep -q '^20192:' "$SCRATCH/rules.txt" || ip -4 rule add priority 20192 iif br-avpn unreachable || return 1
+	grep -q '^20191:' "$SCRATCH/rules.txt" || ip -4 rule add priority 20191 iif br-avpn lookup 20191 || return 1
+	ip -4 route replace default dev avpn0 table 20191 >/dev/null 2>&1 || return 1
 	if ! awg_active; then return 0; fi
 	# sing-box marks plaintext entering the AWG device. AWG marks its own UDP
 	# socket differently, so the encrypted outer packet keeps the WAN route.
 	for priority in 20193 20194; do
-		lines="$(grep -E "^$priority:" "$ROOT/rules.txt" || true)"
+		lines="$(grep -E "^$priority:" "$SCRATCH/rules.txt" || true)"
 		if [ "$priority" = 20193 ]; then
 			expected="$priority: from all fwmark 0x4ee1 lookup 20193"
 		else
@@ -74,17 +82,32 @@ routes() {
 		fi
 		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | tr -s '[:space:]' ' ')" = "$expected" ] || return 1
 	done
-	grep -E ' table 20193( |$)' "$ROOT/all-routes.txt" >"$ROOT/awg-routes.txt" || true
+	grep -E ' table 20193( |$)' "$SCRATCH/all-routes.txt" >"$SCRATCH/awg-routes.txt" || true
 	while IFS= read -r route; do
 		case "$route" in 'default dev avpnwg0 table 20193'|'default dev avpnwg0 table 20193 scope 253') ;; *) return 1 ;; esac
-	done <"$ROOT/awg-routes.txt"
-	grep -q '^20194:' "$ROOT/rules.txt" || ip -4 rule add priority 20194 fwmark 20193 unreachable || return 1
-	grep -q '^20193:' "$ROOT/rules.txt" || ip -4 rule add priority 20193 fwmark 20193 lookup 20193 || return 1
+	done <"$SCRATCH/awg-routes.txt"
+	grep -q '^20194:' "$SCRATCH/rules.txt" || ip -4 rule add priority 20194 fwmark 20193 unreachable || return 1
+	grep -q '^20193:' "$SCRATCH/rules.txt" || ip -4 rule add priority 20193 fwmark 20193 lookup 20193 || return 1
+	# An unavailable optional AWG candidate must neither leak through WAN nor
+	# prevent routing the currently selected VLESS/Hysteria tunnel.
+	ip link show dev avpnwg0 >/dev/null 2>&1 || { ! selected_awg; return; }
 	ip -4 route replace default dev avpnwg0 table 20193 >/dev/null 2>&1
 }
 start() {
+	local hard_awg_failure=0 fallback_profile
 	closed || return 1
-	if awg_active && ! awg_up; then return 1; fi
+	if awg_active && ! awg_up; then
+		[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down >/dev/null 2>&1 || return 1
+		if selected_awg; then
+			# A kernel-interface failure is definite, not a slow-network sample.
+			# Stage a non-AWG probe runtime; manual AWG is deliberately refused.
+			helper fallback-awg || return 1
+			hard_awg_failure=1
+		else
+			helper disable-awg || return 1
+		fi
+		check || return 1
+	fi
 	if awg_active; then
 		cp "$ROOT/awg.json" "$ROOT/awg-run.json.new" || return 1
 		mv "$ROOT/awg-run.json.new" "$ROOT/awg-run.json" || return 1
@@ -102,6 +125,17 @@ start() {
 	done
 	"$SERVICE" running >/dev/null 2>&1 || return 1
 	routes || return 1
+	if [ "$hard_awg_failure" -eq 1 ]; then
+		ucode "$PROBE_HELPER" bootstrap "$JOURNAL" >"$SCRATCH/probe-result.json" 2>/dev/null || return 1
+		fallback_profile="$(jsonfilter -i "$SCRATCH/probe-result.json" -e '@.next_profile' 2>/dev/null || true)"
+		case "$fallback_profile" in vless-reality|hysteria2) ;; *) return 1 ;; esac
+		helper fallback-awg "$fallback_profile" && check || return 1
+		# The staged runtime now has no AWG, so recursion cannot re-enter fallback.
+		start || return 1
+		ucode "$PROBE_HELPER" confirm "$JOURNAL" "$fallback_profile" >"$SCRATCH/probe-result.json" 2>/dev/null || return 1
+		grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true' "$SCRATCH/probe-result.json" || return 1
+		helper commit-profile "$fallback_profile" || return 1
+	fi
 	# Forwarding stays closed until verify has reached the VPN over HTTPS.
 }
 probe() {
@@ -111,6 +145,44 @@ probe() {
 		--connect-timeout 4 --max-time 10 --max-redirs 0 \
 		https://www.gstatic.com/generate_204 2>/dev/null)" || return 1
 	[ "$code" = 204 ]
+}
+monitor() {
+	# Only this path may fail over. ping-all never invokes it.
+	PROBE_RESULT="$SCRATCH/probe-result.json"
+	ucode "$PROBE_HELPER" "$1" "$JOURNAL" >"$PROBE_RESULT" 2>/dev/null || return 1
+	if grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true' "$PROBE_RESULT"; then
+		guard open || return 1
+		return 0
+	fi
+	if grep -Eq '"failed"[[:space:]]*:[[:space:]]*false' "$PROBE_RESULT"; then
+		# A transient failure is not a reason to switch or restart a live VPN.
+		[ "$1" != recover ] || return 1
+		return 0
+	fi
+	grep -Eq '"failed"[[:space:]]*:[[:space:]]*true' "$PROBE_RESULT" || return 1
+	guard closed || return 1
+	next="$(jsonfilter -i "$PROBE_RESULT" -e '@.next_profile' 2>/dev/null || true)"
+	case "$next" in
+		vless-reality|hysteria2|amneziawg)
+			helper select-profile "$next" || return 1
+			check || return 1
+			start || return 1
+			# start may recover a definitively failed AWG device with a verified
+			# non-AWG profile; verify the actual result, not the original request.
+			next="$(jsonfilter -i "$SCRATCH/result.json" -e '@.active_profile' 2>/dev/null || true)"
+			case "$next" in vless-reality|hysteria2|amneziawg) ;; *) return 1 ;; esac
+			# Re-test after activation; an earlier probe is not a commit guarantee.
+			ucode "$PROBE_HELPER" confirm "$JOURNAL" "$next" >"$PROBE_RESULT" 2>/dev/null || return 1
+			grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true' "$PROBE_RESULT" || return 1
+			helper commit-profile "$next" || return 1
+			guard open || return 1
+			;;
+		*)
+			# Keep candidate listeners alive so the next round can observe recovery.
+			# The client network remains closed; there is never a WAN fallback.
+			[ "$1" != recover ] || return 1
+			;;
+	esac
 }
 preflight() {
 	# A poll/reboot must not open a network whose setup is unconfirmed or conflicted.
@@ -127,10 +199,12 @@ mkdir -p "$ROOT"
 chmod 0700 /etc/autovpn "$ROOT"
 JOURNAL="${2:-}"
 case "${1:-}" in
-	prepare|activate|verify|rollback|restore)
+	prepare|activate|verify|rollback|restore|health-tick|ping-all)
 		for gate in "$GATE_ROOT/maintenance.lock" "$GATE_ROOT/update.lock"; do
 			if [ -e "$gate" ] || [ -L "$gate" ]; then
-				closed || error fail_closed_unconfirmed
+				if [ "${1:-}" != ping-all ]; then
+					closed || error fail_closed_unconfirmed
+				fi
 				error maintenance_locked
 			fi
 		done
@@ -138,11 +212,11 @@ case "${1:-}" in
 esac
 case "${1:-}" in
 	status)
+		helper status || { cat "$SCRATCH/result.json"; exit 1; }
 		if "$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1 && \
 			nft list chain inet autovpn forward 2>/dev/null | grep -q avpn0 && \
-			{ ! awg_active || awg_healthy; }; then
-			helper status || { cat "$ROOT/result.json"; exit 1; }
-			cat "$ROOT/result.json"
+			{ ! selected_awg || awg_healthy; }; then
+			cat "$SCRATCH/result.json"
 		else
 			printf '%s\n' '{"ok":false,"code":"runtime_not_running"}'
 			exit 1
@@ -158,28 +232,29 @@ case "${1:-}" in
 		;;
 	prepare)
 		preflight || error runtime_preflight_failed
-		helper prepare || { cat "$ROOT/result.json"; exit 1; }
+		helper prepare || { cat "$SCRATCH/result.json"; exit 1; }
 		empty && error snapshot_not_applied
 		check || error sing_box_check_failed
 		ok
 		;;
 	activate)
 		preflight || error runtime_preflight_failed
-		helper activate || { cat "$ROOT/result.json"; exit 1; }
+		helper activate || { cat "$SCRATCH/result.json"; exit 1; }
 		empty && error snapshot_not_applied
 		check || error sing_box_check_failed
 		start || error runtime_activation_failed
 		ok
 		;;
 	verify)
-		helper verify || { cat "$ROOT/result.json"; exit 1; }
+		helper verify || { cat "$SCRATCH/result.json"; exit 1; }
 		empty && error snapshot_not_applied
-		probe && probe || error vpn_probe_failed
+		probe && probe || monitor recover || error vpn_probe_failed
 		guard open || error firewall_activation_failed
-		cat "$ROOT/result.json"
+		helper verify || { closed || true; error runtime_bundle_mismatch; }
+		cat "$SCRATCH/result.json"
 		;;
 	rollback|restore)
-		helper "$1" || { cat "$ROOT/result.json"; exit 1; }
+		helper "$1" || { cat "$SCRATCH/result.json"; exit 1; }
 		if empty; then
 			closed || error fail_closed_unconfirmed
 			ok
@@ -188,15 +263,45 @@ case "${1:-}" in
 		preflight || error runtime_preflight_failed
 		check || error sing_box_check_failed
 		if [ "$1" = restore ] && cmp -s "$ROOT/candidate.json" "$ROOT/run.json" && \
-			{ ! awg_active || awg_healthy; } && \
+			{ ! selected_awg || awg_healthy; } && \
 			"$SERVICE" running >/dev/null 2>&1 && ip link show dev avpn0 >/dev/null 2>&1; then
 			routes || error route_restore_failed
+			# Reusing a committed runtime must not bypass failure hysteresis or
+			# reselect a faster candidate on subscription refresh.
+			cat "$SCRATCH/result.json"
+			exit 0
 		else
 			start || error runtime_restore_failed
 		fi
-		probe && probe || { closed || true; error vpn_probe_failed; }
+		probe && probe || monitor recover || { closed || true; error vpn_probe_failed; }
 		guard open || error firewall_activation_failed
-		cat "$ROOT/result.json"
+		helper status || { closed || true; error runtime_bundle_mismatch; }
+		cat "$SCRATCH/result.json"
+		;;
+	health-tick)
+		preflight || error runtime_preflight_failed
+		# Reconstruct the committed bundle, including after an interrupted switch.
+		helper restore || { closed || true; error runtime_bundle_mismatch; }
+		empty && error snapshot_not_applied
+		if ! cmp -s "$ROOT/candidate.json" "$ROOT/run.json" || \
+			! "$SERVICE" running >/dev/null 2>&1 || ! ip link show dev avpn0 >/dev/null 2>&1 || \
+			{ selected_awg && ! awg_healthy; }; then
+			# Restore the same persisted choice before considering alternatives.
+			helper restore || error runtime_bundle_mismatch
+			empty && error snapshot_not_applied
+			check && start || { closed || true; error runtime_restore_failed; }
+		fi
+		# procd may have recreated TUN since the last round, losing its routes.
+		routes || { closed || true; error route_restore_failed; }
+		monitor health || { closed || true; error health_check_failed; }
+		helper status || { closed || true; error runtime_bundle_mismatch; }
+		cat "$SCRATCH/result.json"
+		;;
+	ping-all)
+		case "${3:-youtube}" in youtube|instagram) ;; *) error invalid_probe_target ;; esac
+		# Read-only with respect to runtime/UCI/health; no start/restore/select.
+		"$SERVICE" running >/dev/null 2>&1 || error runtime_not_running
+		ucode "$PROBE_HELPER" ping-all "$JOURNAL" "${3:-youtube}"
 		;;
 	*) error unknown_runtime_action ;;
 esac

@@ -16,6 +16,25 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const policy = () => ({ selection: 'auto', wan_device: 'eth1', dns_server: '1.1.1.1', direct_domains: ['ru', 'xn--p1ai'], direct_cidrs: [], hysteria_tls_mode: 'subscription', awg_available: false });
 const entry = (attempt = 1) => ({ etag: '"' + 'a'.repeat(64) + '"', snapshot: clone(snapshot), attempt });
 
+function legacyAutoBundle(original) {
+	const value = clone(runtime.bundle(original, policy(), machine).value);
+	value.version = 1;
+	delete value.candidates;
+	value.profile = 'auto';
+	value.config.dns.servers = [{ ...value.config.dns.servers[0], detour: 'auto' }];
+	value.config.inbounds = value.config.inbounds.filter(item => !item.tag.startsWith('probe-'));
+	const directAt = value.config.outbounds.findIndex(item => item.tag === 'direct');
+	value.config.outbounds.splice(directAt, 0, {
+		type: 'urltest', tag: 'auto', outbounds: ['vless-reality'],
+		url: 'https://www.gstatic.com/generate_204', interval: '1m',
+		tolerance: 50, interrupt_exist_connections: false,
+	});
+	value.config.route.rules = value.config.route.rules.filter(rule => !rule.inbound?.[0]?.startsWith('probe-'));
+	value.config.route.rules[0].outbound = 'auto';
+	value.config.route.final = 'auto';
+	return value;
+}
+
 function withHysteria(insecure) {
 	const result = clone(snapshot);
 	result.protocols.hysteria2 = { enabled: true, outbound: {
@@ -25,17 +44,24 @@ function withHysteria(insecure) {
 	return result;
 }
 
-test('runtime routes only explicit direct exceptions and health always takes VPN', () => {
+test('runtime fixes auto to one profile and forces health and candidate probes before direct exceptions', () => {
 	const result = runtime.render(snapshot, { ...policy(), direct_cidrs: ['0.0.0.0/0'] }, machine);
 	assert.equal(result.ok, true);
-	assert.equal(result.config.route.final, 'auto');
-	assert.deepEqual(result.config.route.rules[0], { inbound: ['health'], action: 'route', outbound: 'auto' });
-	assert.equal(result.config.outbounds.find(outbound => outbound.type === 'urltest').outbounds.includes('direct'), false);
-	assert.equal(result.config.dns.servers[0].detour, 'auto');
+	assert.equal(result.profile, 'vless-reality');
+	assert.deepEqual(result.candidates, ['vless-reality']);
+	assert.equal(result.config.route.final, 'vless-reality');
+	assert.deepEqual(result.config.route.rules.slice(0, 2), [
+		{ inbound: ['health'], action: 'route', outbound: 'vless-reality' },
+		{ inbound: ['probe-vless-reality'], action: 'route', outbound: 'vless-reality' },
+	]);
+	assert.equal(result.config.outbounds.some(outbound => outbound.type === 'urltest'), false);
+	assert.equal(result.config.dns.servers[0].detour, 'vless-reality');
 	assert.equal(result.config.inbounds[0].auto_route, false);
 	assert.equal(result.config.inbounds[0].auto_redirect, false);
 	assert.equal(result.config.inbounds[1].listen, '127.0.0.1');
+	assert.deepEqual(result.config.inbounds[2], { type: 'socks', tag: 'probe-vless-reality', listen: '127.0.0.1', listen_port: 1089 });
 	assert.equal(result.config.outbounds.find(outbound => outbound.type === 'direct').bind_interface, 'eth1');
+	assert.ok(result.config.route.rules.findIndex(rule => rule.port === 53) > result.config.route.rules.findIndex(rule => rule.inbound?.[0] === 'probe-vless-reality'));
 	assert.ok(result.config.route.rules.findIndex(rule => rule.ip_is_private) < result.config.route.rules.findIndex(rule => rule.ip_cidr));
 });
 
@@ -71,11 +97,16 @@ test('AmneziaWG is opt-in by detected kernel tool and gets a marked kernel direc
 	assert.equal(rendered.profile, 'amneziawg');
 	assert.deepEqual(rendered.awg, material.protocols.amneziawg.profile);
 	assert.deepEqual(rendered.config.outbounds.find(item => item.tag === 'amneziawg'),
-		{ type: 'direct', tag: 'amneziawg', bind_interface: 'avpnwg0', routing_mark: 20193 });
+		{ type: 'direct', tag: 'amneziawg', bind_interface: 'avpnwg0', routing_mark: 20193, domain_resolver: 'awg-dns' });
+	assert.deepEqual(rendered.config.dns.servers.find(item => item.tag === 'awg-dns'),
+		{ type: 'udp', tag: 'awg-dns', server: '1.1.1.1', server_port: 53, detour: 'amneziawg' });
 	assert.equal(runtime.render(material, { ...policy(), awg_available: false, selection: 'amneziawg' }, machine).code, 'selected_vpn_unavailable');
 	const manualVless = runtime.render(material, { ...policy(), awg_available: true, selection: 'vless-reality' }, machine);
 	assert.equal(manualVless.ok, true);
-	assert.equal(manualVless.awg, null);
+	assert.deepEqual(manualVless.awg, material.protocols.amneziawg.profile);
+	assert.ok(manualVless.candidates.includes('amneziawg'));
+	assert.deepEqual(manualVless.config.inbounds.find(item => item.tag === 'probe-amneziawg'),
+		{ type: 'socks', tag: 'probe-amneziawg', listen: '127.0.0.1', listen_port: 1091 });
 	material.protocols.amneziawg.profile.obfuscation.Jc = 65536;
 	assert.equal(runtime.render(material, { ...policy(), awg_available: true, selection: 'amneziawg' }, machine).code, 'selected_vpn_unavailable');
 });
@@ -100,6 +131,8 @@ test('runtime rejects policy injection, malformed addresses and server global co
 test('persistent bundle binds device, snapshot and local-policy attempt, rejects corruption', () => {
 	const original = entry();
 	const bundle = runtime.bundle(original, policy(), machine).value;
+	assert.equal(bundle.version, 2);
+	assert.deepEqual(bundle.candidates, ['vless-reality']);
 	assert.equal(runtime.matchesBundle(bundle, original, machine), true);
 	for (const mutated of [
 		{ ...bundle, router_id: 'foreign_router' }, { ...bundle, attempt: 2 },
@@ -111,6 +144,22 @@ test('persistent bundle binds device, snapshot and local-policy attempt, rejects
 	assert.equal(runtime.bundle(original, {
 		...policy(), direct_domains: Array(128).fill(longDomain), direct_cidrs: Array(128).fill('203.0.113.0/24')
 	}, machine).code, 'runtime_bundle_too_large');
+});
+
+test('auto bundle keeps an available preferred profile and falls back deterministically without urltest', () => {
+	const material = withHysteria(false);
+	const original = entry();
+	original.snapshot = material;
+	const sticky = runtime.bundle(original, policy(), machine, 'hysteria2').value;
+	assert.equal(sticky.profile, 'hysteria2');
+	assert.deepEqual(sticky.candidates, ['vless-reality', 'hysteria2']);
+	assert.equal(sticky.config.outbounds.some(item => item.type === 'urltest'), false);
+	assert.deepEqual(sticky.config.inbounds.filter(item => item.tag.startsWith('probe-')).map(item => [item.tag, item.listen_port]), [
+		['probe-vless-reality', 1089], ['probe-hysteria2', 1090],
+	]);
+	assert.ok(sticky.config.route.rules.findIndex(rule => rule.inbound?.[0] === 'probe-hysteria2') <
+		sticky.config.route.rules.findIndex(rule => rule.port === 53));
+	assert.equal(runtime.bundle(original, policy(), machine, 'amneziawg').value.profile, 'vless-reality');
 });
 
 test('explicit policy apply reuses server snapshot with a new transaction and report key', () => {
@@ -129,42 +178,44 @@ function helperHarness() {
 	const state = machine.initialState();
 	let localPolicy = policy();
 	let localRouter = snapshot.router_id;
+	let localAwgAvailable = false;
 	let failPath = '';
 	let output;
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-helper.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
 	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'access', 'cursor', 'require',
-		'length', 'sprintf', 'type', 'match', 'json', 'ARGV', 'printf', 'exit', source);
+		'length', 'sprintf', 'type', 'match', 'index', 'json', 'ARGV', 'printf', 'exit', source);
 	return {
 		state, storage,
 		setPolicy(value) { localPolicy = value; },
 		setRouter(value) { localRouter = value; },
+		setAwgAvailable(value) { localAwgAvailable = value; },
 		failWrite(value) { failPath = value; },
-		run(action) {
+		run(action, selectedProfile) {
 			storage.set('/etc/autovpn/state/journal.json', JSON.stringify(state));
 			invoke(
 				(file, limit) => storage.has(file) ? storage.get(file).slice(0, limit) : null,
 			(file, value) => { if (file === failPath) return null; storage.set(file, value); return value.length; },
 				() => true,
 				(from, to) => { storage.set(to, storage.get(from)); storage.delete(from); return true; },
-				() => null,
+				file => localAwgAvailable && (file === '/usr/bin/awg' || file === '/sys/module/amneziawg'),
 				() => ({ load() {}, get(_config, section, key) { return section === 'main' ? localRouter : localPolicy[key]; } }),
 				name => ({ 'autovpn.state': machine, 'autovpn.journal': journal, 'autovpn.runtime': runtime })[name],
 				value => value.length,
 				(format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''),
 				value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
-				(value, expression) => value.match(expression), JSON.parse,
-				[action, '/etc/autovpn/state/journal.json'], (_format, value) => { output = value; }, () => {}
+				(value, expression) => value.match(expression), (values, value) => values.indexOf(value), JSON.parse,
+				[action, '/etc/autovpn/state/journal.json', selectedProfile], (_format, value) => { output = value; }, () => {}
 			);
 			return output;
 		},
-		begin() {
-			machine.receiveSnapshot(state, clone(snapshot), entry().etag, true);
+		begin(material = clone(snapshot)) {
+			machine.receiveSnapshot(state, material, entry().etag, true);
 			machine.beginApply(state);
 		},
 		activate() { machine.prepared(state); machine.activating(state); return this.run('activate'); },
 		commit() {
-			machine.activated(state);
+			if (state.phase === 'ACTIVATING') machine.activated(state);
 			const verified = this.run('verify');
 			machine.verified(state, verified);
 			machine.reportAccepted(state, state.pending_report.idempotency_key);
@@ -200,6 +251,174 @@ test('helper refuses foreign router and failed backup without replacing the curr
 	env.failWrite('/etc/autovpn/runtime/previous.json.new');
 	assert.equal(env.activate().code, 'runtime_write_failed');
 	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+});
+
+test('helper probes all candidates without selection side effects and keeps auto preference across prepare', () => {
+	const env = helperHarness();
+	const material = withHysteria(false);
+	env.begin(material);
+	assert.equal(env.run('probe-info').code, 'invalid_phase');
+	assert.equal(env.run('prepare').ok, true);
+	env.activate();
+	machine.activated(env.state);
+	const runtimeFiles = () => [...env.storage.entries()].filter(([name]) => name.startsWith('/etc/autovpn/runtime/'));
+	const beforeInfo = runtimeFiles();
+	assert.deepEqual(env.run('probe-info'), {
+		ok: true,
+		active_profile: 'vless-reality',
+		selection: 'auto',
+		candidates: ['vless-reality', 'hysteria2'],
+		identity: entry().etag + ':' + env.state.desired.attempt + ':vless-reality',
+	});
+	assert.deepEqual(runtimeFiles(), beforeInfo);
+	const previous = env.storage.get('/etc/autovpn/runtime/previous.json');
+	const current = env.storage.get('/etc/autovpn/runtime/current.json');
+	assert.equal(env.run('select-profile', 'hysteria2').active_profile, 'hysteria2');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/failover.json')).profile, 'hysteria2');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/previous.json'), previous);
+	assert.equal(env.run('commit-profile', 'vless-reality').code, 'failover_bundle_mismatch');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(env.run('commit-profile', 'hysteria2').active_profile, 'hysteria2');
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json')).profile, 'hysteria2');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/previous.json'), previous);
+	env.commit();
+	env.begin(material);
+	assert.equal(env.run('prepare').ok, true);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/prepared.json')).profile, 'hysteria2');
+});
+
+test('helper never changes a manual selection while exposing read-only probe candidates', () => {
+	const env = helperHarness();
+	env.setPolicy({ ...policy(), selection: 'vless-reality' });
+	env.begin(withHysteria(false));
+	env.run('prepare'); env.activate(); env.commit();
+	assert.equal(env.run('probe-info').selection, 'manual');
+	const before = [...env.storage.entries()];
+	assert.equal(env.run('select-profile', 'hysteria2').code, 'selection_not_auto');
+	assert.equal(env.run('commit-profile', 'hysteria2').code, 'selection_not_auto');
+	assert.deepEqual([...env.storage.entries()], before);
+});
+
+test('live diagnostics refuse a runtime that differs from the committed bundle without repairing it', () => {
+	const env = helperHarness();
+	env.begin(withHysteria(false)); env.run('prepare'); env.activate(); env.commit();
+	const config = JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json')).config;
+	env.storage.set('/etc/autovpn/runtime/run.json', JSON.stringify(config));
+	assert.equal(env.run('probe-info-live').ok, true);
+	env.run('select-profile', 'hysteria2');
+	env.storage.set('/etc/autovpn/runtime/run.json', env.storage.get('/etc/autovpn/runtime/candidate.json'));
+	const before = [...env.storage.entries()];
+	assert.equal(env.run('probe-info-live').code, 'runtime_bundle_mismatch');
+	assert.deepEqual([...env.storage.entries()], before);
+	// Confirmation can inspect the allowlisted staged candidate before commit.
+	assert.equal(env.run('probe-info').ok, true);
+});
+
+test('restore ignores an uncommitted staged failover and regenerates the committed candidate', () => {
+	const env = helperHarness();
+	env.begin(withHysteria(false));
+	env.run('prepare'); env.activate(); env.commit();
+	const current = env.storage.get('/etc/autovpn/runtime/current.json');
+	const previous = env.storage.get('/etc/autovpn/runtime/previous.json');
+	assert.equal(env.run('select-profile', 'hysteria2').ok, true);
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(env.run('restore').active_profile, 'vless-reality');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/candidate.json')).route.final, 'vless-reality');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/previous.json'), previous);
+	assert.equal(env.run('commit-profile', 'hysteria2').code, 'failover_bundle_mismatch');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+});
+
+test('helper drops optional AWG from the exact staged bundle and commits only the verified fallback', () => {
+	const env = helperHarness();
+	const material = withAwg();
+	material.protocols.hysteria2 = withHysteria(false).protocols.hysteria2;
+	env.setAwgAvailable(true);
+	env.begin(material);
+	env.run('prepare'); env.activate(); env.commit();
+	const current = env.storage.get('/etc/autovpn/runtime/current.json');
+	const previous = env.storage.get('/etc/autovpn/runtime/previous.json');
+	assert.equal(env.run('select-profile', 'hysteria2').ok, true);
+	assert.equal(env.run('disable-awg').active_profile, 'hysteria2');
+	const staged = JSON.parse(env.storage.get('/etc/autovpn/runtime/failover.json'));
+	assert.equal(staged.policy.awg_available, false);
+	assert.deepEqual(staged.candidates, ['vless-reality', 'hysteria2']);
+	assert.equal(env.storage.get('/etc/autovpn/runtime/awg.json'), 'null\n');
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(env.run('commit-profile', 'hysteria2').active_profile, 'hysteria2');
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json')).policy.awg_available, false);
+	assert.equal(env.storage.get('/etc/autovpn/runtime/previous.json'), previous);
+});
+
+test('helper disables AWG in the active candidate only when AWG is not the selected profile', () => {
+	const optional = helperHarness();
+	optional.setAwgAvailable(true);
+	optional.begin(withAwg());
+	optional.run('prepare'); optional.activate();
+	assert.equal(optional.run('disable-awg').active_profile, 'vless-reality');
+	const current = JSON.parse(optional.storage.get('/etc/autovpn/runtime/current.json'));
+	assert.equal(current.policy.awg_available, false);
+	assert.deepEqual(current.candidates, ['vless-reality']);
+
+	const required = helperHarness();
+	required.setAwgAvailable(true);
+	required.setPolicy({ ...policy(), selection: 'amneziawg' });
+	required.begin(withAwg());
+	required.run('prepare'); required.activate();
+	const before = [...required.storage.entries()];
+	assert.equal(required.run('disable-awg').code, 'active_awg_required');
+	assert.deepEqual([...required.storage.entries()], before);
+});
+
+test('dead auto-AWG fallback can stage and commit a checked non-AWG profile during rollback', () => {
+	const env = helperHarness();
+	env.setAwgAvailable(true);
+	const material = withAwg();
+	material.protocols.hysteria2 = withHysteria(false).protocols.hysteria2;
+	env.begin(material); env.run('prepare'); env.activate(); env.commit();
+	env.run('select-profile', 'amneziawg'); env.run('commit-profile', 'amneziawg');
+	env.begin(material); env.run('prepare'); env.activate();
+	machine.applyFailed(env.state, 'test_failed_apply');
+	assert.equal(env.run('rollback').ok, true);
+	const current = env.storage.get('/etc/autovpn/runtime/current.json');
+	assert.equal(env.run('fallback-awg').ok, true);
+	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), current);
+	assert.equal(env.run('fallback-awg', 'hysteria2').active_profile, 'hysteria2');
+	assert.equal(env.run('probe-info').selection, 'auto');
+	assert.equal(env.run('commit-profile', 'hysteria2').active_profile, 'hysteria2');
+	const committed = JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json'));
+	assert.equal(committed.policy.awg_available, false);
+	assert.equal(runtime.matchesBundle(committed, env.state.applied, machine), true);
+});
+
+test('version 1 bundles validate with the legacy renderer and restore upgrades them in place', () => {
+	const original = entry();
+	const legacy = legacyAutoBundle(original);
+	assert.equal(runtime.matchesBundle(legacy, original, machine), true);
+	const env = helperHarness();
+	env.begin(); env.run('prepare'); env.activate(); env.commit();
+	assert.deepEqual(env.state.applied, original);
+	env.storage.set('/etc/autovpn/runtime/current.json', JSON.stringify(legacy));
+	assert.equal(env.run('probe-info').code, 'runtime_upgrade_required');
+	assert.equal(env.run('restore').ok, true);
+	const restored = JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json'));
+	assert.equal(restored.version, 2);
+	assert.equal(restored.profile, 'vless-reality');
+	assert.equal(runtime.matchesBundle(restored, original, machine), true);
+	assert.equal(env.run('probe-info').active_profile, 'vless-reality');
+
+	env.begin();
+	env.run('prepare');
+	env.storage.set('/etc/autovpn/runtime/prepared.json', JSON.stringify(legacyAutoBundle(env.state.desired)));
+	assert.equal(env.activate().ok, true);
+	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/prepared.json')).version, 2);
+	env.storage.set('/etc/autovpn/runtime/previous.json', JSON.stringify(legacyAutoBundle(env.state.applied)));
+	assert.equal(env.run('rollback').ok, true);
+	const rolledBack = JSON.parse(env.storage.get('/etc/autovpn/runtime/current.json'));
+	assert.equal(rolledBack.version, 2);
+	assert.equal(runtime.matchesBundle(rolledBack, env.state.applied, machine), true);
 });
 
 test('controller restores VPN before fetching and never hides restore failure behind HTTP 304', () => {
@@ -245,7 +464,7 @@ function fixture(t, scenario = '') {
 	const bin = path.join(directory, 'bin');
 	fs.mkdirSync(work);
 	fs.mkdirSync(bin);
-	for (const name of ['ip', 'nft', 'uci', 'ucode', 'curl', 'sing-box', 'service'])
+	for (const name of ['ip', 'nft', 'uci', 'ucode', 'curl', 'sing-box', 'service', 'jsonfilter'])
 		fs.symlinkSync(path.join(__dirname, 'fake-runtime.cjs'), path.join(bin, name));
 	let source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-adapter'), 'utf8');
 	source = source.replace('ROOT=/etc/autovpn/runtime', 'ROOT=' + work)
@@ -261,6 +480,70 @@ function fixture(t, scenario = '') {
 		});
 	}, events() { return fs.readFileSync(path.join(directory, 'events'), 'utf8').trim().split('\n').map(JSON.parse); } };
 }
+
+test('health keeps a healthy or transiently failing current VPN without selection/restart', t => {
+	for (const scenario of ['health-sticky', 'health-transient']) {
+		const env = fixture(t, scenario);
+		fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+		fs.writeFileSync(path.join(env.work, 'run.json'), '{"test":"generated"}');
+		const result = env.run('health-tick');
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		const events = env.events().map(e => e.join(' '));
+		assert.equal(events.some(e => /service (start|stop)/.test(e)), false);
+		assert.equal(events.some(e => e.includes('select-profile')), false);
+		assert.ok(events.some(e => e.includes('route replace default dev avpn0 table 20191')));
+		if (scenario === 'health-sticky')
+			assert.ok(events.findIndex(e => e.includes('route replace default dev avpn0')) < events.findIndex(e => e.includes('guard-open.nft')));
+	}
+});
+
+test('failover stages and verifies a candidate before durable commit, failures keep old selection', t => {
+	for (const scenario of ['health-switch', 'health-switch-failed', 'health-dead']) {
+		const env = fixture(t, scenario);
+		fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+		fs.writeFileSync(path.join(env.work, 'run.json'), '{"test":"generated"}');
+		const result = env.run('health-tick');
+		const events = env.events().map(e => e.join(' '));
+		if (scenario === 'health-switch') {
+			assert.equal(result.status, 0, result.stdout + result.stderr);
+			const at = text => events.findIndex(e => e.includes(text));
+			assert.ok(at('select-profile') < at('service start'));
+			assert.ok(at('service start') < at('probe-helper.uc confirm'));
+			assert.ok(at('probe-helper.uc confirm') < at('commit-profile'));
+			assert.ok(at('commit-profile') < at('guard-open.nft'));
+		} else {
+			assert.equal(fs.existsSync(path.join(env.directory, 'committed-profile')), false);
+			assert.equal(events.some(e => e.includes('guard-open.nft')), false);
+		}
+	}
+});
+
+test('failed route repair stays closed even with healthy local probes', t => {
+	const env = fixture(t, 'route-failed');
+	fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+	fs.writeFileSync(path.join(env.work, 'run.json'), '{"test":"generated"}');
+	assert.equal(env.run('health-tick').status, 1);
+	assert.equal(env.events().some(e => e.join(' ').includes('guard-open.nft')), false);
+});
+
+test('Ping all never invokes restore, start, profile changes or guard opening', t => {
+	const env = fixture(t);
+	fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+	assert.equal(env.run('ping-all').status, 0);
+	const events = env.events().map(e => e.join(' '));
+	assert.equal(events.some(e => /service (start|stop)|guard-open|select-profile|commit-profile|runtime-helper/.test(e)), false);
+	assert.ok(events.some(e => e.includes('probe-helper.uc ping-all')));
+});
+
+test('Ping all remains read-only when maintenance blocks diagnostics', t => {
+	const env = fixture(t);
+	fs.writeFileSync(path.join(env.directory, 'events'), '');
+	fs.symlinkSync('missing-target', path.join(env.work, 'maintenance.lock'));
+	const result = env.run('ping-all');
+	assert.equal(result.status, 1);
+	assert.equal(JSON.parse(result.stdout).code, 'maintenance_locked');
+	assert.equal(fs.readFileSync(path.join(env.directory, 'events'), 'utf8'), '');
+});
 
 test('shell runtime checks candidate, closes guard before restart, opens only after two VPN probes', t => {
 	const env = fixture(t);
@@ -327,7 +610,7 @@ test('offload preflight rejects activation and reboot restore starts the committ
 	assert.ok(env.events().some(event => event.join(' ') === 'service start'));
 });
 
-test('restore reuses a verified AWG device only when the generated profile still matches', t => {
+test('restore does not restart a working non-AWG profile for unused AWG health', t => {
 	const env = fixture(t);
 	fs.writeFileSync(path.join(env.work, 'awg.json'), '{"interface":{"private_key":"test"}}');
 	fs.writeFileSync(path.join(env.work, 'awg-run.json'), '{"interface":{"private_key":"test"}}');
@@ -339,7 +622,29 @@ test('restore reuses a verified AWG device only when the generated profile still
 	const events = env.events().map(event => event.join(' '));
 	assert.equal(events.some(event => event === 'service stop'), false);
 	assert.equal(events.some(event => event === 'service start'), false);
-	assert.ok(events.some(event => event.includes('awg-helper.uc check')));
+	assert.equal(events.some(event => event.includes('awg-helper.uc check')), false);
+});
+
+test('optional AWG startup failure removes that candidate without blocking VLESS', t => {
+	const env = fixture(t, 'optional-awg-failed');
+	fs.writeFileSync(path.join(env.work, 'awg.json'), '{"interface":{"private_key":"test"}}');
+	assert.equal(env.run('activate').status, 0);
+	assert.equal(fs.readFileSync(path.join(env.work, 'awg.json'), 'utf8'), 'null');
+	assert.ok(env.events().some(e => e.join(' ').includes('disable-awg')));
+	assert.ok(env.events().some(e => e.join(' ') === 'service start'));
+});
+
+test('an unstartable selected AWG bootstraps and verifies another VPN instead of retrying AWG forever', t => {
+	const env = fixture(t, 'hard-awg-failed');
+	fs.writeFileSync(path.join(env.work, 'awg.json'), '{"interface":{"private_key":"test"}}');
+	fs.writeFileSync(path.join(env.work, 'run.json'), '{"test":"generated"}');
+	fs.writeFileSync(path.join(env.directory, 'service-running'), '1');
+	const result = env.run('health-tick');
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.equal(fs.readFileSync(path.join(env.directory, 'committed-profile'), 'utf8'), 'hysteria2');
+	const events = env.events().map(e => e.join(' '));
+	assert.ok(events.findIndex(e => e.includes('bootstrap')) < events.findIndex(e => e.includes('commit-profile')));
+	assert.ok(events.findIndex(e => e.includes('confirm')) < events.findIndex(e => e.includes('commit-profile')));
 });
 
 test('generated sing-box configuration passes the real binary when configured', { skip: !process.env.AUTOVPN_SING_BOX }, () => {

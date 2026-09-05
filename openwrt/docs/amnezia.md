@@ -44,8 +44,11 @@ refuses a collision instead of flushing a shared routing table.
 
 The controller owns this kernel interface directly; it does not create a second
 netifd AWG configuration. Profiles requiring AWG2 I-fields are not accepted by the
-current v1 snapshot contract. A manually selected VLESS/Hysteria profile does not
-start AWG. Matching healthy AWG state is reused on refresh, not restarted on every poll.
+current v1 snapshot contract. An available AWG candidate is prepared even with a
+manually selected VLESS/Hysteria profile, so Ping all can inspect it without
+switching the client network. A failed unused AWG startup removes that optional
+candidate from the runtime; it does not prevent VLESS/Hysteria startup. Steady
+runtime reuse only requires AWG health when AWG is actually selected.
 
 Before changing a profile the adapter closes forwarding and stops the TUN.
 `awg-helper.uc` writes `/etc/autovpn/runtime/awg.conf` at mode `0600`, applies

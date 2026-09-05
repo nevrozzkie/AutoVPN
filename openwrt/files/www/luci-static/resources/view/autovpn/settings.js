@@ -12,6 +12,7 @@ return view.extend({
 		section.addremove = false;
 		var option = section.option(form.Flag, 'enabled', _('Automatic refresh'));
 		option.rmempty = false;
+		option.description = _('Subscription refresh interval. Tunnel health is checked separately every 30 seconds.');
 		option = section.option(form.Value, 'base_url', _('AutoVPN server URL'));
 		option.placeholder = 'https://vpn.example';
 		option = section.option(form.Value, 'router_id', _('Router ID'));
@@ -19,7 +20,8 @@ return view.extend({
 		section = map.section(form.NamedSection, 'runtime', 'runtime', _('VPN and direct exceptions'));
 		section.addremove = false;
 		option = section.option(form.ListValue, 'selection', _('VPN'));
-		option.value('auto', _('Automatic (HTTPS latency)'));
+		option.value('auto', _('Automatic (failover only)'));
+		option.description = _('Keeps the current VPN until three health-check rounds fail. Never switches for a lower latency or switches back just because a previous VPN recovered. Use Ping all to compare and select a VPN manually.');
 		option.value('vless-reality', 'VLESS REALITY');
 		option.value('hysteria2', 'Hysteria2');
 		option.value('amneziawg', 'AmneziaWG');

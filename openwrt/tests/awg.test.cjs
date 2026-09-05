@@ -143,7 +143,9 @@ test('AWG transport has separate inner and outer marks with an unreachable fallb
 	assert.match(helper, /awg, 'set', DEVICE, 'fwmark', '20194'/);
 	assert.match(adapter, /priority 20193 fwmark 20193 lookup 20193/);
 	assert.match(adapter, /priority 20194 fwmark 20193 unreachable/);
-	assert.match(adapter, /if awg_active && ! awg_up; then return 1; fi/);
+	assert.match(adapter, /if awg_active && ! awg_up; then/);
+	assert.match(adapter, /helper fallback-awg \|\| return 1/);
+	assert.match(adapter, /helper disable-awg \|\| return 1/);
 });
 
 test('AWG down treats false/null access as not-owned and never probes or deletes', () => {

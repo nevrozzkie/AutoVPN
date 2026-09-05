@@ -73,8 +73,10 @@ test('manual check and apply queues execute real shell workers and reach ready',
 	const checked = await poll(f, 'checked');
 	assert.equal(fs.existsSync(f.gate), false);
 	assert.equal(f.run(['queue', checked.candidate_id]).status, 0);
-	const ready = await poll(f, 'ready');
-	assert.equal(ready.current_version, '0.8.0-r1');
+	await poll(f, 'ready');
+	// Status reads the installed version before the worker phase. Re-read
+	// after ready so this assertion cannot straddle the package commit.
+	assert.equal(f.status().current_version, '0.8.0-r1');
 	assert.equal(JSON.parse(fs.readFileSync(f.gate)).phase, 'ready');
 	assert.equal(f.calls().filter(c => c.name === 'apk' && c.args.includes('add') && !c.args.includes('--simulate')).length, 1);
 	assert.ok(f.calls().some(c => c.name === 'uci' && c.args.includes('autovpn.main.enabled=0')));

@@ -167,8 +167,8 @@ case "$command" in
 	maintenance)
 		maintenance_action "${2:-}"
 		;;
-	status|refresh|recover|apply-policy|stop)
-		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command"
+	status|refresh|recover|apply-policy|stop|health-tick|ping-all)
+		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command" "${2:-}"
 		;;
 	network-setup|network-confirm|network-tick|network-boot|network-status)
 		umask 077
@@ -177,7 +177,7 @@ case "$command" in
 		/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc "$command" "${2:-}"
 		;;
 	*)
-		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
+		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|health-tick|ping-all [youtube|instagram]|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
 		exit 64
 		;;
 esac
