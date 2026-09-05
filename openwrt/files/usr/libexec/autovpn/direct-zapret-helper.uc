@@ -84,6 +84,17 @@ function setting() {
 	let enabled = uci.get('autovpn', 'direct', 'zapret_enabled');
 	if (enabled != null && enabled != '0' && enabled != '1') return { ok: false };
 	if (enabled == '0') return { ok: true, value: null, enabled: false };
+	let discordMedia = uci.get('autovpn', 'direct', 'discord_media');
+	let stun = uci.get('autovpn', 'direct', 'stun');
+	let mediaStrategy = uci.get('autovpn', 'direct', 'media_strategy');
+	let mediaRepeats = uci.get('autovpn', 'direct', 'media_repeats');
+	let hasOptions = discordMedia != null || stun != null || mediaStrategy != null || mediaRepeats != null;
+	if ((discordMedia != null && (type(discordMedia) != 'string' || index(['0', '1'], discordMedia) < 0)) ||
+		(stun != null && (type(stun) != 'string' || index(['0', '1'], stun) < 0)) ||
+		(mediaStrategy != null && (type(mediaStrategy) != 'string' ||
+			index(['fake', 'fake_badsum'], mediaStrategy) < 0)) ||
+		(mediaRepeats != null && (type(mediaRepeats) != 'string' || match(mediaRepeats, /^[1-6]$/) == null)))
+		return { ok: false };
 	let wan = uci.get('autovpn', 'runtime', 'wan_device') || '';
 	if (wan == '') {
 		let raw = call(['/bin/ubus', 'call', 'network.interface.wan', 'status'], 4096);
@@ -91,7 +102,12 @@ function setting() {
 		try { status = raw == null ? null : json(raw); } catch (e) { status = null; }
 		wan = type(status) == 'object' ? status.l3_device : '';
 	}
-	let value = direct.plan(wan, true);
+	let value = hasOptions ? direct.plan(wan, true, {
+		discord_media: discordMedia == '1',
+		stun: stun == '1',
+		media_strategy: mediaStrategy == null ? 'fake' : mediaStrategy,
+		media_repeats: mediaRepeats == null ? 2 : int(mediaRepeats),
+	}) : direct.plan(wan, true);
 	return { ok: value !== false, value: value, enabled: true };
 }
 function validate(value) {

@@ -112,7 +112,28 @@ test('settings assigns common options to primary runtime and only selection to V
 		'_install_zapret', 'zapret_enabled', 'zapret_vless', 'zapret_hysteria2', 'zapret_amneziawg', 'zapret_repeats'
 	]);
 	assert.deepEqual(sections.runtime_zapret.options.map(option => option.name), ['selection']);
-	assert.deepEqual(sections.direct.options.map(option => option.name), ['zapret_enabled']);
+	assert.deepEqual(sections.direct.options.map(option => option.name), ['zapret_enabled', 'discord_media', 'stun', 'media_strategy', 'media_repeats']);
+});
+
+test('Discord direct-zapret options are restricted to Wi-Fi -з and preserve legacy defaults', () => {
+	const fixture = settingsFixture();
+	fixture.view.render();
+	const section = fixture.maps[0].sections.find(item => item.id === 'direct');
+	const options = Object.fromEntries(section.options.map(option => [option.name, option]));
+	const fresh = fs.readFileSync(path.join(root, 'files/etc/config/autovpn'), 'utf8')
+		.split("config policy 'direct'\n")[1].split('\nconfig ')[0];
+	for (const name of ['discord_media', 'stun']) {
+		assert.ok(fresh.includes("option " + name + " '1'"), name + ' fresh installation default');
+		assert.equal(options[name].default, '0', name + ' legacy UI default');
+		assert.equal(options[name].rmempty, false, name + ' must persist explicit changes');
+		assert.match(String(options[name].description), /only to Wi-Fi -з/);
+	}
+	assert.deepEqual(options.media_strategy.values, ['fake', 'fake_badsum']);
+	assert.equal(options.media_strategy.default, 'fake');
+	assert.equal(options.media_repeats.default, '2');
+	assert.equal(options.media_repeats.datatype, 'and(uinteger,range(1,6))');
+	assert.match(String(options.media_strategy.description), /No custom command or arbitrary zapret profile/);
+	assert.match(String(options.media_repeats.description), /does not change existing VPN zapret settings/);
 });
 
 test('RU bypass is shared, persisted by default, and does not replace manual rules', () => {

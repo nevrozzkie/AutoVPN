@@ -104,7 +104,7 @@ function harness() {
 		env.output = null; env.exit = null;
 		const invoke = new Function(
 			'readfile', 'writefile', 'chmod', 'rename', 'unlink', 'access', 'mkdir', 'lstat', 'fsError', 'cursor',
-			'require', 'type', 'length', 'match', 'sprintf', 'json', 'index', 'ARGV', 'printf', 'exit', helperSource,
+			'require', 'type', 'length', 'match', 'sprintf', 'json', 'index', 'int', 'ARGV', 'printf', 'exit', helperSource,
 		);
 		invoke(readfile, writefile, chmod, rename, unlink, access, mkdir, lstat, () => 'No such file or directory', cursor,
 			name => {
@@ -118,7 +118,7 @@ function harness() {
 			value => typeof value === 'string' ? Buffer.byteLength(value) : value.length,
 			(value, expression) => value.match(expression),
 			(format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''),
-			JSON.parse, (values, value) => values.indexOf(value),
+			JSON.parse, (values, value) => values.indexOf(value), value => Number.parseInt(value, 10),
 			extra === undefined ? [action] : [action, extra],
 			(_format, value) => { env.output = structuredClone(value); }, value => { env.exit = value; });
 		return env.output;
@@ -128,6 +128,16 @@ function harness() {
 
 function called(env, ...wanted) {
 	return env.calls.some(argv => wanted.every((value, index) => argv[index] === value));
+}
+
+function mediaPlan(overrides = {}) {
+	return direct.plan('pppoe-wan', true, {
+		discord_media: false,
+		stun: false,
+		media_strategy: 'fake',
+		media_repeats: 2,
+		...overrides,
+	});
 }
 
 test('up closes first, validates, starts listener and only then opens direct forwarding', () => {
@@ -148,6 +158,93 @@ test('up closes first, validates, starts listener and only then opens direct for
 	assert.match(validation, /--intercept=0\n$/);
 	assert.equal(called(env, '/sbin/modprobe', 'nft_queue'), true);
 	assert.deepEqual(run('check'), { ok: true, enabled: true });
+});
+
+test('explicit media settings enable a version 2 plan with typed defaults', () => {
+	const { env, run } = harness();
+	env.settings.set('direct.discord_media', '1');
+	assert.deepEqual(run('up'), { ok: true });
+	const expected = mediaPlan({ discord_media: true });
+	assert.equal(expected.version, 2);
+	assert.equal(env.tableRaw, direct.nft(expected));
+	assert.equal(env.files.get(ROOT + '/nfqws.conf'), direct.config(expected));
+	assert.equal(env.files.get(ROOT + '/plan.json'), JSON.stringify(expected) + '\n');
+	assert.match(env.tableRaw, /udp dport \{ 50000-50099,19294-19344 \}/);
+	assert.match(env.files.get(ROOT + '/nfqws.conf'), /--filter-l7=discord/);
+	assert.doesNotMatch(env.files.get(ROOT + '/nfqws.conf'), /--filter-l7=stun/);
+	assert.deepEqual(run('check'), { ok: true, enabled: true });
+});
+
+test('an unchanged version 2 plan is idempotent', () => {
+	const { env, run } = harness();
+	env.settings.set('direct.discord_media', '1');
+	env.settings.set('direct.stun', '1');
+	env.settings.set('direct.media_strategy', 'fake_badsum');
+	env.settings.set('direct.media_repeats', '4');
+	assert.deepEqual(run('up'), { ok: true });
+	const applied = env.applied.length;
+	const writes = env.writes.length;
+	const starts = env.calls.filter(argv => argv[0] === SERVICE && argv[1] === 'start').length;
+	assert.deepEqual(run('up'), { ok: true });
+	assert.equal(env.applied.length, applied);
+	assert.equal(env.writes.length, writes);
+	assert.equal(env.calls.filter(argv => argv[0] === SERVICE && argv[1] === 'start').length, starts);
+});
+
+test('media toggle and strategy changes reconfigure closed-first and removals return to legacy', () => {
+	const { env, run } = harness();
+	env.settings.set('direct.discord_media', '1');
+	env.settings.set('direct.stun', '0');
+	env.settings.set('direct.media_strategy', 'fake');
+	env.settings.set('direct.media_repeats', '2');
+	assert.deepEqual(run('up'), { ok: true });
+
+	env.settings.set('direct.discord_media', '0');
+	env.settings.set('direct.stun', '1');
+	env.settings.set('direct.media_strategy', 'fake_badsum');
+	env.settings.set('direct.media_repeats', '6');
+	const before = env.applied.length;
+	assert.deepEqual(run('up'), { ok: true });
+	const expected = mediaPlan({ stun: true, media_strategy: 'fake_badsum', media_repeats: 6 });
+	assert.deepEqual(env.applied.slice(before), [direct.closedNft(), direct.nft(expected)]);
+	assert.equal(env.files.get(ROOT + '/nfqws.conf'), direct.config(expected));
+	assert.match(env.files.get(ROOT + '/nfqws.conf'), /--filter-l7=stun/);
+	assert.match(env.files.get(ROOT + '/nfqws.conf'), /:badsum:repeats=6/);
+	assert.doesNotMatch(env.files.get(ROOT + '/nfqws.conf'), /--filter-l7=discord/);
+
+	for (const option of ['discord_media', 'stun', 'media_strategy', 'media_repeats'])
+		env.settings.delete('direct.' + option);
+	const beforeLegacy = env.applied.length;
+	assert.deepEqual(run('up'), { ok: true });
+	const legacy = direct.plan('pppoe-wan', true);
+	assert.equal(legacy.version, 1);
+	assert.deepEqual(env.applied.slice(beforeLegacy), [direct.closedNft(), direct.nft(legacy)]);
+	assert.equal(env.files.get(ROOT + '/plan.json'), JSON.stringify(legacy) + '\n');
+	assert.equal(env.files.get(ROOT + '/nfqws.conf'), direct.config(legacy));
+});
+
+test('malformed media settings close an already open lane before failing', () => {
+	for (const [option, value] of [
+		['discord_media', 'yes'],
+		['stun', '2'],
+		['media_strategy', 'ttl'],
+		['media_repeats', '0'],
+		['media_repeats', '02'],
+		['media_repeats', '7'],
+	]) {
+		const { env, run } = harness();
+		env.settings.set('direct.discord_media', '1');
+		assert.deepEqual(run('up'), { ok: true });
+		env.settings.set('direct.' + option, value);
+		const before = env.applied.length;
+		assert.equal(run('up').code, 'direct_zapret_unavailable', `${option}=${value}`);
+		assert.deepEqual(env.applied.slice(before), [direct.closedNft()]);
+		assert.equal(env.tableRaw, direct.closedNft());
+		assert.equal(env.serviceRunning, false);
+		assert.equal(env.files.get(ROOT + '/plan.json'), 'null\n');
+		assert.equal(env.files.has(ROOT + '/nfqws.conf'), false);
+		assert.equal(env.files.has(ROOT + '/open.nft'), false);
+	}
 });
 
 test('down and an explicitly disabled setting retain the owned closed guard', () => {
