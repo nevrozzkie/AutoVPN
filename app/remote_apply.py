@@ -145,6 +145,44 @@ def _write_artifacts(config: CapturedVpnConfig) -> str:
     return "\n".join(blocks)
 
 
+def _hysteria_validation_probe() -> str:
+    # Hysteria 2 has no --check flag. Validate with its real parser/server in a
+    # private network namespace: no live port collision or external clients.
+    # timeout supervises the entire process group, including cleanup if the
+    # child ignores TERM. Never print the private log (it may contain secrets).
+    probe = r'''
+set -eu
+ulimit -f 1024
+hysteria server --config "$1" --disable-update-check --log-level info --log-format json >"$2" 2>&1 &
+probe_pid=$!
+cleanup_probe() {
+  kill -TERM "$probe_pid" 2>/dev/null || true
+  wait "$probe_pid" 2>/dev/null || true
+}
+trap cleanup_probe EXIT
+trap 'exit 1' INT TERM
+while kill -0 "$probe_pid" 2>/dev/null; do
+  if grep -Fq '"msg":"server up and running"' "$2"; then
+    sleep 0.1
+    kill -0 "$probe_pid" 2>/dev/null || exit 1
+    exit 0
+  fi
+  sleep 0.1
+done
+exit 1
+'''
+    return (
+        "command -v unshare >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 || "
+        "fail_validation 'hysteria validation requires util-linux and coreutils'\n"
+        "timeout --signal=TERM --kill-after=2s 15s "
+        "unshare --net --fork --kill-child=KILL sh -c "
+        + shlex.quote(probe)
+        + ' sh "$STAGE/hysteria.validate.yaml" "$STAGE/hysteria.validate.log" '
+        ">/dev/null 2>&1 || fail_validation "
+        "'hysteria isolated startup validation failed (config, network namespace or timeout)'"
+    )
+
+
 def _validation_script(config: CapturedVpnConfig) -> str:
     commands = []
     if config.vless.protocol.enabled:
@@ -170,10 +208,7 @@ def _validation_script(config: CapturedVpnConfig) -> str:
             "fi\n"
             "command -v hysteria >/dev/null 2>&1 || "
             "fail_validation 'hysteria is unavailable'\n"
-            "hysteria server --help 2>&1 | grep -q -- '--check' || "
-            "fail_validation 'safe hysteria validation is unavailable'\n"
-            "hysteria server --config \"$STAGE/hysteria.validate.yaml\" --check "
-            ">/dev/null 2>&1 || fail_validation 'hysteria config validation failed'"
+            + _hysteria_validation_probe()
         )
     if config.amnezia.protocol.enabled:
         commands.append(
@@ -477,6 +512,8 @@ def _bootstrap_body(config: CapturedVpnConfig) -> str:
             [
                 "! command -v hysteria >/dev/null 2>&1",
                 "! command -v openssl >/dev/null 2>&1",
+                "! command -v unshare >/dev/null 2>&1",
+                "! command -v timeout >/dev/null 2>&1",
             ]
         )
     if install_awg:
@@ -512,7 +549,7 @@ if {condition}; then
   }}
   remove_amnezia_apt_sources
   apt-get update
-  apt-get install -y ca-certificates curl gnupg iptables openssl software-properties-common unzip
+  apt-get install -y ca-certificates coreutils curl gnupg iptables openssl software-properties-common unzip util-linux
   {xray}
   {hysteria}
   {awg}

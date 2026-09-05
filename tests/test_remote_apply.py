@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +13,7 @@ import app.eu_install as eu_install
 from app.db import create_client, init_db, set_setting, update_client_name
 from app.eu_install import build_eu_deploy_script, run_eu_install
 from app.remote_apply import (
+    _hysteria_validation_probe,
     render_config_apply_script,
     render_transactional_install_script,
 )
@@ -117,6 +120,130 @@ def test_config_only_script_is_staged_transactional_and_has_no_bootstrap() -> No
     assert "apt-get" not in script
     assert "curl -fsSL" not in script
     subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+def _probe_environment(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    stage = tmp_path / "stage"
+    stage.mkdir(mode=0o700)
+    fake_bin = tmp_path / "probe-bin"
+    fake_bin.mkdir()
+    # macOS has no Linux net namespaces. This shim tests command wiring only;
+    # production always requires real unshare and has no isolation bypass.
+    _write_executable(fake_bin / "unshare", '''#!/bin/sh
+[ "$1 $2 $3" = "--net --fork --kill-child=KILL" ] || exit 91
+[ "${FAIL_NAMESPACE:-0}" = 0 ] || exit 92
+shift 3
+exec "$@"
+''')
+    real_timeout = shutil.which("timeout") or shutil.which("gtimeout")
+    assert real_timeout, "GNU coreutils timeout is required for probe tests"
+    _write_executable(fake_bin / "timeout", f'''#!/bin/sh
+[ "$1 $2 $3" = "--signal=TERM --kill-after=2s 15s" ] || exit 93
+shift 3
+exec {shlex.quote(real_timeout)} --signal=TERM --kill-after=0.2s "${{PROBE_TEST_TIMEOUT:-3s}}" "$@"
+''')
+    return stage, {
+        **os.environ,
+        "STAGE": str(stage),
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "PROBE_PID_FILE": str(tmp_path / "probe.pid"),
+    }
+
+
+def _run_probe(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", "set -Eeuo pipefail\nfail_validation() { echo \"$1\" >&2; return 1; }\n"
+         + _hysteria_validation_probe()],
+        env=environment, text=True, capture_output=True, timeout=10,
+    )
+
+
+@pytest.mark.parametrize("mode,success", [
+    ("ready", True), ("invalid", False), ("early_exit", False),
+    ("silent", False), ("ignore_term", False), ("namespace_denied", False),
+])
+def test_hysteria_probe_requires_readiness_and_is_bounded(
+    tmp_path: Path, mode: str, success: bool,
+) -> None:
+    stage, env = _probe_environment(tmp_path)
+    env["PROBE_MODE"] = mode
+    env["PROBE_TEST_TIMEOUT"] = "3s" if success else "0.6s"
+    if mode == "namespace_denied":
+        env["FAIL_NAMESPACE"] = "1"
+    fake_bin = Path(env["PATH"].split(":")[0])
+    _write_executable(fake_bin / "hysteria", '''#!/bin/sh
+printf '%s' "$$" > "$PROBE_PID_FILE"
+case "$PROBE_MODE" in
+ invalid) echo 'private-config-secret'; exit 1 ;;
+ ready|early_exit) echo '{"level":"info","msg":"server up and running"}' ;;
+ ignore_term) trap '' TERM ;;
+esac
+[ "$PROBE_MODE" != early_exit ] || exit 1
+exec sleep 60
+''')
+    result = _run_probe(env)
+    assert (result.returncode == 0) is success, result.stderr
+    assert "private-config-secret" not in result.stdout + result.stderr
+    if mode == "namespace_denied":
+        assert not Path(env["PROBE_PID_FILE"]).exists()
+    if mode in {"ready", "silent"}:
+        pid = int(Path(env["PROBE_PID_FILE"]).read_text())
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+
+def test_hysteria_validation_failure_never_switches_live_config(tmp_path: Path) -> None:
+    root, env = _fake_remote_environment(tmp_path)
+    fake_bin = Path(env["PATH"].split(":")[0])
+    for tool in ("hysteria", "unshare", "timeout"):
+        _write_executable(fake_bin / tool, "#!/bin/sh\nexit 1\n")
+    _write_executable(fake_bin / "openssl", "#!/bin/sh\nexit 0\n")
+    live = root / "etc/hysteria/config.yaml"
+    live.parent.mkdir(parents=True)
+    live.write_text("old-hysteria-config\n")
+    config = _captured_config()
+    result = _run_script(render_config_apply_script(config), env)
+    assert result.returncode != 0
+    assert "hysteria isolated startup validation failed" in result.stderr
+    assert live.read_text() == "old-hysteria-config\n"
+    assert not (tmp_path / "systemctl.log").exists()
+    assert not list((root / "etc/autovpn").glob("apply-*"))
+
+
+def test_hysteria_probe_tools_are_bootstrapped_and_no_check_flag_is_used() -> None:
+    script = render_transactional_install_script(_captured_config())
+    assert "! command -v unshare" in script
+    assert "! command -v timeout" in script
+    assert "ca-certificates coreutils" in script
+    assert "unzip util-linux" in script
+    assert "hysteria server --help" not in script
+    assert " --check " not in script
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_hysteria_probe_with_real_binary(tmp_path: Path, invalid: bool) -> None:
+    binary = os.environ.get("AUTOVPN_TEST_HYSTERIA_BINARY")
+    if not binary:
+        pytest.skip("Set AUTOVPN_TEST_HYSTERIA_BINARY for the real Hysteria smoke test")
+    stage, env = _probe_environment(tmp_path)
+    fake_bin = Path(env["PATH"].split(":")[0])
+    (fake_bin / "hysteria").symlink_to(Path(binary).resolve())
+    subprocess.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", str(stage / "key.pem"), "-out", str(stage / "cert.pem"),
+        "-days", "1", "-subj", "/CN=localhost",
+    ], check=True, capture_output=True)
+    # Bind only ephemeral loopback in this portable smoke test. Linux namespace
+    # isolation itself must be checked separately on Linux, not claimed here.
+    (stage / "hysteria.validate.yaml").write_text(
+        f"listen: 127.0.0.1:0\ntls:\n  cert: {stage}/cert.pem\n  key: {stage}/key.pem\n"
+        + ("auth:\n  type: invalid\n" if invalid else
+           "auth:\n  type: userpass\n  userpass: {test-user: test-password}\n")
+        + "obfs:\n  type: salamander\n  salamander:\n    password: test-obfs-password\n"
+        + "masquerade:\n  type: proxy\n  proxy:\n    url: https://example.com/\n"
+    )
+    result = _run_probe(env)
+    assert (result.returncode == 0) is not invalid, result.stderr
 
 
 def test_disabled_protocols_remove_config_and_restore_prior_state_on_failure() -> None:
