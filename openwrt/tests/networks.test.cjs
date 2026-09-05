@@ -24,6 +24,7 @@ function configs() {
 function installed(base, plan) {
 	const result = clone(base);
 	for (const item of plan.remove) result[item.config] = result[item.config].filter(s => s['.name'] !== item.name);
+	for (const patch of plan.patches) result[patch.config].find(s => s['.name'] === patch.name)[patch.option] = patch.value;
 	for (const item of plan.sections) result[item.config].push({ '.name': item.name, '.type': item.section_type, ...item.values });
 	return result;
 }
@@ -33,7 +34,7 @@ test('creates personal WPA2 SSIDs on both bands and preserves management section
 	const plan = planner.plan(settings, base, []);
 	assert.equal(plan.ok, true);
 	assert.deepEqual(base, before);
-	assert.deepEqual(plan.ssids.map(s => s.ssid), ['Общага', 'Общага-VPN', 'Общага-ZAPRET', 'Общага-VPN-ZAPRET']);
+	assert.deepEqual(plan.ssids.map(s => s.ssid), ['Общага', 'Общага-в', 'Общага-з', 'Общага-вз']);
 	const aps = plan.sections.filter(s => s.config === 'wireless');
 	assert.equal(aps.length, 8);
 	assert.equal(aps.filter(s => s.values.disabled === '0').length, 4);
@@ -60,9 +61,12 @@ test('repeat setup updates only owned sections and does not duplicate APs or bri
 	assert.equal(final.wireless.find(s => s['.name'] === 'default_radio0').key, 'untouched');
 });
 test('validates SSID byte length and WPA2 passphrase including metacharacters as data', () => {
-	for (const name of ['', 'a'.repeat(22), 'я'.repeat(11), 'bad\nssid'])
+	for (const name of ['', 'a'.repeat(28), 'я'.repeat(14), 'bad\nssid'])
 		assert.equal(planner.validSettings({ ...settings, base_ssid: name }).ok, false);
-	assert.equal(planner.validSettings({ ...settings, base_ssid: 'я'.repeat(10) + 'a' }).ok, true);
+	assert.equal(planner.validSettings({ ...settings, base_ssid: 'я'.repeat(13) + 'a' }).ok, true);
+	assert.equal(Buffer.byteLength('я'.repeat(13) + 'a-вз'), 32);
+	assert.equal(planner.validSettings({ ...settings, initial_setup: '1' }).ok, false);
+	assert.equal(planner.validSettings({ ...settings, primary_lan: 1 }).ok, false);
 	for (const password of ['', 'short', 'g'.repeat(64), 'bad\npassword', 'пароль123'])
 		assert.equal(planner.validSettings({ ...settings, password }).ok, false);
 	assert.equal(planner.validSettings({ ...settings, password: 'f'.repeat(64) }).ok, true);
@@ -76,7 +80,7 @@ test('refuses conflicting resources, prefixes and subnets, including WAN routes'
 		['network', { '.name': 'other', '.type': 'interface', ipaddr: '192.168.2.1', netmask: '255.255.0.0' }, 'network_subnet_conflict'],
 		['network', { '.name': 'other', '.type': 'interface', ipaddr: '192.168.2.1', netmask: '255.0.255.0' }, 'network_subnet_conflict'],
 		['wireless', { '.name': 'other', '.type': 'wifi-iface', network: 'avpn_vpn' }, 'network_ownership_conflict'],
-		['wireless', { '.name': 'other', '.type': 'wifi-iface', ssid: 'Общага-VPN' }, 'ssid_already_exists'],
+		['wireless', { '.name': 'other', '.type': 'wifi-iface', ssid: 'Общага-в' }, 'ssid_already_exists'],
 		['firewall', { '.name': 'other', '.type': 'defaults', flow_offloading: '1' }, 'disable_flow_offloading']
 	]) {
 		const base = configs(); base[config].push(section);
@@ -93,6 +97,87 @@ test('uses enabled radios only, rejects missing radios/WAN instead of changing t
 	assert.equal(planner.plan(settings, base, []).code, 'enabled_wifi_radio_required');
 	const noWan = configs(); noWan.firewall.pop();
 	assert.equal(planner.plan(settings, noWan, []).code, 'masquerading_wan_zone_required');
+});
+
+function freshOpenWrt() {
+	return {
+		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
+			ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		wireless: [
+			{ '.name': 'radio0', '.type': 'wifi-device', type: 'mac80211', band: '2g', channel: '1', htmode: 'HE20', disabled: '1' },
+			{ '.name': 'default_radio0', '.type': 'wifi-iface', device: 'radio0', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
+			{ '.name': 'radio1', '.type': 'wifi-device', type: 'mac80211', band: '5g', channel: '36', htmode: 'HE80', disabled: '1' },
+			{ '.name': 'default_radio1', '.type': 'wifi-iface', device: 'radio1', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
+		],
+		dhcp: [{ '.name': 'lan', '.type': 'dhcp', interface: 'lan' }],
+		firewall: [{ '.name': 'defaults', '.type': 'defaults' },
+			{ '.name': 'lan', '.type': 'zone', name: 'lan', network: ['lan'], input: 'ACCEPT', output: 'ACCEPT', forward: 'ACCEPT' },
+			{ '.name': 'wan', '.type': 'zone', name: 'wan', network: ['wan', 'wan6'], masq: '1' },
+			{ '.name': 'lan_wan', '.type': 'forwarding', src: 'lan', dest: 'wan' }],
+	};
+}
+
+test('initial primary-LAN plan safely enables both stock-disabled radios without replacing their hardware options', () => {
+	const base = freshOpenWrt();
+	const planned = planner.plan({ ...settings, base_ssid: 'OpenWrt', initial_setup: true, primary_lan: true }, base, []);
+	assert.equal(planned.ok, true);
+	assert.deepEqual(planned.radios, ['radio0', 'radio1']);
+	assert.deepEqual(planned.patches, [
+		{ config: 'wireless', name: 'default_radio0', option: 'disabled', value: '1' },
+		{ config: 'wireless', name: 'radio0', option: 'disabled', value: '0' },
+		{ config: 'wireless', name: 'default_radio1', option: 'disabled', value: '1' },
+		{ config: 'wireless', name: 'radio1', option: 'disabled', value: '0' },
+	]);
+	assert.deepEqual(planned.ssids, [
+		{ ssid: 'OpenWrt', enabled: true, mode: 'direct', primary_lan: true },
+		{ ssid: 'OpenWrt-в', enabled: true, mode: 'vpn', primary_lan: false },
+		{ ssid: 'OpenWrt-з', enabled: false, mode: 'zapret', primary_lan: false },
+		{ ssid: 'OpenWrt-вз', enabled: false, mode: 'vpn_zapret', primary_lan: false },
+	]);
+	const directAps = planned.sections.filter(item => item.config === 'wireless' && item.name.startsWith('avpn_direct_'));
+	assert.equal(directAps.length, 2);
+	assert.ok(directAps.every(item => JSON.stringify(item.values.network) === '["lan"]'));
+	assert.equal(planned.sections.some(item => item.config !== 'wireless' && item.name.startsWith('avpn_direct')), false);
+	assert.equal(planned.sections.filter(item => item.config === 'wireless' && item.values.disabled === '1').length, 4);
+	const applied = installed(base, planned);
+	assert.deepEqual(applied.wireless.find(item => item['.name'] === 'radio0'),
+		{ ...base.wireless[0], disabled: '0' });
+	assert.deepEqual(applied.wireless.find(item => item['.name'] === 'radio1'),
+		{ ...base.wireless[2], disabled: '0' });
+	assert.equal(applied.wireless.find(item => item['.name'] === 'default_radio0').disabled, '1');
+	assert.equal(applied.wireless.find(item => item['.name'] === 'default_radio1').disabled, '1');
+});
+
+test('initial setup preserves disabled custom BSSes but refuses activating an unknown BSS with its radio', () => {
+	let base = freshOpenWrt();
+	base.wireless.push({ '.name': 'guest', '.type': 'wifi-iface', device: 'radio0', mode: 'ap',
+		network: 'lan', ssid: 'Private', encryption: 'psk2', key: 'untouched', disabled: '1' });
+	let planned = planner.plan({ ...settings, initial_setup: true, primary_lan: true }, base, []);
+	assert.equal(planned.ok, true);
+	assert.equal(planned.patches.some(patch => patch.name === 'guest'), false);
+	assert.equal(installed(base, planned).wireless.find(item => item['.name'] === 'guest').key, 'untouched');
+	base = freshOpenWrt();
+	base.wireless.push({ '.name': 'guest', '.type': 'wifi-iface', device: 'radio0', mode: 'ap',
+		network: 'lan', ssid: 'Private', encryption: 'none' });
+	assert.equal(planner.plan({ ...settings, initial_setup: true, primary_lan: true }, base, []).code,
+		'disabled_radio_bss_conflict');
+	base = freshOpenWrt();
+	base.wireless[0].disabled = '0';
+	base.wireless.push({ '.name': 'custom', '.type': 'wifi-iface', device: 'radio0', mode: 'ap',
+		network: 'lan', ssid: settings.base_ssid, encryption: 'psk2', key: 'untouched' });
+	assert.equal(planner.plan({ ...settings, initial_setup: true, primary_lan: true }, base, []).code, 'ssid_already_exists');
+});
+
+test('primary-LAN bootstrap requires dual-band radios and a complete static LAN-to-WAN policy', () => {
+	for (const mutate of [
+		base => { base.network[0].proto = 'dhcp'; },
+		base => { base.firewall = base.firewall.filter(item => item.name !== 'lan'); },
+		base => { base.firewall = base.firewall.filter(item => item.src !== 'lan'); },
+		base => { base.wireless = base.wireless.filter(item => item.device !== 'radio1' && item['.name'] !== 'radio1'); },
+	]) {
+		const base = freshOpenWrt(); mutate(base);
+		assert.equal(planner.plan({ ...settings, initial_setup: true, primary_lan: true }, base, []).ok, false);
+	}
 });
 function fixture() {
 	const files = Object.fromEntries(planner.configs.map(n => [n, 'before-' + n]));
@@ -192,9 +277,11 @@ test('CLI, package and watchdog wire network recovery before boot networking; no
 	const ctl = fs.readFileSync(path.join(root, 'files/usr/sbin/autovpnctl'), 'utf8');
 	const init = fs.readFileSync(path.join(root, 'files/etc/init.d/autovpn-networks'), 'utf8');
 	const helper = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/network-helper.uc'), 'utf8');
-	assert.match(ctl, /network-setup\|network-confirm\|network-tick\|network-boot\|network-status/);
+	assert.match(ctl, /network-setup\|network-tick\|network-boot\|network-status/);
+	assert.match(ctl, /network-confirm\)/);
 	assert.match(init, /START=18/);
 	assert.match(init, /autovpnctl network-boot/);
 	assert.match(helper, /cursor\(ROOT \+ '\/stage', ROOT \+ '\/delta', ''\)/);
+	assert.match(helper, /action == 'network-bootstrap'/);
 	assert.doesNotMatch(helper, /popen\([^\n]*password/);
 });

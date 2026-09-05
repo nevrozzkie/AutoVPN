@@ -31,7 +31,7 @@ function validBaseUrl(value) {
 }
 
 function validSsid(value) {
-	return type(value) == 'string' && length(value) > 0 && length(value) <= 21 &&
+	return type(value) == 'string' && length(value) > 0 && length(value) <= 27 &&
 		match(value, /[\x00-\x1f\x7f]/) == null;
 }
 
@@ -141,7 +141,9 @@ function firstRunAllowed(ctx, identityMatches, credential) {
 		uci_clean: uciClean(ctx, 'autovpn'), enabled: ctx.get('autovpn', 'main', 'enabled') == '1',
 		controller_journal: controller.present, network_phase: networkState != null ? networkState.phase : null,
 		network_invalid: networkInvalid, prepared: prepared, identity_matches: identityMatches,
-		credential_present: secret.present
+		credential_present: secret.present,
+		bootstrap_confirmed: ctx.get('autovpn', 'wifi', 'bootstrap_completed') == '1' &&
+			ctx.get('autovpn', 'wifi', 'primary_lan') == '1' && networkState?.phase == 'confirmed' && networkConfirmed(),
 	});
 }
 
@@ -172,7 +174,7 @@ function configure(nonce) {
 	let request;
 	try { request = json(raw); } catch (e) { return { ok: false, code: 'setup_request_invalid' }; }
 	if (type(request) != 'object' || !validBaseUrl(request.base_url) || !validRouterId(request.router_id) ||
-		!validCredential(request.credential) || !validSsid(request.base_ssid) || !validWifiKey(request.password))
+		!validCredential(request.credential) || !validSsid(request.base_ssid) || type(request.password) != 'string')
 		return { ok: false, code: 'setup_request_invalid' };
 	let blocking = gates();
 	if (!blocking.ok || blocking.maintenance.present || blocking.update.present)
@@ -181,6 +183,16 @@ function configure(nonce) {
 	if (wan == null) return { ok: false, code: 'wan_not_ready' };
 	let ctx = cursor();
 	if (!ctx.load('autovpn')) return { ok: false, code: 'config_load_failed' };
+	if (ctx.get('autovpn', 'wifi', 'bootstrap_completed') == '1') {
+		/* Pairing must not silently diverge from the already confirmed Wi-Fi.
+		 * Subsequent SSID/key changes belong to the Networks transaction. */
+		let saved = ctx.get('autovpn', 'wifi', 'password');
+		if (request.base_ssid != ctx.get('autovpn', 'wifi', 'base_ssid') ||
+			(request.password != '' && request.password != saved))
+			return { ok: false, code: 'wifi_change_use_networks' };
+		if (request.password == '') request.password = saved;
+	}
+	if (!validWifiKey(request.password)) return { ok: false, code: 'setup_request_invalid' };
 	let path = credentialPath(ctx);
 	if (path == null) return { ok: false, code: 'credential_path_invalid' };
 	let existing = firstRunAllowed(ctx,

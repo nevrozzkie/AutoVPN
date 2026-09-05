@@ -10,7 +10,8 @@ function firstRunAllowed(state) {
 		if (state.identity_matches !== true) return { ok: false, code: 'setup_identity_locked' };
 		return { ok: true, retry: true };
 	}
-	return state.network_phase == null && state.credential_present !== true
+	return (state.network_phase == null || (state.bootstrap_confirmed === true && state.network_phase == 'confirmed')) &&
+		state.credential_present !== true
 		? { ok: true, retry: false }
 		: { ok: false, code: 'existing_installation' };
 }

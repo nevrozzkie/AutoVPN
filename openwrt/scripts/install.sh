@@ -12,6 +12,10 @@ WORK=''
 TRUST_ROOT=/etc/autovpn
 RELEASE_RECEIPT="$TRUST_ROOT/release.json"
 RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
+CONTROLLER_JOURNAL="$TRUST_ROOT/state/journal.json"
+CREDENTIAL_FILE="$TRUST_ROOT/credentials"
+INSTALL_TTY='/dev/tty'
+WIFI_HELPER='/usr/libexec/autovpn/install-wifi'
 
 fail() { printf 'AutoVPN: %s\n' "$*" >&2; exit 1; }
 say() { printf 'AutoVPN: %s\n' "$*"; }
@@ -36,7 +40,7 @@ for value in "$PUBLIC_KEY_SHA256" "$MANIFEST_SHA256"; do
 	printf '%s\n' "$value" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release pins are missing.'
 done
 [ "$(id -u)" = 0 ] || fail 'Run as root on the OpenWrt router.'
-for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod sync; do
+for tool in apk ubus jsonfilter sha256sum df awk grep sort wc mktemp uname tr cp chmod sync uci stty; do
 	command -v "$tool" >/dev/null 2>&1 || fail "Missing $tool. Requires official OpenWrt 25.12 with APK; no firmware will be flashed."
 done
 if command -v curl >/dev/null 2>&1; then
@@ -218,6 +222,27 @@ if [ "$CHECK_ONLY" = 1 ]; then
 	say 'Release signatures, compatibility, space budget and dependency plan checked; nothing installed.'
 	exit 0
 fi
+# Only a router that has never confirmed the primary AutoVPN Wi-Fi enters the
+# bootstrap flow. Test the controlling terminal before the APK transaction so
+# `curl ... | sh` never tries to consume a password from the pipe on stdin.
+WIFI_BOOTSTRAP=0
+if [ "$(uci -q get autovpn.wifi.bootstrap_completed 2>/dev/null || true)" != 1 ]; then
+	LEGACY_INSTALL=0
+	for option in enabled setup_prepared; do
+		[ "$(uci -q get "autovpn.main.$option" 2>/dev/null || true)" != 1 ] || LEGACY_INSTALL=1
+	done
+	for option in base_url router_id; do
+		[ -z "$(uci -q get "autovpn.main.$option" 2>/dev/null || true)" ] || LEGACY_INSTALL=1
+	done
+	for path in "$CREDENTIAL_FILE" "$CONTROLLER_JOURNAL"; do
+		if [ -e "$path" ] || [ -L "$path" ]; then LEGACY_INSTALL=1; fi
+	done
+	if [ "$LEGACY_INSTALL" = 0 ]; then
+		WIFI_BOOTSTRAP=1
+		(exec 3<"$INSTALL_TTY" && exec 4>"$INSTALL_TTY" && stty -g <&3 >/dev/null) 2>/dev/null ||
+			fail 'First installation requires an interactive controlling terminal for Wi-Fi setup. No package was installed.'
+	fi
+fi
 # Recheck overlay before the commit. APK performs its own locked transaction.
 check_space flash
 say 'Installing signed packages; dependencies come from official OpenWrt feeds.'
@@ -231,6 +256,12 @@ installed_controller_version=$(field "$WORK/installed-controller.json" '@[0].ver
 	fail 'Installed controller version differs from the signed release manifest.'
 controller_version=$installed_controller_version
 persist_trust
-say 'Installed. Open LuCI → Services → AutoVPN → Setup.'
-say 'Enter the site URL, router ID/token, Wi-Fi name and WPA2 password there. LAN/SSID settings are not changed by this installer.'
+if [ "$WIFI_BOOTSTRAP" = 1 ]; then
+	[ -x "$WIFI_HELPER" ] || fail 'Packages were installed, but the Wi-Fi bootstrap helper is missing. Existing PPPoE and Wi-Fi configuration was not changed.'
+	"$WIFI_HELPER" || fail 'Packages were installed, but primary Wi-Fi setup did not complete. Existing PPPoE was preserved; inspect LuCI before retrying.'
+	say 'Primary Wi-Fi confirmed. Open LuCI → Services → AutoVPN → Setup.'
+else
+	say 'Installed. Existing Wi-Fi configuration was preserved. Open LuCI → Services → AutoVPN → Setup.'
+fi
+say 'Enter the site URL and router ID/token in LuCI; further AutoVPN settings are managed there.'
 say 'Optional VPN-transport zapret2 can be installed and enabled in LuCI Settings; separate zapret SSIDs remain disabled.'

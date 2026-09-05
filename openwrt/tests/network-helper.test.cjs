@@ -23,13 +23,33 @@ function baseConfigs() {
 		firewall: [{ '.name': 'defaults', '.type': 'defaults' }, { '.name': 'wan', '.type': 'zone', name: 'wan', masq: '1', network: ['wan'] }],
 	};
 }
-function fixture() {
-	const configs = baseConfigs();
+function freshConfigs() {
+	return {
+		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
+			ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		wireless: [
+			{ '.name': 'radio0', '.type': 'wifi-device', type: 'mac80211', band: '2g', channel: '1', htmode: 'HE20', disabled: '1' },
+			{ '.name': 'default_radio0', '.type': 'wifi-iface', device: 'radio0', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
+			{ '.name': 'radio1', '.type': 'wifi-device', type: 'mac80211', band: '5g', channel: '36', htmode: 'HE80', disabled: '1' },
+			{ '.name': 'default_radio1', '.type': 'wifi-iface', device: 'radio1', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
+		],
+		dhcp: [{ '.name': 'lan', '.type': 'dhcp', interface: 'lan' }],
+		firewall: [{ '.name': 'defaults', '.type': 'defaults' },
+			{ '.name': 'lan', '.type': 'zone', name: 'lan', network: ['lan'], input: 'ACCEPT', output: 'ACCEPT', forward: 'ACCEPT' },
+			{ '.name': 'wan', '.type': 'zone', name: 'wan', masq: '1', network: ['wan', 'wan6'] },
+			{ '.name': 'lan_wan', '.type': 'forwarding', src: 'lan', dest: 'wan' }],
+	};
+}
+function fixture(options = {}) {
+	const configs = options.fresh ? freshConfigs() : baseConfigs();
 	const files = new Map();
 	files.set('/proc/uptime', '100.00 20.00\n');
 	for (const [name, value] of Object.entries(configs)) files.set('/etc/config/' + name, JSON.stringify(value));
-	files.set('/etc/config/autovpn', JSON.stringify([{ '.name': 'wifi', '.type': 'wifi', base_ssid: 'Dorm', password: 'test-passphrase' }]));
+	files.set('/etc/config/autovpn', JSON.stringify([{ '.name': 'wifi', '.type': 'wifi', base_ssid: options.baseSsid || 'Dorm',
+		password: 'test-passphrase', primary_lan: options.primaryLan ? '1' : '0' }]));
 	const env = { files, calls: [], modes: [], changes: {}, now: 100, exit: null, output: null, ready: true, failCommit: false, unreadable: '' };
+	env.sets = [];
+	env.missingBridges = new Set();
 	let lastError = null;
 	function read(path, limit) {
 		const value = files.get(path);
@@ -54,6 +74,7 @@ function fixture() {
 			foreach(config, _kind, callback) { for (const item of data[config] || []) callback(clone(item)); },
 			delete(config, section) { data[config] = (data[config] || []).filter(item => item['.name'] !== section); return true; },
 			set(config, section, key, value) {
+				env.sets.push([config, section, key, clone(value)]);
 				let item = (data[config] || []).find(entry => entry['.name'] === section);
 				if (!item) { item = { '.name': section }; (data[config] ||= []).push(item); }
 				if (value === undefined) item['.type'] = key; else item[key] = clone(value);
@@ -68,7 +89,12 @@ function fixture() {
 			argv.includes('/bin/ubus') ? JSON.stringify(Object.fromEntries(['radio0', 'radio1'].map(name => [name, {
 				up: true, interfaces: env.ready ? ['direct', 'vpn'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
 			}]))) : '';
-		return { read: () => output, close: () => 0 };
+		let status = 0;
+		if (argv.includes('/sbin/ip') && argv.includes('link') && argv.includes('dev')) {
+			let device = argv[argv.indexOf('dev') + 1];
+			if (env.missingBridges.has(device)) status = 1;
+		}
+		return { read: () => output, close: () => status };
 	}
 	function run(action, args = []) {
 		env.exit = null; env.output = null;
@@ -107,12 +133,94 @@ test('real network helper stages private files, commits UCI stage and returns re
 	assert.equal(JSON.stringify(env.calls).includes('test-passphrase'), false);
 });
 
+test('network-bootstrap patches the actual stock radios and keeps the primary SSID on management LAN', () => {
+	const { env, run } = fixture({ fresh: true, primaryLan: true, baseSsid: 'x' });
+	const result = run('network-bootstrap');
+	assert.equal(env.exit, 0, JSON.stringify(result));
+	assert.equal(result.phase, 'pending');
+	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в', 'x-з', 'x-вз']);
+	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true, false, false]);
+	assert.equal(result.ssids[0].primary_lan, true);
+	const wireless = JSON.parse(env.files.get('/etc/config/wireless'));
+	assert.deepEqual(wireless.find(item => item['.name'] === 'radio0'),
+		{ ...freshConfigs().wireless[0], disabled: '0' });
+	assert.deepEqual(wireless.find(item => item['.name'] === 'radio1'),
+		{ ...freshConfigs().wireless[2], disabled: '0' });
+	assert.equal(wireless.find(item => item['.name'] === 'default_radio0').disabled, '1');
+	assert.equal(wireless.find(item => item['.name'] === 'default_radio1').disabled, '1');
+	assert.deepEqual(wireless.find(item => item['.name'] === 'avpn_direct_radio0').network, ['lan']);
+	const network = JSON.parse(env.files.get('/etc/config/network'));
+	assert.equal(network.some(item => item['.name'] === 'avpn_direct' || item['.name'] === 'avpn_direct_bridge'), false);
+	assert.ok(network.some(item => item['.name'] === 'avpn_vpn'));
+	assert.deepEqual(env.sets.filter(call => call[1] === 'radio0' || call[1] === 'radio1' || call[1].startsWith('default_radio')), [
+		['wireless', 'default_radio0', 'disabled', '1'],
+		['wireless', 'radio0', 'disabled', '0'],
+		['wireless', 'default_radio1', 'disabled', '1'],
+		['wireless', 'radio1', 'disabled', '0'],
+	]);
+	// Primary-LAN readiness needs the VPN bridge, but never the removed direct bridge.
+	env.calls.length = 0;
+	env.missingBridges.add('br-avpnd');
+	assert.equal(run('network-confirm', [result.transaction_id]).phase, 'confirmed');
+	assert.equal(env.calls.some(argv => argv.includes('br-avpnd')), false);
+});
+
+test('network-bootstrap is one-shot, but a clean complete rollback can be retried', () => {
+	{
+		const { env, run } = fixture({ fresh: true, primaryLan: true });
+		let pending = run('network-bootstrap');
+		assert.equal(run('network-bootstrap').code, 'network_transaction_pending');
+		const journal = JSON.parse(env.files.get('/etc/autovpn/networks/journal.json'));
+		journal.phase = 'rollback_conflict';
+		env.files.set('/etc/autovpn/networks/journal.json', JSON.stringify(journal));
+		assert.equal(run('network-bootstrap').code, 'network_transaction_pending');
+		journal.phase = 'pending';
+		env.files.set('/etc/autovpn/networks/journal.json', JSON.stringify(journal));
+		assert.equal(run('network-confirm', [pending.transaction_id]).phase, 'confirmed');
+		assert.equal(run('network-bootstrap').code, 'network_already_configured');
+	}
+	{
+		const { env, run } = fixture({ fresh: true, primaryLan: true });
+		assert.equal(run('network-bootstrap').phase, 'pending');
+		env.files.set('/proc/uptime', '281.00 30.00\n');
+		assert.equal(run('network-tick').phase, 'rolled_back');
+		assert.equal(run('network-bootstrap').phase, 'pending');
+	}
+	{
+		const { env, run } = fixture({ fresh: true, primaryLan: true });
+		assert.equal(run('network-bootstrap').phase, 'pending');
+		env.files.set('/proc/uptime', '281.00 30.00\n');
+		assert.equal(run('network-tick').phase, 'rolled_back');
+		env.files.set('/etc/config/wireless', env.files.get('/etc/config/wireless') + '\n');
+		assert.equal(run('network-bootstrap').code, 'network_config_changed');
+	}
+});
+
+test('ordinary network-setup preserves primary-LAN topology but never enables a disabled radio', () => {
+	const disabled = fixture({ fresh: true, primaryLan: true });
+	assert.equal(disabled.run('network-setup').code, 'enabled_wifi_radio_required');
+	assert.equal(disabled.env.sets.length, 0);
+	const enabled = fixture({ fresh: true, primaryLan: true });
+	let wireless = JSON.parse(enabled.env.files.get('/etc/config/wireless'));
+	for (const name of ['radio0', 'radio1']) wireless.find(item => item['.name'] === name).disabled = '0';
+	enabled.env.files.set('/etc/config/wireless', JSON.stringify(wireless));
+	assert.equal(enabled.run('network-setup').phase, 'pending');
+	const network = JSON.parse(enabled.env.files.get('/etc/config/network'));
+	assert.equal(network.some(item => item['.name'] === 'avpn_direct'), false);
+});
+
 test('real helper confirms only after both generated APs are present on each radio', () => {
 	const { env, run } = fixture();
 	const result = run('network-setup');
 	env.ready = false;
 	assert.equal(run('network-confirm', [result.transaction_id]).code, 'wifi_not_ready');
 	env.ready = true;
+	const legacy = JSON.parse(env.files.get('/etc/autovpn/networks/journal.json'));
+	for (const ssid of legacy.ssids) delete ssid.primary_lan;
+	env.files.set('/etc/autovpn/networks/journal.json', JSON.stringify(legacy));
+	env.missingBridges.add('br-avpnd');
+	assert.equal(run('network-confirm', [result.transaction_id]).code, 'wifi_not_ready');
+	env.missingBridges.delete('br-avpnd');
 	assert.equal(run('network-confirm', [result.transaction_id]).phase, 'confirmed');
 });
 test('real helper reloads wireless on timeout rollback as well as initial setup', () => {

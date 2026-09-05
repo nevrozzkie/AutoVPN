@@ -39,13 +39,13 @@ return view.extend({
 			}) }, _('Keep these networks'));
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Managed WPA2 Wi-Fi')),
-			E('p', {}, _('First save the base Wi-Fi name and password in Settings. Existing LAN and SSIDs are preserved. Radios must already be enabled. Zapret SSIDs are created disabled until the zapret backend is implemented.')),
+			E('p', {}, _('First save the base Wi-Fi name and password in Settings. Existing LAN and SSIDs are preserved. The same managed SSID is used on available 2.4 and 5 GHz radios, so clients choose automatically. Zapret SSIDs remain disabled until their backend is ready.')),
 			E('p', {}, _('State: %s').format(state.ok ? state.phase : state.code)),
 			pending ? E('p', {}, _('Check the new Wi-Fi, then confirm before %s. Without confirmation the old network configuration will be restored.').format(new Date(state.deadline * 1000).toLocaleTimeString())) : '',
 			E('ul', {}, (state.ssids || []).map(function(item) {
 				return E('li', {}, item.ssid + ' — ' + (item.enabled ? _('enabled on available bands') : _('disabled: zapret not ready')));
 			})),
-			E('p', {}, _('After confirming, use Refresh snapshot or Apply saved VPN settings on Overview to start the VPN. Administration remains on the original management LAN, not on these isolated Wi-Fi networks.')),
+			E('p', {}, _('After confirming, use Refresh snapshot or Apply saved VPN settings on Overview to start the VPN. The installer primary LAN Wi-Fi retains administration access; isolated VPN and legacy direct managed networks do not.')),
 			E('div', { 'class': 'cbi-page-actions' }, [setup, confirm])
 		]);
 	},

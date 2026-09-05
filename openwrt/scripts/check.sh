@@ -9,6 +9,7 @@ sh "$ROOT/tests/credential-boundaries.sh"
 node --test "$ROOT/tests/probes.test.cjs" "$ROOT/tests/ping-ui.test.cjs"
 node --test "$ROOT/tests/zapret.test.cjs" "$ROOT/tests/zapret-lifecycle.test.cjs" "$ROOT/tests/zapret-install.test.cjs"
 node --test "$ROOT/tests/update-behavior.test.cjs"
+node --test "$ROOT/tests/install-wifi.test.cjs" "$ROOT/tests/wifi-bootstrap.test.cjs"
 
 for script in \
 	"$ROOT/scripts/install.sh" \
@@ -16,6 +17,7 @@ for script in \
 	"$ROOT/files/etc/init.d/autovpn-tunnel" \
 	"$ROOT/files/etc/init.d/autovpn-zapret" \
 	"$ROOT/files/usr/libexec/autovpn/zapret-install" \
+	"$ROOT/files/usr/libexec/autovpn/install-wifi" \
 	"$ROOT/files/etc/init.d/autovpn-networks" \
 	"$ROOT/files/usr/libexec/autovpn/network-watchdog" \
 	"$ROOT/files/usr/libexec/autovpn/loop" \

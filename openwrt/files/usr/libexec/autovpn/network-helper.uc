@@ -54,6 +54,12 @@ function stage(before, settings, module) {
 	if (!planned.ok) return planned;
 	for (let i = 0; i < length(planned.remove); i++)
 		if (!ctx.delete(planned.remove[i].config, planned.remove[i].name)) return { ok: false, code: 'network_stage_failed' };
+	for (let i = 0; i < length(planned.patches); i++) {
+		let patch = planned.patches[i];
+		/* Existing hardware/BSS sections: change the one planned option only. */
+		if (!ctx.set(patch.config, patch.name, patch.option, patch.value))
+			return { ok: false, code: 'network_stage_failed' };
+	}
 	for (let i = 0; i < length(planned.sections); i++) {
 		let section = planned.sections[i];
 		if (!ctx.set(section.config, section.name, section.section_type)) return { ok: false, code: 'network_stage_failed' };
@@ -74,6 +80,9 @@ function stage(before, settings, module) {
 function ready(state) {
 	let wireless = decoded(['/bin/ubus', 'call', 'network.wireless', 'status']);
 	if (type(wireless) != 'object') return false;
+	let primaryLan = false;
+	for (let i = 0; i < length(state.ssids); i++)
+		if (state.ssids[i].mode == 'direct' && state.ssids[i].primary_lan === true) primaryLan = true;
 	for (let r = 0; r < length(state.radios); r++) {
 		let radio = wireless[state.radios[r]];
 		if (radio == null || radio.up !== true || type(radio.interfaces) != 'array') return false;
@@ -83,7 +92,7 @@ function ready(state) {
 		if (index(names, 'avpn_direct_' + state.radios[r]) < 0 || index(names, 'avpn_vpn_' + state.radios[r]) < 0) return false;
 	}
 	return command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpn'], 4096) != null &&
-		command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpnd'], 4096) != null;
+		(primaryLan || command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpnd'], 4096) != null);
 }
 const io = {
 	now: function() { return time(); },
@@ -126,11 +135,28 @@ const io = {
 let result;
 try {
 	let action = ARGV[0];
-	if (action == 'network-setup') {
+	if (action == 'network-setup' || action == 'network-bootstrap') {
 		let ctx = cursor();
 		ctx.load('autovpn');
-		result = transaction.begin({ base_ssid: ctx.get('autovpn', 'wifi', 'base_ssid'),
-			password: ctx.get('autovpn', 'wifi', 'password') }, io, planner);
+		let settings = { base_ssid: ctx.get('autovpn', 'wifi', 'base_ssid'),
+			password: ctx.get('autovpn', 'wifi', 'password'),
+			primary_lan: action == 'network-bootstrap' || ctx.get('autovpn', 'wifi', 'primary_lan') == '1' };
+		if (action == 'network-bootstrap') {
+			settings.initial_setup = true;
+			let state = io.load();
+			if (!transaction.valid(state)) result = { ok: false, code: 'network_journal_invalid' };
+			else if (state != null && (state.phase == 'pending' || state.phase == 'rollback_conflict'))
+				result = { ok: false, code: 'network_transaction_pending' };
+			else if (state != null && state.phase == 'confirmed') result = { ok: false, code: 'network_already_configured' };
+			else if (state != null && state.phase == 'rolled_back') {
+				if (!io.clean()) result = { ok: false, code: 'uncommitted_network_changes' };
+				else {
+					for (let i = 0; i < length(CONFIGS); i++)
+						if (io.read(CONFIGS[i]) != state.before[CONFIGS[i]]) result = { ok: false, code: 'network_config_changed' };
+				}
+			}
+		}
+		if (result == null) result = transaction.begin(settings, io, planner);
 	}
 	else if (action == 'network-confirm') result = transaction.confirm(ARGV[1], io);
 	else if (action == 'network-tick' || action == 'network-boot') result = transaction.recover(io, action == 'network-boot');

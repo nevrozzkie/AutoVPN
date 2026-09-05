@@ -108,6 +108,36 @@ test('injected helper gates activation on confirmed networks and rejects dirty U
 	assert.equal(dirty.api.activate().code, 'existing_installation');
 });
 
+test('pairing reuses confirmed installer Wi-Fi without disclosing or silently changing its key', () => {
+	const request = { ...JSON.parse(validRequest()), password: '' };
+	const values = { 'wifi.primary_lan': '1', 'wifi.bootstrap_completed': '1',
+		'wifi.base_ssid': 'Dorm', 'wifi.password': 'installer-private-key' };
+	const files = { '/dev/stdin': JSON.stringify(request),
+		'/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'confirmed' }) };
+	const env = helperFixture({ files, values });
+	const result = env.api.configure('nonce-0123456789');
+	assert.equal(result.ok, true);
+	assert.equal(env.values['wifi.password'], values['wifi.password']);
+	assert.equal(JSON.stringify(result).includes(values['wifi.password']), false);
+	for (const change of [{ base_ssid: 'Other' }, { password: 'changed-key' }]) {
+		const other = helperFixture({ values, files: { ...files, '/dev/stdin': JSON.stringify({ ...request, ...change }) } });
+		assert.equal(other.api.configure('nonce-0123456789').code, 'wifi_change_use_networks');
+		assert.equal(other.events.length, 0);
+	}
+	const unconfirmed = helperFixture({ values, files: { ...files,
+		'/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'pending' }) } });
+	assert.equal(unconfirmed.api.configure('nonce-0123456789').code, 'existing_installation');
+});
+
+test('bootstrap flag permits only confirmed no-credential first pairing', () => {
+	const boot = { uci_clean: true, enabled: false, controller_journal: false, network_phase: 'confirmed',
+		network_invalid: false, prepared: false, credential_present: false, bootstrap_confirmed: true };
+	assert.deepEqual(policy.firstRunAllowed(boot), { ok: true, retry: false });
+	for (const change of [{ network_phase: 'pending' }, { enabled: true }, { credential_present: true },
+		{ controller_journal: true }, { bootstrap_confirmed: false }])
+		assert.equal(policy.firstRunAllowed({ ...boot, ...change }).ok, false);
+});
+
 test('first-run policy preserves an active or otherwise existing installation', () => {
 	const clean = { uci_clean: true, enabled: false, controller_journal: false, network_phase: null,
 		network_invalid: false, prepared: false, identity_matches: false, credential_present: false };

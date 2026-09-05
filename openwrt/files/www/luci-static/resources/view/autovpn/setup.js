@@ -19,11 +19,11 @@ function nonce() {
 	return Array.prototype.map.call(bytes, function(byte) { return ('0' + byte.toString(16)).slice(-2); }).join('');
 }
 
-function input(label, name, type, placeholder, description) {
+function input(label, name, type, placeholder, description, value, readonly) {
 	return E('div', { 'class': 'cbi-value' }, [
 		E('label', { 'class': 'cbi-value-title', 'for': 'autovpn-setup-' + name }, label),
 		E('div', { 'class': 'cbi-value-field' }, [
-			E('input', { 'id': 'autovpn-setup-' + name, 'name': name, 'type': type, 'placeholder': placeholder, 'autocomplete': type == 'password' ? 'new-password' : 'off' }),
+			E('input', { 'id': 'autovpn-setup-' + name, 'name': name, 'type': type, 'placeholder': placeholder, 'value': value || '', 'readonly': readonly ? '' : null, 'autocomplete': type == 'password' ? 'new-password' : 'off' }),
 			E('div', { 'class': 'cbi-value-description' }, description)
 		])
 	]);
@@ -38,6 +38,8 @@ return view.extend({
 		var configured = network.phase === 'pending' || network.phase === 'confirmed';
 		var pending = network.phase === 'pending';
 		var confirmed = network.phase === 'confirmed';
+		var bootstrap = uci.get('autovpn', 'wifi', 'bootstrap_completed') === '1';
+		var installerSsid = bootstrap ? (uci.get('autovpn', 'wifi', 'base_ssid') || '') : '';
 		var message = E('p', { 'class': 'alert-message notice' }, _('Enter the pairing data from your AutoVPN server. The token is sent once to the router over the authenticated LuCI session and is never shown again.'));
 		var configure = E('button', { 'class': 'btn cbi-button cbi-button-action', 'disabled': enabled ? '' : null }, _('Save pairing and Wi-Fi settings'));
 		var create = E('button', { 'class': 'btn cbi-button cbi-button-action', 'disabled': !prepared || configured || enabled ? '' : null }, _('Create managed Wi-Fi'));
@@ -79,8 +81,8 @@ return view.extend({
 				input(_('AutoVPN server URL'), 'base_url', 'url', 'https://vpn.example', _('Your private AutoVPN website URL. It is not the package-download address.')),
 				input(_('Router ID'), 'router_id', 'text', 'router_...', _('The device identifier created in the AutoVPN admin panel.')),
 				input(_('Pairing token'), 'credential', 'password', 'avrt_...', _('Stored in a root-only file on this router.')),
-				input(_('Base Wi-Fi name'), 'base_ssid', 'text', 'Dorm', _('The four managed SSIDs use this name with their own suffixes.')),
-				input(_('WPA2-PSK password'), 'password', 'password', '', _('8–63 printable ASCII characters, or a 64-digit hexadecimal key.')),
+				input(_('Base Wi-Fi name'), 'base_ssid', 'text', 'Dorm', bootstrap ? _('Installer Wi-Fi is already created and confirmed. Change its name later in Settings, then Networks. Managed names use -в, -з and -вз.') : _('Up to 27 UTF-8 bytes; managed names use -в, -з and -вз. The same SSID is used on 2.4 and 5 GHz, so clients choose a radio automatically.'), installerSsid, bootstrap),
+				input(_('WPA2-PSK password'), 'password', 'password', '', bootstrap ? _('Leave blank to keep installer Wi-Fi password. It is never shown here.') : _('8–63 printable ASCII characters, or a 64-digit hexadecimal key.')),
 				E('div', { 'class': 'cbi-page-actions' }, [configure])
 			]),
 			E('h3', {}, _('Connection steps')),
@@ -91,7 +93,7 @@ return view.extend({
 			]),
 			pending ? E('p', { 'class': 'alert-message warning' }, _('Confirmation is required before %s.').format(new Date(network.deadline * 1000).toLocaleTimeString())) : '',
 			E('div', { 'class': 'cbi-page-actions' }, [create, confirm, activate]),
-			E('p', {}, _('Use Settings later for routing policy and Networks for SSID maintenance. Radio settings and hardware offloading remain standard LuCI controls.'))
+			E('p', {}, bootstrap ? _('Installer Wi-Fi is already confirmed. Use Settings and Networks to change it; use this page only for pairing and activation.') : _('Use Settings later for routing policy and Networks for SSID maintenance. Radio settings and hardware offloading remain standard LuCI controls.'))
 		]);
 	},
 	handleSaveApply: null,

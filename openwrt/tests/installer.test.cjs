@@ -17,8 +17,10 @@ function fixture(t, options = {}) {
 	const bin = path.join(root, 'bin');
 	const assets = path.join(root, 'assets');
 	const etc = path.join(root, 'etc-apk');
+	const tty = path.join(root, 'tty');
 	fs.mkdirSync(bin);
 	fs.mkdirSync(assets);
+	fs.writeFileSync(tty, '');
 	fs.mkdirSync(path.join(etc, 'repositories.d'), { recursive: true });
 	fs.mkdirSync(path.join(etc, 'keys'));
 	fs.writeFileSync(path.join(etc, 'repositories.d/distfeeds.list'),
@@ -55,7 +57,9 @@ function fixture(t, options = {}) {
 		.replace('@AUTOVPN_MANIFEST_SHA256@', options.badManifestHash ? '0'.repeat(64) : hash(encoded))
 		.replaceAll('/etc/apk/', etc + '/')
 		.replaceAll('/etc/autovpn', path.join(root, 'autovpn'))
-		.replaceAll('/lib/apk/', path.join(root, 'lib-apk') + '/');
+		.replaceAll('/lib/apk/', path.join(root, 'lib-apk') + '/')
+		.replace("INSTALL_TTY='/dev/tty'", `INSTALL_TTY='${tty}'`)
+		.replace("WIFI_HELPER='/usr/libexec/autovpn/install-wifi'", `WIFI_HELPER='${path.join(bin, 'install-wifi')}'`);
 	const script = path.join(root, 'install.sh');
 	fs.writeFileSync(script, installer);
 	const mock = `#!${process.execPath}
@@ -69,6 +73,23 @@ const output = value => process.stdout.write(typeof value === 'string' ? value +
 if (name === 'id') output('0');
 else if (name === 'uname') output(env.MOCK_KERNEL || '6.12.85');
 else if (name === 'df') output('Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 100000 1000 ' + (env.MOCK_FREE || '90000') + ' 1% /fixture');
+else if (name === 'uci') {
+  log({name,args});
+  if (env.MOCK_BOOTSTRAP_MISSING === '1') {
+    if (env.MOCK_LEGACY_FIELD === args.at(-1)) {
+      output(args.at(-1).endsWith('base_url') ? 'https://legacy.example' : args.at(-1).endsWith('router_id') ? 'legacy-router' : '1');
+      process.exit(0);
+    }
+    process.exit(1);
+  }
+  output('1');
+}
+else if (name === 'stty') output('fixture-state');
+else if (name === 'install-wifi') {
+  log({name,args,hasSecretEnv:Object.values(env).some(value => String(value).includes('fixture-secret-password'))});
+  if (env.MOCK_WIFI_HELPER_FAIL === '1') process.exit(1);
+  output('fixture Wi-Fi confirmed');
+}
 else if (name === 'ubus') output({release:{version:'25.12.5',distribution:'OpenWrt',target:'mediatek/filogic'}});
 else if (name === 'jsonfilter') {
   try {
@@ -100,12 +121,14 @@ else if (name === 'jsonfilter') {
   }
 } else throw new Error('Unexpected mock tool: ' + name);
 `;
-	for (const name of ['id', 'uname', 'df', 'ubus', 'jsonfilter', 'curl', 'apk']) {
+	for (const name of ['id', 'uname', 'df', 'uci', 'stty', 'install-wifi', 'ubus', 'jsonfilter', 'curl', 'apk']) {
 		fs.writeFileSync(path.join(bin, name), mock, { mode: 0o755 });
 	}
 	const logFile = path.join(root, 'calls.jsonl');
 	return {
+		root,
 		trustRoot: path.join(root, 'autovpn'),
+		tty,
 		run(args = [], env = {}) {
 			const result = spawnSync('/bin/sh', [script, ...args], {
 				encoding: 'utf8', timeout: 30000,
@@ -133,6 +156,7 @@ test('check-only verifies signatures and simulates without installing; custom fe
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stdout, /nothing installed/);
 	noCommit(result);
+	assert.equal(result.calls.some(call => call.name === 'uci' || call.name === 'install-wifi'), false);
 	assert.ok(result.calls.some(call => call.args.includes('verify')));
 	const plans = result.calls.filter(call => call.repositories);
 	assert.ok(plans.length >= 2);
@@ -142,7 +166,7 @@ test('check-only verifies signatures and simulates without installing; custom fe
 	}
 });
 
-test('install commits exact signed package set with kernel pinned, without configuring Wi-Fi', t => {
+test('install commits exact signed package set with kernel pinned and preserves completed Wi-Fi bootstrap', t => {
 	const f = fixture(t, { awg: true });
 	const result = f.run();
 	assert.equal(result.status, 0, result.stderr);
@@ -151,6 +175,7 @@ test('install commits exact signed package set with kernel pinned, without confi
 	assert.ok(commits[0].args.includes('kernel=6.12.85~fixture-r1'));
 	assert.equal(commits[0].args.filter(arg => arg.endsWith('.apk')).length, 3);
 	assert.match(result.stdout, /LuCI.*Setup/);
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
 	assert.doesNotMatch(source, /uci (set|commit)|sysupgrade|mtd write|--allow-untrusted|--force-overwrite/);
 	const receipt = JSON.parse(fs.readFileSync(path.join(f.trustRoot, 'release.json'), 'utf8'));
 	assert.deepEqual(receipt, {
@@ -195,6 +220,60 @@ test('receipt uses the actually installed controller version, never only the man
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /differs from the signed release manifest/);
 	assert.equal(fs.existsSync(path.join(f.trustRoot, 'release.json')), false);
+});
+
+test('first install preflights TTY before commit and runs installed Wi-Fi helper afterward', t => {
+	const f = fixture(t);
+	const result = f.run([], { MOCK_BOOTSTRAP_MISSING: '1' });
+	assert.equal(result.status, 0, result.stderr);
+	const commit = result.calls.findIndex(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate'));
+	const helper = result.calls.findIndex(call => call.name === 'install-wifi');
+	assert.ok(commit >= 0 && helper > commit);
+	assert.deepEqual(result.calls[helper].args, []);
+	assert.equal(result.calls[helper].hasSecretEnv, false);
+	assert.match(result.stdout, /Primary Wi-Fi confirmed/);
+});
+
+test('upgrade of a legacy paired install without bootstrap marker preserves Wi-Fi', t => {
+	const f = fixture(t);
+	const result = f.run([], {
+		MOCK_BOOTSTRAP_MISSING: '1',
+		MOCK_LEGACY_FIELD: 'autovpn.main.base_url'
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.ok(result.calls.some(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate')));
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
+	assert.match(result.stdout, /Existing Wi-Fi configuration was preserved/);
+});
+
+test('broken legacy credential symlink suppresses first-install bootstrap and is preserved', t => {
+	const f = fixture(t);
+	fs.mkdirSync(f.trustRoot, { recursive: true });
+	const credential = path.join(f.trustRoot, 'credentials');
+	fs.symlinkSync(path.join(f.root, 'missing-credential-target'), credential);
+	const result = f.run([], { MOCK_BOOTSTRAP_MISSING: '1' });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
+	assert.equal(fs.lstatSync(credential).isSymbolicLink(), true);
+});
+
+test('first install without a controlling TTY refuses before APK commit', t => {
+	const f = fixture(t);
+	fs.rmSync(f.tty);
+	const result = f.run([], { MOCK_BOOTSTRAP_MISSING: '1' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /interactive controlling terminal/);
+	noCommit(result);
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
+});
+
+test('incomplete Wi-Fi reports a safe post-install failure without corrupting release trust', t => {
+	const f = fixture(t);
+	const result = f.run([], { MOCK_BOOTSTRAP_MISSING: '1', MOCK_WIFI_HELPER_FAIL: '1' });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /Packages were installed.*inspect LuCI before retrying/);
+	assert.ok(result.calls.some(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate')));
+	assert.equal(fs.existsSync(path.join(f.trustRoot, 'release.json')), true);
 });
 
 for (const [description, options, env, message] of [

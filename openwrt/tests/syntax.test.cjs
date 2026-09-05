@@ -24,6 +24,7 @@ const sources = [
 	'files/usr/libexec/autovpn/awg-helper.uc',
 	'files/usr/libexec/autovpn/network-helper.uc',
 	'files/usr/libexec/autovpn/setup-helper.uc',
+	'files/usr/libexec/autovpn/wifi-bootstrap.uc',
 	'files/usr/libexec/autovpn/maintenance-helper.uc',
 	'files/usr/share/ucode/autovpn/networks.uc',
 	'files/usr/share/ucode/autovpn/network-transaction.uc',

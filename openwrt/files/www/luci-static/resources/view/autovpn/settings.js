@@ -91,7 +91,7 @@ return view.extend({
 		section = map.section(form.NamedSection, 'wifi', 'wifi', _('Managed Wi-Fi networks'));
 		section.addremove = false;
 		option = section.option(form.Value, 'base_ssid', _('Base Wi-Fi name'));
-		option.description = _('Choose the name without suffixes, up to 21 UTF-8 bytes (Cyrillic uses more than one byte per letter). The same names are used on both enabled bands. Save and apply, then open Networks to create the SSIDs.');
+		option.description = _('Choose the name without suffixes, up to 27 UTF-8 bytes (Cyrillic uses more than one byte per letter). Managed names use -в, -з and -вз. The same SSID is used on both enabled bands, so clients choose a radio automatically. Save and apply, then open Networks to create the SSIDs.');
 		option = section.option(form.Value, 'password', _('WPA2-PSK password'));
 		option.password = true;
 		option.datatype = 'wpakey';

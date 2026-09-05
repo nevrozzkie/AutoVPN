@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.9.0
+PKG_VERSION:=0.10.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -60,6 +60,8 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/setup-helper.uc $(1)/usr/libexec/autovpn/setup-helper.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/wifi-bootstrap.uc $(1)/usr/libexec/autovpn/wifi-bootstrap.uc
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/install-wifi $(1)/usr/libexec/autovpn/install-wifi
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/maintenance-helper.uc $(1)/usr/libexec/autovpn/maintenance-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/update-helper $(1)/usr/libexec/autovpn/update-helper
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-watchdog $(1)/usr/libexec/autovpn/network-watchdog
