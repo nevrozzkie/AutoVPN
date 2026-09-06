@@ -28,10 +28,16 @@ test('diagnostics runner is a root-only RAM-state executable', () => {
 	assert.doesNotMatch(text, /eval\s|sh\s+-c|curl[^\n]*\$\{?[A-Za-z_]*(URL|DOMAIN)/);
 	assert.match(text, /\bflock\b|maintenance\.lock/);
 	assert.match(text, /chmod\s+700|install\s+-m\s+700|umask\s+077/);
+	assert.match(text, /chmod 0711 "\$ROOT"/);
+	assert.match(text, /chmod 0711 "\$WORK" "\$WORK\/extract"/);
 	assert.match(text, /DIAGNOSTIC_LOCK=.*autovpn-zapret-diagnostics\.lock/);
 	assert.match(text, /\/usr\/bin\/timeout -k 15/);
 	assert.match(text, /TEST=custom/);
 	assert.match(text, /IPVS=4/);
+	assert.match(text, /binaries\/linux-arm64\/nfqws2/);
+	assert.match(text, /binaries\/linux-arm64\/mdig/);
+	assert.match(text, /ln -s \.\.\/binaries\/linux-arm64\/nfqws2/);
+	assert.doesNotMatch(text, /sh\s+[^\n]*install_bin\.sh/);
 	assert.match(text, /\^\\\* COMMON/);
 	assert.doesNotMatch(text, /\^\\\* SUMMARY/);
 	assert.match(text, /validate-result/);
