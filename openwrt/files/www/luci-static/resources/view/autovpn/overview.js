@@ -108,24 +108,9 @@ return view.extend({
 		var status = Array.isArray(data) ? data[0] : data;
 		var ruDatabase = Array.isArray(data) ? data[1] : null;
 		status = status || {};
-		var lanes = status.runtime_lanes || { vpn: { ok: status.runtime_running, active_profile: status.runtime_profile, code: status.runtime_error } };
-		var laneRows = Object.keys(lanes).map(function(name) {
-			var lane = lanes[name] || {};
-			return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, name === 'vpn_zapret' ? _('VPN + zapret') : _('VPN')), E('td', { 'class': 'td left' }, lane.ok ? valueOrDash(lane.active_profile) : valueOrDash(lane.code))]);
-		});
-		var directZapret = status.runtime_direct_zapret;
-		var directZapretRow = null;
-		if (directZapret) {
-			var directZapretState = directZapret.ok && directZapret.enabled ? _('Active') :
-				directZapret.enabled ? _('Unavailable: %s').format(valueOrDash(directZapret.code)) : _('Disabled (Wi-Fi -з is closed)');
-			directZapretRow = E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td left' }, _('Direct zapret (Wi-Fi -з)')),
-				E('td', { 'class': 'td left' }, directZapretState)
-			]);
-		}
+		var vpn = (status.runtime_lanes && status.runtime_lanes.vpn) || { ok: status.runtime_running, active_profile: status.runtime_profile, code: status.runtime_error };
 		var table = E('table', { 'class': 'table' }, [
-			...laneRows,
-			...(directZapretRow ? [directZapretRow] : []),
+			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('VPN')), E('td', { 'class': 'td left' }, vpn.ok ? valueOrDash(vpn.active_profile) : valueOrDash(vpn.code))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Router ID')), E('td', { 'class': 'td left' }, valueOrDash(status.router_id))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Phase')), E('td', { 'class': 'td left' }, valueOrDash(status.phase))]),
 			E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td left' }, _('Credential')), E('td', { 'class': 'td left' }, status.credential_configured ? _('configured') : _('not configured'))]),
@@ -137,7 +122,7 @@ return view.extend({
 		var ruDatabaseRow = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('Russian bypass database')),
 			E('p', {}, ruDatabaseText(ruDatabase)),
-			E('p', {}, _('This is update status only, not a VPN readiness or policy-application result. Automatic bypass is shared by VPN and VPN + zapret; manual Russian rules remain active when the database option is disabled.'))
+			E('p', {}, _('This is update status only, not a VPN readiness or policy-application result. Automatic bypass is applied to the active VPN; manual Russian rules remain active when the database option is disabled.'))
 		]);
 
 		var button = E('button', {
@@ -191,14 +176,13 @@ return view.extend({
 
 		return E('div', { 'class': 'cbi-map', 'id': 'autovpn-status' }, [
 			E('h2', {}, _('AutoVPN controller')),
-			E('p', {}, _('The VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. The one-command router installer installs the pinned zapret2 engine from its official upstream release with verification; it has no automatic updates. Configure its lanes in Settings.')),
+			E('p', {}, _('The active VPN network supports VLESS, Hysteria2 and optional kernel AmneziaWG. Configure the subscription and VPN selection in Settings.')),
 			table,
 			ruDatabaseRow,
 			E('p', {}, _('Ping all checks each candidate with HTTPS without changing the active VPN. It measures response latency, not throughput or ICMP reachability.')),
 			E('div', { 'class': 'cbi-page-actions' }, [target]),
 			E('div', { 'class': 'autovpn-ping-lanes' }, [
-				pingSection('vpn', _('VPN'), _('Ping all: VPN')),
-				pingSection('vpn_zapret', _('VPN + zapret'), _('Ping all: VPN + zapret'))
+				pingSection('vpn', _('VPN'), _('Ping all: VPN'))
 			]),
 			E('div', { 'class': 'cbi-page-actions' }, [button, applyButton])
 		]);

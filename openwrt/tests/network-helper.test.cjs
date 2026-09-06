@@ -154,8 +154,8 @@ test('network-bootstrap patches the actual stock radios and keeps the primary SS
 	const result = run('network-bootstrap');
 	assert.equal(env.exit, 0, JSON.stringify(result));
 	assert.equal(result.phase, 'pending');
-	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в', 'x-з', 'x-вз']);
-	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true, true, true]);
+	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в']);
+	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true]);
 	assert.equal(result.ssids[0].primary_lan, true);
 	const wireless = JSON.parse(env.files.get('/etc/config/wireless'));
 	assert.deepEqual(wireless.find(item => item['.name'] === 'radio0'),

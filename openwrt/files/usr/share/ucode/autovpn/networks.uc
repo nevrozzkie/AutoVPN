@@ -6,8 +6,13 @@ const CONFIGS = ['network', 'wireless', 'dhcp', 'firewall'];
 const MODES = [
 	{ id: 'direct', bridge: 'br-avpnd', octet: 29, suffix: '', enabled: true },
 	{ id: 'vpn', bridge: 'br-avpn', octet: 30, suffix: '-в', enabled: true },
-	{ id: 'zapret', bridge: 'br-avpndz', octet: 31, suffix: '-з', enabled: true },
-	{ id: 'vpn_zapret', bridge: 'br-avpnz', octet: 32, suffix: '-вз', enabled: true },
+];
+/* Keep retired lane addresses and bridge names reserved during migration. */
+const RESERVED_MODES = [
+	{ id: 'direct', bridge: 'br-avpnd', octet: 29 },
+	{ id: 'vpn', bridge: 'br-avpn', octet: 30 },
+	{ id: 'zapret', bridge: 'br-avpndz', octet: 31 },
+	{ id: 'vpn_zapret', bridge: 'br-avpnz', octet: 32 },
 ];
 function fail(code) { return { ok: false, code: code }; }
 function list(value) { return type(value) == 'array' ? value : type(value) == 'string' ? split(value, ' ') : []; }
@@ -59,9 +64,9 @@ function range(value, mask) {
 function overlaps(value, mask, primaryLan) {
 	let target = range(value, mask);
 	if (target == null) return true; /* Unknown static config requires manual review. */
-	for (let i = 0; i < length(MODES); i++) {
-		if (primaryLan && MODES[i].id == 'direct') continue;
-		let own = range('192.168.' + MODES[i].octet + '.0/24', null);
+	for (let i = 0; i < length(RESERVED_MODES); i++) {
+		if (primaryLan && RESERVED_MODES[i].id == 'direct') continue;
+		let own = range('192.168.' + RESERVED_MODES[i].octet + '.0/24', null);
 		if (target.start <= own.end && own.start <= target.end) return true;
 	}
 	let tun = range('172.30.255.0/29', null);
@@ -116,9 +121,9 @@ function plan(settings, configs, routes) {
 					for (let a = 0; a < length(addresses); a++)
 						if (section.proto == 'static' && range(addresses[a], section.netmask) != null) staticLan = true;
 				}
-				for (let m = 0; m < length(MODES); m++)
-					if (section.name == MODES[m].bridge || section.device == MODES[m].bridge ||
-						index(list(section.ports), MODES[m].bridge) >= 0) return fail('network_ownership_conflict');
+				for (let m = 0; m < length(RESERVED_MODES); m++)
+					if (section.name == RESERVED_MODES[m].bridge || section.device == RESERVED_MODES[m].bridge ||
+						index(list(section.ports), RESERVED_MODES[m].bridge) >= 0) return fail('network_ownership_conflict');
 				let addresses = list(section.ipaddr);
 				for (let a = 0; a < length(addresses); a++)
 					if (overlaps(addresses[a], section.netmask, primaryLan)) return fail('network_subnet_conflict');

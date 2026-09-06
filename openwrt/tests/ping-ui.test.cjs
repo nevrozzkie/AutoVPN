@@ -103,37 +103,15 @@ function nodeText(node) {
 	return (node.children || []).map(nodeText).join(' ');
 }
 
-test('settings assigns common options to primary runtime and only selection to VPN zapret', () => {
+test('settings exposes only the active VPN lane and managed Wi-Fi options', () => {
 	const fixture = settingsFixture();
 	fixture.view.render();
 	const sections = Object.fromEntries(fixture.maps[0].sections.map(section => [section.id, section]));
 	assert.deepEqual(sections.runtime.options.map(option => option.name), [
-		'selection', 'hysteria_tls_mode', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs', 'ru_bypass',
-		'_install_zapret', 'zapret_enabled', 'zapret_vless', 'zapret_hysteria2', 'zapret_amneziawg', 'zapret_repeats'
+		'selection', 'hysteria_tls_mode', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs', 'ru_bypass'
 	]);
-	assert.deepEqual(sections.runtime_zapret.options.map(option => option.name), ['selection']);
-	assert.deepEqual(sections.direct.options.map(option => option.name), ['zapret_enabled', 'discord_media', 'stun', 'media_strategy', 'media_repeats']);
-});
-
-test('Discord direct-zapret options are restricted to Wi-Fi -з and preserve legacy defaults', () => {
-	const fixture = settingsFixture();
-	fixture.view.render();
-	const section = fixture.maps[0].sections.find(item => item.id === 'direct');
-	const options = Object.fromEntries(section.options.map(option => [option.name, option]));
-	const fresh = fs.readFileSync(path.join(root, 'files/etc/config/autovpn'), 'utf8')
-		.split("config policy 'direct'\n")[1].split('\nconfig ')[0];
-	for (const name of ['discord_media', 'stun']) {
-		assert.ok(fresh.includes("option " + name + " '1'"), name + ' fresh installation default');
-		assert.equal(options[name].default, '0', name + ' legacy UI default');
-		assert.equal(options[name].rmempty, false, name + ' must persist explicit changes');
-		assert.match(String(options[name].description), /only to Wi-Fi -з/);
-	}
-	assert.deepEqual(options.media_strategy.values, ['fake', 'fake_badsum']);
-	assert.equal(options.media_strategy.default, 'fake');
-	assert.equal(options.media_repeats.default, '2');
-	assert.equal(options.media_repeats.datatype, 'and(uinteger,range(1,6))');
-	assert.match(String(options.media_strategy.description), /No custom command or arbitrary zapret profile/);
-	assert.match(String(options.media_repeats.description), /does not change existing VPN zapret settings/);
+	assert.equal(sections.runtime_zapret, undefined);
+	assert.equal(sections.direct, undefined);
 });
 
 test('RU bypass is shared, persisted by default, and does not replace manual rules', () => {
@@ -144,11 +122,11 @@ test('RU bypass is shared, persisted by default, and does not replace manual rul
 	assert.ok(bypass);
 	assert.equal(bypass.default, '1');
 	assert.equal(bypass.rmempty, false);
-	assert.match(String(bypass.description), /both VPN networks/);
+	assert.match(String(bypass.description), /to the VPN network/);
 	assert.match(String(bypass.description), /manual domain and IPv4 rules are kept/);
 });
 
-test('each Ping all button disables only itself until its pending request settles', async () => {
+test('the active VPN Ping all button disables until its request settles', async () => {
 	const pending = [];
 	const view = overviewFixture(function(target, lane) {
 		let resolve;
@@ -157,29 +135,19 @@ test('each Ping all button disables only itself until its pending request settle
 		pending.push({ target, lane, resolve, reject });
 		return promise;
 	});
-	const page = view.render({ runtime_lanes: { vpn: { ok: true, active_profile: 'vless-reality' }, vpn_zapret: { ok: true, active_profile: 'hysteria2' } } });
+	const page = view.render({ runtime_lanes: { vpn: { ok: true, active_profile: 'vless-reality' } } });
 	const buttons = findButtons(page);
 	const vpn = button(buttons, 'Ping all: VPN');
-	const vpnZapret = button(buttons, 'Ping all: VPN + zapret');
 
 	const first = vpn.attrs.click();
 	assert.equal(pending[0].lane, 'vpn');
 	assert.equal(vpn.disabled, true);
-	assert.notEqual(vpnZapret.disabled, true);
 	pending[0].resolve({ ok: true, checked_at: 1, active_profile: 'vless-reality', results: [] });
 	await first;
 	assert.notEqual(vpn.disabled, true);
-
-	const second = vpnZapret.attrs.click();
-	assert.equal(pending[1].lane, 'vpn_zapret');
-	assert.equal(vpnZapret.disabled, true);
-	assert.notEqual(vpn.disabled, true);
-	pending[1].reject(new Error('timeout'));
-	await second;
-	assert.notEqual(vpnZapret.disabled, true);
 });
 
-test('Ping all lanes retain distinct successful results', async () => {
+test('Ping all renders the active VPN result', async () => {
 	const pending = [];
 	const view = overviewFixture(function(target, lane) {
 		let resolve;
@@ -187,25 +155,17 @@ test('Ping all lanes retain distinct successful results', async () => {
 		pending.push({ target, lane, resolve });
 		return promise;
 	});
-	const page = view.render({ runtime_lanes: { vpn: { ok: true }, vpn_zapret: { ok: true } } });
+	const page = view.render({ runtime_lanes: { vpn: { ok: true } } });
 	const buttons = findButtons(page);
 	const vpn = button(buttons, 'Ping all: VPN');
-	const vpnZapret = button(buttons, 'Ping all: VPN + zapret');
 	const vpnOutput = nodeById(page, 'autovpn-ping-results-vpn');
-	const zapretOutput = nodeById(page, 'autovpn-ping-results-vpn_zapret');
 	assert.ok(vpnOutput);
-	assert.ok(zapretOutput);
 
 	const first = vpn.attrs.click();
-	const second = vpnZapret.attrs.click();
 	pending[0].resolve({ ok: true, checked_at: 1, active_profile: 'vless-primary', results: [{ profile: 'vless-primary', status: 'ok', latency_ms: 10, http_status: 200 }] });
-	pending[1].resolve({ ok: true, checked_at: 2, active_profile: 'hy2-zapret', results: [{ profile: 'hy2-zapret', status: 'ok', latency_ms: 20, http_status: 204 }] });
-	await Promise.all([first, second]);
+	await first;
 
 	assert.match(nodeText(vpnOutput), /vless-primary/);
-	assert.doesNotMatch(nodeText(vpnOutput), /hy2-zapret/);
-	assert.match(nodeText(zapretOutput), /hy2-zapret/);
-	assert.doesNotMatch(nodeText(zapretOutput), /vless-primary/);
 });
 
 test('optional RU database status failure does not prevent overview rendering', async () => {

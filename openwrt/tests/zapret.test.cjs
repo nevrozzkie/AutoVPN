@@ -90,18 +90,16 @@ test('disabled zapret preserves old bundle validation and local enabled policy i
 	assert.equal(zapret.plan(snapshot, ['vless-reality'], 'eth1', { ...settings, vless: 'off' }), null);
 });
 
-test('LuCI uses bounded strategy controls and ACL protected installation without arbitrary arguments', () => {
+test('retired zapret controls are hidden while the compatibility RPC remains bounded', () => {
 	const ui = fs.readFileSync(path.join(root, 'files/www/luci-static/resources/view/autovpn/settings.js'), 'utf8');
-	assert.match(ui, /zapret_enabled/);
-	assert.match(ui, /range\(1,6\)/);
-	assert.match(ui, /state.phase === 'queued'/);
+	assert.doesNotMatch(ui, /zapret_enabled|installZapret|runtime_zapret/);
 	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json')));
 	assert.ok(acl['luci-app-autovpn'].write.ubus['luci.autovpn'].includes('zapret_install'));
 	const rpc = fs.readFileSync(path.join(root, 'files/usr/share/rpcd/ucode/luci.autovpn'), 'utf8');
 	assert.match(rpc, /zapret_install: \{ call: function\(\) \{ return callController\('zapret-install'\); \} \}/);
 });
 
-test('LuCI diagnostics exposes only fixed scopes and candidate identifiers', () => {
+test('retired diagnostics stay API-compatible but have no LuCI menu entry', () => {
 	const rpc = fs.readFileSync(path.join(root, 'files/usr/share/rpcd/ucode/luci.autovpn'), 'utf8');
 	assert.match(rpc, /index\(\['direct', 'vless', 'hysteria2'\], scope\)/);
 	assert.match(rpc, /callController\('zapret-diagnostics-start', scope\)/);
@@ -115,5 +113,5 @@ test('LuCI diagnostics exposes only fixed scopes and candidate identifiers', () 
 	for (const method of ['zapret_diagnostics_start', 'zapret_diagnostics_cancel', 'zapret_diagnostics_apply'])
 		assert.ok(acl['luci-app-autovpn'].write.ubus['luci.autovpn'].includes(method));
 	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json')));
-	assert.equal(menu['admin/services/autovpn/diagnostics'].action.path, 'autovpn/diagnostics');
+	assert.equal(menu['admin/services/autovpn/diagnostics'], undefined);
 });
