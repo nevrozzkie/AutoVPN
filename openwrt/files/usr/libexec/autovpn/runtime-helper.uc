@@ -71,7 +71,7 @@ function fixedProfile(value) {
 }
 function upgrade(value, entry, preferred) {
 	if (entry.snapshot.schema_version >= 4) {
-		if (value.version == 3) return { ok: true, value: value };
+		if (value.version == 4) return { ok: true, value: value };
 		return runtime.bundle(entry, value.policy, machine, fixedProfile(value) || preferred, LANE.id);
 	}
 	if (value.version != 1) return { ok: true, value: value };
@@ -108,7 +108,7 @@ function unsupported(entry) {
 	return LANE.id == 'vpn_zapret' && entry.snapshot.schema_version < 4;
 }
 function expectedVersion(entry) {
-	return entry.snapshot.schema_version >= 4 ? 3 : 2;
+	return entry.snapshot.schema_version >= 4 ? 4 : 2;
 }
 function run() {
 	let action = ARGV[0];
@@ -231,9 +231,17 @@ function run() {
 		let file = action == 'activate' ? 'prepared' : 'current';
 		value = readJson(ROOT + '/' + file + '.json', 65536);
 		if (!runtime.matchesBundle(value, entry, machine, LANE.id)) {
+			if ((action == 'rollback' || action == 'restore') &&
+				runtime.migratableBundle(value, entry, machine, LANE.id)) {
+				/* upgrade() below rebuilds every generated field from the snapshot. */
+			}
+			else {
 			if (action != 'rollback' && action != 'restore') return { ok: false, code: 'runtime_bundle_mismatch' };
 			value = readJson(ROOT + '/previous.json', 65536);
-			if (!runtime.matchesBundle(value, entry, machine, LANE.id)) return { ok: false, code: 'rollback_bundle_missing' };
+			if (!runtime.matchesBundle(value, entry, machine, LANE.id) &&
+				!runtime.migratableBundle(value, entry, machine, LANE.id))
+				return { ok: false, code: 'rollback_bundle_missing' };
+			}
 		}
 		let preferred = null;
 		if (action == 'activate') {

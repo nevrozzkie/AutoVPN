@@ -109,6 +109,13 @@ return view.extend({
 		option.rmempty = false;
 		option.default = '1';
 		option.description = _('Enables zapret processing for Wi-Fi -з. When disabled, Wi-Fi -з remains closed; it never becomes an unprocessed direct bypass.');
+		option = section.option(form.ListValue, 'web_strategy', _('Web / YouTube strategy'));
+		option.value('upstream', _('Upstream zapret2 web preset'));
+		option.value('legacy-split', _('Legacy TLS split + QUIC fake'));
+		option.value('legacy-split-badsum', _('Legacy split + experimental bad checksum'));
+		option.default = 'upstream';
+		option.rmempty = false;
+		option.description = _('Applies to TCP 80/443 and IETF QUIC Initial packets on Wi-Fi -з. The default follows the bounded upstream zapret2 web recipe; legacy variants remain available for provider-specific testing.');
 		option = section.option(form.Flag, 'discord_media', _('Discord media discovery'));
 		option.rmempty = false;
 		option.default = '0';
