@@ -28,20 +28,31 @@ function validMedia(value) {
 		type(value.media_repeats) == 'int' && value.media_repeats >= 1 && value.media_repeats <= 6;
 }
 
+function validWeb(value) {
+	return index(['upstream', 'legacy-split', 'legacy-split-badsum'], value.web_strategy) >= 0;
+}
+
 function validPlan(value) {
 	if (exact(value, ['version', 'wan_device']) && value.version == 1)
 		return validWan(value.wan_device);
-	return exact(value, ['version', 'wan_device', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
-		value.version == 2 && validWan(value.wan_device) && validMedia(value);
+	if (exact(value, ['version', 'wan_device', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
+		value.version == 2)
+		return validWan(value.wan_device) && validMedia(value);
+	return exact(value, ['version', 'wan_device', 'web_strategy', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
+		value.version == 3 && validWan(value.wan_device) && validWeb(value) && validMedia(value);
 }
 
 function plan(wan, enabled, media) {
 	if (enabled === false) return null;
 	let value = { version: 1, wan_device: wan };
 	if (media != null) {
-		if (!exact(media, ['discord_media', 'stun', 'media_strategy', 'media_repeats']) || !validMedia(media))
+		let legacy = exact(media, ['discord_media', 'stun', 'media_strategy', 'media_repeats']);
+		let current = exact(media, ['web_strategy', 'discord_media', 'stun', 'media_strategy', 'media_repeats']);
+		if ((!legacy && !current) || !validMedia(media) || (current && !validWeb(media)))
 			return false;
-		value = { version: 2, wan_device: wan, discord_media: media.discord_media,
+		value = { version: 3, wan_device: wan,
+			web_strategy: media.web_strategy == null ? 'upstream' : media.web_strategy,
+			discord_media: media.discord_media,
 			stun: media.stun, media_strategy: media.media_strategy, media_repeats: media.media_repeats };
 	}
 	return validPlan(value) ? value : false;
@@ -56,6 +67,11 @@ function mediaConfig(value, protocol, ports, payload) {
 
 function config(value) {
 	if (!validPlan(value)) return null;
+	let upstream = value.version >= 3 && value.web_strategy == 'upstream';
+	let quicBadSum = value.version < 3 || value.web_strategy == 'legacy-split-badsum';
+	let tcpStrategy = upstream ?
+		'--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-10000\n--lua-desync=multidisorder:pos=1,midsld' :
+		'--lua-desync=multisplit:pos=1,midsld';
 	return join('\n', [
 		'--qnum=' + QUEUE,
 		'--fwmark=0x40000000',
@@ -68,7 +84,7 @@ function config(value) {
 		'--in-range=x',
 		'--out-range=-n12',
 		'--payload=tls_client_hello,http_req',
-		'--lua-desync=multisplit:pos=1,midsld',
+		tcpStrategy,
 		'--new',
 		'--filter-l3=ipv4',
 		'--filter-udp=443',
@@ -76,7 +92,7 @@ function config(value) {
 		'--in-range=x',
 		'--out-range=-n12',
 		'--payload=quic_initial',
-		'--lua-desync=fake:blob=fake_default_quic:badsum:repeats=2',
+		'--lua-desync=fake:blob=fake_default_quic' + (quicBadSum ? ':badsum' : '') + ':repeats=' + (upstream ? '6' : '2'),
 	]) + (value.discord_media ? mediaConfig(value, 'discord', DISCORD_PORTS, 'discord_ip_discovery') : '') +
 		(value.stun ? mediaConfig(value, 'stun', '1-65535', 'stun') : '') + '\n';
 }
@@ -134,7 +150,9 @@ function nft(value) {
 		' oifname "' + BRIDGE + '" drop\n }\n' +
 		' chain post {\n type filter hook postrouting priority 101; policy accept;\n' +
 		media +
-		' ' + scope + webUnmarked + ' udp dport 443 ct original packets 1-12' + queue + '\n' +
+		' ' + scope + webUnmarked + ' udp dport 443' + (value.version >= 3 ?
+			' udp length >= 264 @ih,0,4 0x0000000C @ih,8,32 0x00000001' : '') +
+			' ct original packets 1-12' + queue + '\n' +
 		' ' + scope + unmarked + ' tcp dport { 80, 443 } ct original packets 1-12' + queue + '\n' +
 		' ' + scope + unmarked + ' tcp dport { 80, 443 } tcp flags & (fin | rst) != 0' + queue + '\n }\n' +
 		' chain raw {\n type filter hook output priority -401; policy accept;\n' +

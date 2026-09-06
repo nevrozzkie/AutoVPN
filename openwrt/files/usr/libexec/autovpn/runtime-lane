@@ -18,6 +18,10 @@ case "$LANE" in
 		AWG_MARK_HEX=0x4ee1
 		AWG_PRIORITY=20193
 		AWG_UNREACHABLE_PRIORITY=20194
+		TPROXY_PORT=12080
+		TPROXY_ROUTE_TABLE=20180
+		TPROXY_PRIORITY=20180
+		TPROXY_MARK_HEX=0x4ed4
 		GUARD_TABLE=autovpn_vpn
 		;;
 	vpn_zapret)
@@ -34,6 +38,10 @@ case "$LANE" in
 		AWG_MARK_HEX=0x4ef5
 		AWG_PRIORITY=20213
 		AWG_UNREACHABLE_PRIORITY=20214
+		TPROXY_PORT=12081
+		TPROXY_ROUTE_TABLE=20200
+		TPROXY_PRIORITY=20200
+		TPROXY_MARK_HEX=0x4ee8
 		GUARD_TABLE=autovpn_vpn_zapret
 		;;
 	*) printf '%s\n' '{"ok":false,"code":"invalid_runtime_lane"}'; exit 1 ;;
@@ -67,6 +75,7 @@ closed() {
 	guard_ok=0
 	guard closed && guard_ok=1
 	"$SERVICE" stop >/dev/null 2>&1 || return 1
+	transparent_down || return 1
 	[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down '' "$LANE" >/dev/null 2>&1 || return 1
 	zapret down || return 1
 	[ "$guard_ok" -eq 1 ]
@@ -103,32 +112,65 @@ awg_healthy() {
 		ucode "$AWG_HELPER" check "$ROOT/awg.json" "$LANE" >/dev/null 2>&1
 }
 
-routes() {
-	ROUTE_ERROR=route_setup_failed
-	# Fixed table/priority ownership. Refuse collisions; never flush a route table.
-	ip -4 rule show >"$SCRATCH/rules.txt" 2>/dev/null || { ROUTE_ERROR=route_rule_read_failed; return 1; }
+transparent_down() {
+	local rules lines expected routes route
+	rules="$(ip -color=never -4 rule show 2>/dev/null)" || return 1
+	lines="$(printf '%s\n' "$rules" | grep -E "^$TPROXY_PRIORITY:" || true)"
+	expected="$TPROXY_PRIORITY: from all fwmark $TPROXY_MARK_HEX lookup $TPROXY_ROUTE_TABLE"
+	if [ -n "$lines" ]; then
+		[ "$(printf '%s' "$lines" | sed 's/[[:space:]][[:space:]]*/ /g')" = "$expected" ] || return 1
+		ip -4 rule del priority "$TPROXY_PRIORITY" fwmark "$TPROXY_MARK_HEX" lookup "$TPROXY_ROUTE_TABLE" || return 1
+	fi
+	routes="$(ip -color=never -4 route show table "$TPROXY_ROUTE_TABLE" 2>/dev/null || true)"
+	while IFS= read -r route; do
+		[ -z "$route" ] && continue
+		route="$(printf '%s' "$route" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
+		[ "$route" = "local default dev lo scope host" ] || return 1
+	done <<EOF
+$routes
+EOF
+	[ -z "$routes" ] || ip -4 route del local 0.0.0.0/0 dev lo table "$TPROXY_ROUTE_TABLE" || return 1
+}
+
+legacy_routes_down() {
+	local rules lines expected routes route
+	rules="$(ip -color=never -4 rule show 2>/dev/null)" || return 1
 	for priority in "$ROUTE_PRIORITY" "$UNREACHABLE_PRIORITY"; do
-		lines="$(grep -E "^$priority:" "$SCRATCH/rules.txt" || true)"
+		lines="$(printf '%s\n' "$rules" | grep -E "^$priority:" || true)"
 		if [ "$priority" = "$ROUTE_PRIORITY" ]; then
 			expected="$priority: from all iif $BRIDGE lookup $ROUTE_TABLE"
 		else
 			expected="$priority: from all iif $BRIDGE unreachable"
 		fi
-		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | sed 's/[[:space:]][[:space:]]*/ /g')" = "$expected" ] || { ROUTE_ERROR=route_rule_collision; return 1; }
+		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | sed 's/[[:space:]][[:space:]]*/ /g')" = "$expected" ] || return 1
+		[ -z "$lines" ] || ip -4 rule del priority "$priority" || return 1
 	done
-	# Dump all tables: querying an empty numbered table alone can return ENOENT.
-	# Numeric output also prevents rt_tables aliases from hiding a collision.
-	ip -N -4 route show table all >"$SCRATCH/all-routes.txt" 2>/dev/null || { ROUTE_ERROR=route_table_read_failed; return 1; }
-	grep -E " table $ROUTE_TABLE( |$)" "$SCRATCH/all-routes.txt" >"$SCRATCH/routes.txt" || true
+	routes="$(ip -color=never -4 route show table "$ROUTE_TABLE" 2>/dev/null || true)"
 	while IFS= read -r route; do
+		[ -z "$route" ] && continue
 		route="$(printf '%s' "$route" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
-		[ "$route" = "default dev $TUN table $ROUTE_TABLE" ] ||
-			[ "$route" = "default dev $TUN table $ROUTE_TABLE scope 253" ] || { ROUTE_ERROR=route_table_collision; return 1; }
-	done <"$SCRATCH/routes.txt"
-	# The unreachable rule survives TUN disappearance, preventing main-table fallback.
-	grep -q "^$UNREACHABLE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$UNREACHABLE_PRIORITY" iif "$BRIDGE" unreachable || { ROUTE_ERROR=route_unreachable_rule_failed; return 1; }
-	grep -q "^$ROUTE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$ROUTE_PRIORITY" iif "$BRIDGE" lookup "$ROUTE_TABLE" || { ROUTE_ERROR=route_lan_rule_failed; return 1; }
-	ip -4 route replace default dev "$TUN" table "$ROUTE_TABLE" >/dev/null 2>&1 || { ROUTE_ERROR=route_tun_default_failed; return 1; }
+		[ "$route" = "default dev $TUN" ] || [ "$route" = "default dev $TUN scope link" ] || return 1
+	done <<EOF
+$routes
+EOF
+	[ -z "$routes" ] || ip -4 route del default dev "$TUN" table "$ROUTE_TABLE" || return 1
+}
+
+transparent_active() {
+	ip -color=never -4 rule show 2>/dev/null | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' |
+		grep -qx "$TPROXY_PRIORITY: from all fwmark $TPROXY_MARK_HEX lookup $TPROXY_ROUTE_TABLE" &&
+	ip -color=never -4 route show table "$TPROXY_ROUTE_TABLE" 2>/dev/null | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' |
+		grep -qx 'local default dev lo scope host'
+}
+
+routes() {
+	ROUTE_ERROR=route_setup_failed
+	transparent_down || { ROUTE_ERROR=tproxy_route_collision; return 1; }
+	ip -4 route add local 0.0.0.0/0 dev lo table "$TPROXY_ROUTE_TABLE" >/dev/null 2>&1 || { ROUTE_ERROR=tproxy_local_route_failed; return 1; }
+	ip -4 rule add priority "$TPROXY_PRIORITY" fwmark "$TPROXY_MARK_HEX" lookup "$TPROXY_ROUTE_TABLE" >/dev/null 2>&1 || { ROUTE_ERROR=tproxy_rule_failed; return 1; }
+	legacy_routes_down || { ROUTE_ERROR=legacy_route_collision; return 1; }
+	ip -4 rule show >"$SCRATCH/rules.txt" 2>/dev/null || { ROUTE_ERROR=route_rule_read_failed; return 1; }
+	ip -N -4 route show table all >"$SCRATCH/all-routes.txt" 2>/dev/null || { ROUTE_ERROR=route_table_read_failed; return 1; }
 	if ! awg_active; then return 0; fi
 	# sing-box marks plaintext entering the AWG device. AWG marks its own UDP
 	# socket differently, so the encrypted outer packet keeps the WAN route.
@@ -183,9 +225,9 @@ start() {
 	mv "$ROOT/run.json.new" "$ROOT/run.json" || { START_ERROR=runtime_config_commit_failed; return 1; }
 	"$SERVICE" start >/dev/null 2>&1 || { START_ERROR=tunnel_service_start_failed; return 1; }
 	attempt=0
-	while ! ip link show dev "$TUN" >/dev/null 2>&1; do
+	while ! busybox netstat -lnt 2>/dev/null | grep -Eq ":$HEALTH_PORT[[:space:]]"; do
 		attempt=$((attempt + 1))
-		[ "$attempt" -lt 6 ] || { START_ERROR=tunnel_device_missing; return 1; }
+		[ "$attempt" -lt 6 ] || { START_ERROR=tunnel_listener_missing; return 1; }
 		sleep 1
 	done
 	"$SERVICE" running >/dev/null 2>&1 || { START_ERROR=tunnel_service_not_running; return 1; }
@@ -279,8 +321,8 @@ case "${1:-}" in
 	status)
 		helper status || { cat "$SCRATCH/result.json"; exit 1; }
 		if empty; then cat "$SCRATCH/result.json"; exit 0; fi
-		if "$SERVICE" running >/dev/null 2>&1 && ip link show dev "$TUN" >/dev/null 2>&1 && \
-			nft list chain inet "$GUARD_TABLE" forward 2>/dev/null | grep -q "$TUN" && \
+		if "$SERVICE" running >/dev/null 2>&1 && transparent_active && \
+			nft list chain inet "$GUARD_TABLE" transparent 2>/dev/null | grep -q "tproxy ip to :$TPROXY_PORT" && \
 			{ ! selected_awg || awg_healthy; } && zapret check; then
 			cat "$SCRATCH/result.json"
 		else
@@ -331,7 +373,7 @@ case "${1:-}" in
 		check || error sing_box_check_failed
 		if [ "$1" = restore ] && cmp -s "$ROOT/candidate.json" "$ROOT/run.json" && \
 			{ ! selected_awg || awg_healthy; } && zapret check && \
-			"$SERVICE" running >/dev/null 2>&1 && ip link show dev "$TUN" >/dev/null 2>&1; then
+			"$SERVICE" running >/dev/null 2>&1 && transparent_active; then
 			routes || error "$ROUTE_ERROR"
 			# Reusing a committed runtime must not bypass failure hysteresis or
 			# reselect a faster candidate on subscription refresh.
@@ -351,7 +393,7 @@ case "${1:-}" in
 		helper restore || { closed || true; error runtime_bundle_mismatch; }
 		empty && error snapshot_not_applied
 		if ! cmp -s "$ROOT/candidate.json" "$ROOT/run.json" || \
-			! "$SERVICE" running >/dev/null 2>&1 || ! ip link show dev "$TUN" >/dev/null 2>&1 || \
+			! "$SERVICE" running >/dev/null 2>&1 || ! transparent_active || \
 			{ selected_awg && ! awg_healthy; } || ! zapret check; then
 			# Restore the same persisted choice before considering alternatives.
 			helper restore || error runtime_bundle_mismatch

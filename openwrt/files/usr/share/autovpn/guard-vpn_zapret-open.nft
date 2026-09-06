@@ -4,18 +4,18 @@ table inet autovpn_vpn_zapret {
 	chain ownership_autovpn_v1 {}
 	chain forward {
 		type filter hook forward priority -10; policy accept;
-		iifname "br-avpnz" meta nfproto ipv4 ip saddr 192.168.32.0/24 oifname "avpn1" accept
-		iifname "avpn1" meta nfproto ipv4 oifname "br-avpnz" ct state { established, related } accept
 		iifname "br-avpnz" counter drop
 		oifname "br-avpnz" counter drop
 	}
 	chain input {
 		type filter hook input priority -10; policy accept;
 		iifname "br-avpnz" meta nfproto ipv4 udp sport 68 udp dport 67 accept
+		iifname "br-avpnz" meta mark 0x00004ee8 accept
 		iifname "br-avpnz" counter drop
 	}
-	chain dns {
-		type nat hook prerouting priority -101; policy accept;
-		iifname "br-avpnz" ip saddr 192.168.32.0/24 meta l4proto { tcp, udp } th dport 53 dnat ip to 172.30.255.6
+	chain transparent {
+		type filter hook prerouting priority mangle; policy accept;
+		iifname "br-avpnz" ip saddr 192.168.32.0/24 meta l4proto { tcp, udp } th dport 53 tproxy ip to :12081 meta mark set 0x00004ee8 accept
+		iifname "br-avpnz" ip saddr 192.168.32.0/24 ip daddr != { 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } meta l4proto { tcp, udp } tproxy ip to :12081 meta mark set 0x00004ee8 accept
 	}
 }

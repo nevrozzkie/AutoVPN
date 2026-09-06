@@ -187,8 +187,7 @@ function renderLegacy(snapshot, policy, machine) {
 				final: 'tunnel-dns', strategy: 'ipv4_only', reverse_mapping: true,
 			},
 			inbounds: [
-				{ type: 'tun', tag: 'vpn-net', interface_name: 'avpn0', address: ['172.30.255.1/30'], mtu: 1400,
-					auto_route: false, auto_redirect: false, stack: 'system' },
+				{ type: 'tproxy', tag: 'vpn-net', listen: '0.0.0.0', listen_port: 12080 },
 				{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: 1088 },
 			],
 			outbounds: outbounds,
@@ -276,12 +275,11 @@ function render(snapshot, policy, machine, preferredProfile, lane) {
 
 	/* Forced probe routes precede DNS interception and every user direct exception. */
 	let rules = [{ inbound: ['health'], action: 'route', outbound: selected }];
-	let tun = managedLane ? descriptor.tun : 'avpn0';
-	let address = managedLane ? descriptor.address : '172.30.255.1/30';
 	let healthPort = managedLane ? descriptor.health_port : 1088;
+	let transparent = managedLane ? descriptor.transparent
+		: { listen_port: 12080, mark: 20180, route_table: 20180, priority: 20180 };
 	let inbounds = [
-		{ type: 'tun', tag: 'vpn-net', interface_name: tun, address: [address], mtu: 1400,
-			auto_route: false, auto_redirect: false, stack: 'system' },
+		{ type: 'tproxy', tag: 'vpn-net', listen: '0.0.0.0', listen_port: transparent.listen_port },
 		{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: healthPort },
 	];
 	let probePorts = managedLane ? descriptor.probe_ports
@@ -328,12 +326,12 @@ function bundle(entry, policy, machine, preferredProfile, lane) {
 	let result = render(entry.snapshot, policy, machine, preferredProfile, lane);
 	if (!result.ok) return result;
 	if (result.empty === true) return result;
-	let version = lane != null && entry.snapshot.schema_version >= 4 ? 3 : 2;
+	let version = lane != null && entry.snapshot.schema_version >= 4 ? 4 : 2;
 	let value = { version: 2, router_id: entry.snapshot.router_id, etag: entry.etag, attempt: entry.attempt,
 		policy: copy(policy), config: result.config, profile: result.profile, candidates: result.candidates,
 		capabilities: result.capabilities };
 	value.version = version;
-	if (version == 3) value.lane = lane;
+	if (version >= 3) value.lane = lane;
 	if (result.awg != null) value.awg = result.awg;
 	if (result.zapret != null) value.zapret = result.zapret;
 	if (length(sprintf('%J', value)) >= 65536) return fail('runtime_bundle_too_large');
@@ -343,10 +341,10 @@ function bundle(entry, policy, machine, preferredProfile, lane) {
 /* Re-render before using persistent generated files; reject tampering/corruption. */
 function matchesBundle(value, entry, machine, lane) {
 	if (type(value) != 'object' || entry == null || value.router_id != entry.snapshot.router_id ||
-		value.etag != entry.etag || value.attempt != entry.attempt || index([1, 2, 3], value.version) < 0)
+		value.etag != entry.etag || value.attempt != entry.attempt || index([1, 2, 3, 4], value.version) < 0)
 		return false;
-	if (lane == 'vpn_zapret' && value.version != 3) return false;
-	if (value.version == 3 && (type(value.lane) != 'string' ||
+	if (lane == 'vpn_zapret' && value.version < 3) return false;
+	if (value.version >= 3 && (type(value.lane) != 'string' ||
 		(lane != null && value.lane != lane))) return false;
 	let expected = value.version == 1 ? legacyBundle(entry, value.policy, machine)
 		: value.version == 2 ? bundle(entry, value.policy, machine, value.profile)
@@ -354,4 +352,18 @@ function matchesBundle(value, entry, machine, lane) {
 	return expected.ok && sprintf('%J', expected.value) == sprintf('%J', value);
 }
 
-return { validatePolicy: validatePolicy, render: render, bundle: bundle, matchesBundle: matchesBundle };
+/* Version 3 used a manually-routed TUN that cannot carry forwarded LAN TCP.
+ * Only bounded identity and policy survive the migration; generated runtime,
+ * keys and capabilities are rebuilt from the signed applied snapshot. */
+function migratableBundle(value, entry, machine, lane) {
+	if (type(value) != 'object' || entry == null || value.version != 3 ||
+		value.lane != lane || value.router_id != entry.snapshot.router_id ||
+		value.etag != entry.etag || !validatePolicy(value.policy).ok ||
+		index(['vless-reality', 'hysteria2', 'amneziawg'], value.profile) < 0)
+		return false;
+	let rebuilt = bundle(entry, value.policy, machine, value.profile, lane);
+	return rebuilt.ok && rebuilt.value.version == 4 && rebuilt.value.profile == value.profile;
+}
+
+return { validatePolicy: validatePolicy, render: render, bundle: bundle,
+	matchesBundle: matchesBundle, migratableBundle: migratableBundle };

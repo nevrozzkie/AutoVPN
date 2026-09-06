@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.14.7
+PKG_VERSION:=0.14.8
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -15,7 +15,7 @@ define Package/autovpn-controller
   SUBMENU:=VPN
   TITLE:=Native AutoVPN controller
   PKGARCH:=all
-  DEPENDS:=+busybox +ca-bundle +curl +flock +coreutils-stat +coreutils-timeout +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat +kmod-nft-queue
+  DEPENDS:=+busybox +ca-bundle +curl +flock +coreutils-stat +coreutils-timeout +jsonfilter +procd +rpcd +rpcd-mod-ucode +ubus +uci +ucode +ucode-mod-fs +ucode-mod-uci +luci-base +sing-box-tiny +ip-full +firewall4 +kmod-nft-nat +kmod-nft-queue +kmod-nft-tproxy +kmod-nft-socket
 endef
 
 define Package/autovpn-controller/description
