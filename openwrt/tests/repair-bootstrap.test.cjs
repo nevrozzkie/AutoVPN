@@ -25,7 +25,7 @@ function fixture(t, options = {}) {
 	const key = '-----BEGIN PUBLIC KEY-----\nexisting fixture key\n-----END PUBLIC KEY-----\n';
 	const keyHash = digest(key);
 	const controller = 'signed controller fixture';
-	const controllerName = 'autovpn-controller-0.14.1-r1.apk';
+	const controllerName = 'autovpn-controller-0.14.2-r1.apk';
 	fs.writeFileSync(path.join(assets, controllerName), controller);
 	for (const name of ['kmod-amneziawg-6.12.85-r1.apk', 'amneziawg-tools-1-r1.apk']) {
 		fs.writeFileSync(path.join(assets, name), 'must never be downloaded');
@@ -40,7 +40,7 @@ function fixture(t, options = {}) {
 		kernel_package: options.manifestKernelPackage || '6.12.85~fixture-r1',
 		signing_key_sha256: options.manifestKeyHash || keyHash,
 		packages: [
-			{ name: 'autovpn-controller', filename: controllerName, sha256: digest(controller), version: '0.14.1-r1' },
+			{ name: 'autovpn-controller', filename: controllerName, sha256: digest(controller), version: '0.14.2-r1' },
 			{ name: 'amneziawg-tools', filename: 'amneziawg-tools-1-r1.apk', sha256: '1'.repeat(64) },
 			{ name: 'kmod-amneziawg', filename: 'kmod-amneziawg-6.12.85-r1.apk', sha256: '2'.repeat(64) },
 		],
@@ -64,7 +64,7 @@ function fixture(t, options = {}) {
 	const controllerLock = path.join(root, 'autovpn-controller.lock');
 	const helper = path.join(bin, 'install-wifi');
 	let source = template
-		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/AutoVPN/releases/download/router-v0.14.1-openwrt-25.12.5-r1')
+		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/AutoVPN/releases/download/router-v0.14.2-openwrt-25.12.5-r1')
 		.replace('@AUTOVPN_SIGNING_KEY_SHA256@', keyHash)
 		.replace('@AUTOVPN_MANIFEST_SHA256@', options.badManifestPin ? '0'.repeat(64) : digest(manifestBytes))
 		.replaceAll('/etc/autovpn', trust)
@@ -106,6 +106,9 @@ else if (name === 'uci') {
       'autovpn.main.router_id': env.MOCK_ROUTER_ID ?? '',
       'autovpn.main.credential_file': env.MOCK_CREDENTIAL_FILE ?? env.MOCK_DEFAULT_CREDENTIAL,
       'autovpn.wifi.bootstrap_completed': env.MOCK_WIFI_COMPLETE ?? '',
+      'autovpn.wifi.base_ssid': env.MOCK_WIFI_SSID ?? '',
+      'autovpn.wifi.password': env.MOCK_WIFI_PASSWORD ?? '',
+      'autovpn.wifi.primary_lan': env.MOCK_WIFI_PRIMARY_LAN ?? '',
     };
     if (values[key]) output(values[key]); else process.exit(1);
   } else if (args[0] === '-q' && args[1] === 'changes') {
@@ -135,13 +138,14 @@ else if (name === 'apk') {
   } else if (args.includes('verify')) {
     if (env.MOCK_BAD_SIGNATURE === '1') process.exit(1);
   } else if (args[0] === 'adbdump') {
-    output({info:{name:env.MOCK_APK_NAME || 'autovpn-controller',version:env.MOCK_APK_VERSION || '0.14.1-r1',arch:env.MOCK_APK_ARCH || 'noarch'}});
+    output({info:{name:env.MOCK_APK_NAME || 'autovpn-controller',version:env.MOCK_APK_VERSION || '0.14.2-r1',arch:env.MOCK_APK_ARCH || 'noarch'}});
   } else if (args.includes('--simulate')) {
-    if (env.MOCK_UNSAFE_PLAN === '1') output('(1/2) Upgrading autovpn-controller (0.14.0-r3 -> 0.14.1-r1)\\n(2/2) Installing surprise (1-r1)');
-    else output('(1/1) Upgrading autovpn-controller (0.14.0-r3 -> 0.14.1-r1)');
+    const current = fs.existsSync(env.MOCK_INSTALLED_FILE) ? fs.readFileSync(env.MOCK_INSTALLED_FILE, 'utf8') : (env.MOCK_CURRENT || '0.14.0-r3');
+    if (env.MOCK_UNSAFE_PLAN === '1') output('(1/2) Upgrading autovpn-controller (' + current + ' -> 0.14.2-r1)\\n(2/2) Installing surprise (1-r1)');
+    else output('(1/1) Upgrading autovpn-controller (' + current + ' -> 0.14.2-r1)');
   } else if (args.includes('add')) {
     if (env.MOCK_COMMIT_FAIL === '1') process.exit(1);
-    fs.writeFileSync(env.MOCK_INSTALLED_FILE, '0.14.1-r1');
+    fs.writeFileSync(env.MOCK_INSTALLED_FILE, '0.14.2-r1');
   } else process.exit(91);
 }
 else if (name === 'install-wifi') {
@@ -199,7 +203,7 @@ test('repairs only the controller, preserves trust and UCI, then releases both l
 	const downloads = result.calls.filter(call => call.name === 'curl').map(call => path.basename(call.args.at(-1)));
 	assert.deepEqual(downloads, [
 		'manifest-25.12.5-mediatek-filogic-aarch64_cortex-a53.json',
-		'autovpn-controller-0.14.1-r1.apk',
+		'autovpn-controller-0.14.2-r1.apk',
 	]);
 	const plans = result.calls.filter(call => call.name === 'apk' && call.args.includes('--simulate'));
 	const commits = result.calls.filter(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate'));
@@ -264,9 +268,25 @@ test('trust, manifest, signature, metadata and APK plan failures never commit', 
 	}
 });
 
+test('0.14.0 receipt with installed 0.14.1 upgrades to the pinned repair without rewriting trust', t => {
+	const f = fixture(t, { receiptVersion: '0.14.0-r1' });
+	const result = f.run({
+		MOCK_CURRENT: '0.14.1-r1',
+		MOCK_WIFI_SSID: 'wifi',
+		MOCK_WIFI_PASSWORD: 'failed-attempt-password',
+		MOCK_WIFI_PRIMARY_LAN: '1',
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.calls.some(call => call.name === 'apk' && call.args.includes('--simulate')), true);
+	assert.equal(committed(result), true);
+	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release.json')), f.receiptBefore);
+	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release-signing.pem')), f.keyBefore);
+	assert.deepEqual(result.calls.find(call => call.name === 'wifi-state'), { name: 'wifi-state', locksHeld: false });
+});
+
 test('safe rerun at the repaired version skips APK mutation and retries Wi-Fi with locks released', t => {
-	const f = fixture(t, { receiptVersion: '0.14.0-r3' });
-	const result = f.run({ MOCK_CURRENT: '0.14.1-r1' });
+	const f = fixture(t, { receiptVersion: '0.14.0-r1' });
+	const result = f.run({ MOCK_CURRENT: '0.14.2-r1' });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.calls.some(call => call.name === 'apk' && call.args.includes('--simulate')), false);
 	assert.equal(committed(result), false);

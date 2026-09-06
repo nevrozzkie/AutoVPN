@@ -15,7 +15,8 @@ function atomic(path, raw) {
 }
 function command(argv, limit) {
 	/* Only fixed executables/arguments. No Wi-Fi passwords on a command line. */
-	let bounded = ['/bin/busybox', 'timeout', '20'];
+	/* coreutils-timeout is a package dependency; stock BusyBox omits this applet. */
+	let bounded = ['/usr/bin/timeout', '20'];
 	for (let i = 0; i < length(argv); i++) push(bounded, argv[i]);
 	let child = processRunner.popen(bounded, 'r');
 	if (child == null) return null;

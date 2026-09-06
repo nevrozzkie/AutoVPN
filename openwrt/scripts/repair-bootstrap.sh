@@ -1,5 +1,5 @@
 #!/bin/sh
-# Narrow recovery template for an unconfigured AutoVPN 0.14.0-r1/r3 install.
+# Narrow recovery template for an unconfigured AutoVPN 0.14.0/0.14.1 install.
 # prepare-release.py pins the same public, non-secret release values as install.sh.
 set -eu
 umask 077
@@ -8,7 +8,7 @@ export LC_ALL=C
 RELEASE_BASE='@AUTOVPN_RELEASE_BASE@'
 PUBLIC_KEY_SHA256='@AUTOVPN_SIGNING_KEY_SHA256@'
 MANIFEST_SHA256='@AUTOVPN_MANIFEST_SHA256@'
-TARGET_CONTROLLER_VERSION='0.14.1-r1'
+TARGET_CONTROLLER_VERSION='0.14.2-r1'
 TRUST_ROOT=/etc/autovpn
 RELEASE_RECEIPT="$TRUST_ROOT/release.json"
 RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
@@ -49,7 +49,7 @@ case "${1-}" in
 	'') ;;
 	--help)
 		printf '%s\n' 'Usage: sh repair-bootstrap.sh' \
-			'Repairs only an unconfigured AutoVPN 0.14.0-r1/r3 controller install.'
+			'Repairs only an unconfigured AutoVPN 0.14.0/0.14.1 controller install.'
 		exit 0
 		;;
 	*) fail 'Unknown option; do not pass site URLs, router IDs or credentials.' ;;
@@ -134,7 +134,7 @@ valid_hash "$receipt_key_hash" || fail 'Release receipt has an invalid key pin.'
 	fail 'Recovery release belongs to a different GitHub repository.'
 key_actual=$(sha256sum "$RELEASE_KEY") || fail 'Cannot hash the installed signing key.'
 [ "${key_actual%% *}" = "$PUBLIC_KEY_SHA256" ] || fail 'Installed signing key does not match the pinned key.'
-case "$receipt_version" in 0.14.0-r1|0.14.0-r3|"$TARGET_CONTROLLER_VERSION") ;; *)
+case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
 	fail 'Release receipt is outside this recovery path.' ;;
 esac
 
@@ -224,7 +224,7 @@ apk query --installed --match name --fields name,version --format json autovpn-c
 [ "$(field "$WORK/current.json" '@[0].name')" = autovpn-controller ] || fail 'Controller is not installed.'
 current_version=$(field "$WORK/current.json" '@[0].version') || fail 'Installed controller version is missing.'
 case "$current_version" in
-	0.14.0-r1|0.14.0-r3)
+	0.14.0-r1|0.14.0-r3|0.14.1-r1)
 		plan=$(apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/keys" \
 			add --simulate "$WORK/$controller_filename") || fail 'Controller upgrade plan failed.'
 		plan_lines=$(printf '%s\n' "$plan" | grep -E '^\([[:space:]]*[0-9]+/[0-9]+\) ' || true)

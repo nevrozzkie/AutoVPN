@@ -85,6 +85,8 @@ function fixture(options = {}) {
 	}
 	function popen(argv) {
 		env.calls.push(argv);
+		if (argv[0] === '/bin/busybox' && argv[1] === 'timeout')
+			return { read: () => '', close: () => 127 };
 		const output = argv.includes('/sbin/ip') && argv.includes('-j') ? '[]' :
 			argv.includes('/bin/ubus') ? JSON.stringify(Object.fromEntries(['radio0', 'radio1'].map(name => [name, {
 				up: true, interfaces: env.ready ? ['direct', 'vpn', 'zapret', 'vpn_zapret'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
@@ -135,6 +137,16 @@ test('real network helper stages private files, commits UCI stage and returns re
 	assert.ok(env.calls.some(argv => argv.includes('/sbin/wifi') && argv.includes('reload')));
 	assert.ok(env.modes.some(([name, mode]) => name.endsWith('/journal.json.new') && mode === 0o600));
 	assert.equal(JSON.stringify(env.calls).includes('test-passphrase'), false);
+});
+
+test('network bootstrap and rollback use the packaged timeout without a BusyBox timeout applet', () => {
+	const { env, run } = fixture({ fresh: true, primaryLan: true });
+	assert.equal(run('network-bootstrap').phase, 'pending');
+	env.files.set('/proc/uptime', '400.00 20.00\n');
+	assert.equal(run('network-tick').phase, 'rolled_back');
+	assert.ok(env.calls.length > 0);
+	for (const argv of env.calls) assert.deepEqual(argv.slice(0, 2), ['/usr/bin/timeout', '20']);
+	assert.match(fs.readFileSync(path.join(root, 'Makefile'), 'utf8'), /\+coreutils-timeout(?:\s|$)/);
 });
 
 test('network-bootstrap patches the actual stock radios and keeps the primary SSID on management LAN', () => {
