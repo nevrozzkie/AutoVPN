@@ -98,6 +98,12 @@ Python-тесты работают с временной SQLite, а не с по
 Проверки роутера запускаются на компьютере с Node.js/Python, не на OpenWrt;
 на самом роутере Python и Node.js не устанавливаются.
 
+
+# ПРОВЕРИТЬ ВЕРСИЮ:
+```
+apk query --installed --match name --fields name,version autovpn-controller
+```
+
 ## QuickStart
 
 Примеры ниже загружают ветку `main`. До слияния PR они **не устанавливают
