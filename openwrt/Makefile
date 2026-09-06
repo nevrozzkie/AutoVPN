@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.15.0
+PKG_VERSION:=0.15.1
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -132,6 +132,9 @@ define Package/autovpn-controller/postinst
 	/etc/init.d/autovpn-networks enable >/dev/null 2>&1 || true
 	/etc/init.d/autovpn enable >/dev/null 2>&1 || true
 	/etc/init.d/autovpn start >/dev/null 2>&1 || true
+	# LuCI 25.12 stores the dispatcher cache in a hash-suffixed JSON file.
+	# Invalidate every exact cache variant so newly installed pages appear now.
+	rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*.json
 	/etc/init.d/rpcd reload >/dev/null 2>&1 || true
 }
 exit 0

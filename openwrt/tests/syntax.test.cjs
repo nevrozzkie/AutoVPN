@@ -112,6 +112,12 @@ test('package has an exact curl dependency and adapter never puts payload in cur
 	assert.doesNotMatch(adapter, /curl[^\n]*(Authorization|Bearer|data-binary)/);
 });
 
+test('package install invalidates hash-suffixed LuCI dispatcher caches', () => {
+	const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
+	assert.match(makefile, /rm -f \/tmp\/luci-indexcache \/tmp\/luci-indexcache\.\*\.json/);
+	assert.match(makefile, /rm -f[^\n]+\n\s*\/etc\/init\.d\/rpcd reload/);
+});
+
 test('menu-bound ACL grants the authenticated first-run action but no file access', () => {
 	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json'), 'utf8'));
 	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json'), 'utf8'));
