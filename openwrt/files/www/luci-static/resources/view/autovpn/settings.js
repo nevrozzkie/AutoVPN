@@ -89,6 +89,9 @@ return view.extend({
 		option = section.option(form.ListValue, 'zapret_vless', _('VLESS zapret strategy'));
 		option.depends('zapret_enabled', '1');
 		option.value('split', _('TLS ClientHello split (experimental)'));
+		option.value('multidisorder', _('TLS multidisorder'));
+		option.value('fake_multidisorder', _('TLS fake + multidisorder'));
+		option.value('fake_multisplit', _('TLS fake + multisplit'));
 		option.value('off', _('Off'));
 		option.default = 'split';
 		['hysteria2', 'amneziawg'].forEach(function(protocol) {
@@ -96,6 +99,10 @@ return view.extend({
 			strategy.depends('zapret_enabled', '1');
 			strategy.value('off', _('Off'));
 			strategy.value('fake', _('UDP fake packets (experimental, provider-dependent)'));
+			if (protocol === 'hysteria2') {
+				strategy.value('fake_plain', _('UDP fake packets without bad checksum'));
+				strategy.value('fake11', _('UDP fake packets, 11 repeats'));
+			}
 			strategy.default = protocol === 'hysteria2' ? 'fake' : 'off';
 		});
 		option = section.option(form.Value, 'zapret_repeats', _('UDP fake repeats'));
@@ -113,9 +120,17 @@ return view.extend({
 		option.value('upstream', _('Upstream zapret2 web preset'));
 		option.value('legacy-split', _('Legacy TLS split + QUIC fake'));
 		option.value('legacy-split-badsum', _('Legacy split + experimental bad checksum'));
+		option.value('blockcheck-fake', _('Blockcheck TLS fake preset'));
+		option.value('blockcheck-fake-multisplit', _('Blockcheck TLS fake + multisplit'));
 		option.default = 'upstream';
 		option.rmempty = false;
 		option.description = _('Applies to TCP 80/443 and IETF QUIC Initial packets on Wi-Fi -з. The default follows the bounded upstream zapret2 web recipe; legacy variants remain available for provider-specific testing.');
+		option = section.option(form.ListValue, 'quic_mode', _('QUIC / HTTP3'));
+		option.value('process', _('Process with zapret'));
+		option.value('block', _('Block QUIC and force TCP'));
+		option.default = 'process';
+		option.rmempty = false;
+		option.description = _('Diagnostics may recommend forcing TCP when this OpenWrt curl cannot test HTTP/3. This affects UDP/443 on Wi-Fi -з.');
 		option = section.option(form.Flag, 'discord_media', _('Discord media discovery'));
 		option.rmempty = false;
 		option.default = '0';

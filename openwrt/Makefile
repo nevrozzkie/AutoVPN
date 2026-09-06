@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.14.8
+PKG_VERSION:=0.15.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -68,6 +68,8 @@ define Package/autovpn-controller/install
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-helper.uc $(1)/usr/libexec/autovpn/zapret-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/direct-zapret-helper.uc $(1)/usr/libexec/autovpn/direct-zapret-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-install $(1)/usr/libexec/autovpn/zapret-install
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-diagnostics $(1)/usr/libexec/autovpn/zapret-diagnostics
+	$(INSTALL_BIN) ./files/usr/libexec/autovpn/zapret-diagnostics-helper.uc $(1)/usr/libexec/autovpn/zapret-diagnostics-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/awg-helper.uc $(1)/usr/libexec/autovpn/awg-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/network-helper.uc $(1)/usr/libexec/autovpn/network-helper.uc
 	$(INSTALL_BIN) ./files/usr/libexec/autovpn/setup-helper.uc $(1)/usr/libexec/autovpn/setup-helper.uc
@@ -89,6 +91,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret.uc $(1)/usr/share/ucode/autovpn/zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/direct_zapret.uc $(1)/usr/share/ucode/autovpn/direct_zapret.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret_diagnostics.uc $(1)/usr/share/ucode/autovpn/zapret_diagnostics.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/networks.uc $(1)/usr/share/ucode/autovpn/networks.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/network_transaction.uc $(1)/usr/share/ucode/autovpn/network_transaction.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/setup_policy.uc $(1)/usr/share/ucode/autovpn/setup_policy.uc
@@ -117,6 +120,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/networks.js $(1)/www/luci-static/resources/view/autovpn/networks.js
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/setup.js $(1)/www/luci-static/resources/view/autovpn/setup.js
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/maintenance.js $(1)/www/luci-static/resources/view/autovpn/maintenance.js
+	$(INSTALL_DATA) ./files/www/luci-static/resources/view/autovpn/diagnostics.js $(1)/www/luci-static/resources/view/autovpn/diagnostics.js
 endef
 
 define Package/autovpn-controller/postinst

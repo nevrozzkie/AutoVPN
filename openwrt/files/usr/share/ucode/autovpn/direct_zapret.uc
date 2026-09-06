@@ -29,7 +29,8 @@ function validMedia(value) {
 }
 
 function validWeb(value) {
-	return index(['upstream', 'legacy-split', 'legacy-split-badsum'], value.web_strategy) >= 0;
+	return index(['upstream', 'legacy-split', 'legacy-split-badsum',
+		'blockcheck-fake', 'blockcheck-fake-multisplit'], value.web_strategy) >= 0;
 }
 
 function validPlan(value) {
@@ -38,8 +39,11 @@ function validPlan(value) {
 	if (exact(value, ['version', 'wan_device', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
 		value.version == 2)
 		return validWan(value.wan_device) && validMedia(value);
-	return exact(value, ['version', 'wan_device', 'web_strategy', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
-		value.version == 3 && validWan(value.wan_device) && validWeb(value) && validMedia(value);
+	if (exact(value, ['version', 'wan_device', 'web_strategy', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
+		value.version == 3) return validWan(value.wan_device) && validWeb(value) && validMedia(value);
+	return exact(value, ['version', 'wan_device', 'web_strategy', 'quic_mode', 'discord_media', 'stun',
+		'media_strategy', 'media_repeats']) && value.version == 4 && validWan(value.wan_device) && validWeb(value) &&
+		index(['process', 'block'], value.quic_mode) >= 0 && validMedia(value);
 }
 
 function plan(wan, enabled, media) {
@@ -48,12 +52,16 @@ function plan(wan, enabled, media) {
 	if (media != null) {
 		let legacy = exact(media, ['discord_media', 'stun', 'media_strategy', 'media_repeats']);
 		let current = exact(media, ['web_strategy', 'discord_media', 'stun', 'media_strategy', 'media_repeats']);
-		if ((!legacy && !current) || !validMedia(media) || (current && !validWeb(media)))
+		let currentQuic = exact(media, ['web_strategy', 'quic_mode', 'discord_media', 'stun', 'media_strategy', 'media_repeats']);
+		if ((!legacy && !current && !currentQuic) || !validMedia(media) ||
+			((current || currentQuic) && !validWeb(media)) ||
+			(currentQuic && index(['process', 'block'], media.quic_mode) < 0))
 			return false;
-		value = { version: 3, wan_device: wan,
-			web_strategy: media.web_strategy == null ? 'upstream' : media.web_strategy,
+		value = { version: currentQuic ? 4 : (current ? 3 : 2), wan_device: wan,
 			discord_media: media.discord_media,
 			stun: media.stun, media_strategy: media.media_strategy, media_repeats: media.media_repeats };
+		if (current || currentQuic) value.web_strategy = media.web_strategy == null ? 'upstream' : media.web_strategy;
+		if (currentQuic) value.quic_mode = media.quic_mode;
 	}
 	return validPlan(value) ? value : false;
 }
@@ -68,11 +76,16 @@ function mediaConfig(value, protocol, ports, payload) {
 function config(value) {
 	if (!validPlan(value)) return null;
 	let upstream = value.version >= 3 && value.web_strategy == 'upstream';
+	let blockcheckFake = value.version >= 3 && value.web_strategy == 'blockcheck-fake';
+	let blockcheckMulti = value.version >= 3 && value.web_strategy == 'blockcheck-fake-multisplit';
 	let quicBadSum = value.version < 3 || value.web_strategy == 'legacy-split-badsum';
 	let tcpStrategy = upstream ?
 		'--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-10000\n--lua-desync=multidisorder:pos=1,midsld' :
-		'--lua-desync=multisplit:pos=1,midsld';
-	return join('\n', [
+		blockcheckFake ? '--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000' :
+		blockcheckMulti ? '--lua-desync=fake:blob=0x00000000:tcp_md5:repeats=1\n' +
+			'--lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,dupsid:repeats=1\n' +
+			'--lua-desync=multisplit:pos=2' : '--lua-desync=multisplit:pos=1,midsld';
+	let profiles = [
 		'--qnum=' + QUEUE,
 		'--fwmark=0x40000000',
 		'--bind-fix4',
@@ -85,15 +98,15 @@ function config(value) {
 		'--out-range=-n12',
 		'--payload=tls_client_hello,http_req',
 		tcpStrategy,
-		'--new',
-		'--filter-l3=ipv4',
-		'--filter-udp=443',
-		'--filter-l7=quic',
-		'--in-range=x',
-		'--out-range=-n12',
-		'--payload=quic_initial',
-		'--lua-desync=fake:blob=fake_default_quic' + (quicBadSum ? ':badsum' : '') + ':repeats=' + (upstream ? '6' : '2'),
-	]) + (value.discord_media ? mediaConfig(value, 'discord', DISCORD_PORTS, 'discord_ip_discovery') : '') +
+	];
+	if (value.version < 4 || value.quic_mode == 'process') {
+		let quic = ['--new', '--filter-l3=ipv4', '--filter-udp=443', '--filter-l7=quic', '--in-range=x',
+			'--out-range=-n12', '--payload=quic_initial',
+			'--lua-desync=fake:blob=fake_default_quic' + (quicBadSum ? ':badsum' : '') +
+				':repeats=' + ((blockcheckFake || blockcheckMulti) ? '11' : (upstream ? '6' : '2'))];
+		for (let i = 0; i < length(quic); i++) push(profiles, quic[i]);
+	}
+	return join('\n', profiles) + (value.discord_media ? mediaConfig(value, 'discord', DISCORD_PORTS, 'discord_ip_discovery') : '') +
 		(value.stun ? mediaConfig(value, 'stun', '1-65535', 'stun') : '') + '\n';
 }
 
@@ -152,12 +165,12 @@ function nft(value) {
 		media +
 		' ' + scope + webUnmarked + ' udp dport 443' + (value.version >= 3 ?
 			' udp length >= 264 @ih,0,4 0x0000000C @ih,8,32 0x00000001' : '') +
-			' ct original packets 1-12' + queue + '\n' +
+			(value.version >= 4 && value.quic_mode == 'block' ? ' drop\n' : ' ct original packets 1-12' + queue + '\n') +
 		' ' + scope + unmarked + ' tcp dport { 80, 443 } ct original packets 1-12' + queue + '\n' +
 		' ' + scope + unmarked + ' tcp dport { 80, 443 } tcp flags & (fin | rst) != 0' + queue + '\n }\n' +
 		' chain raw {\n type filter hook output priority -401; policy accept;\n' +
 		mediaRaw +
-		' ' + raw + ' udp dport 443 notrack\n' +
+		(value.version < 4 || value.quic_mode == 'process' ? ' ' + raw + ' udp dport 443 notrack\n' : '') +
 		' ' + raw + ' tcp dport { 80, 443 } notrack\n }\n}\n';
 }
 
