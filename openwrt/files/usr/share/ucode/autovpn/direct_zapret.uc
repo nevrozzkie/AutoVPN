@@ -22,17 +22,17 @@ function validWan(value) {
 			'br-avpn', 'br-avpnz', 'br-avpnd', BRIDGE], value) < 0;
 }
 
+function validMedia(value) {
+	return type(value.discord_media) == 'bool' && type(value.stun) == 'bool' &&
+		index(['fake', 'fake_badsum'], value.media_strategy) >= 0 &&
+		type(value.media_repeats) == 'int' && value.media_repeats >= 1 && value.media_repeats <= 6;
+}
+
 function validPlan(value) {
 	if (exact(value, ['version', 'wan_device']) && value.version == 1)
 		return validWan(value.wan_device);
 	return exact(value, ['version', 'wan_device', 'discord_media', 'stun', 'media_strategy', 'media_repeats']) &&
 		value.version == 2 && validWan(value.wan_device) && validMedia(value);
-}
-
-function validMedia(value) {
-	return type(value.discord_media) == 'bool' && type(value.stun) == 'bool' &&
-		index(['fake', 'fake_badsum'], value.media_strategy) >= 0 &&
-		type(value.media_repeats) == 'int' && value.media_repeats >= 1 && value.media_repeats <= 6;
 }
 
 function plan(wan, enabled, media) {

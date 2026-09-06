@@ -12,6 +12,8 @@ const SERVICE = '/etc/init.d/autovpn-direct-zapret';
 const NFT = '/usr/sbin/nft';
 const TABLE = 'autovpn_direct_zapret';
 const NETWORK_HELPER = '/usr/libexec/autovpn/network-helper.uc';
+let REPORT_ENABLED = null;
+let VALIDATE_ERROR = null;
 
 function call(argv, limit) {
 	let child = runner.popen(argv, 'r');
@@ -111,13 +113,17 @@ function setting() {
 	return { ok: value !== false, value: value, enabled: true };
 }
 function validate(value) {
+	VALIDATE_ERROR = null;
 	if (value == null) return true;
-	if (!direct.validPlan(value) || access(ENGINE + '/nfqws2', 'x') !== true ||
-		access(ENGINE + '/zapret-lib.lua', 'r') !== true ||
-		access(ENGINE + '/zapret-antidpi.lua', 'r') !== true || !directory()) return false;
-	if (!write('check.conf', direct.config(value) + '--intercept=0\n')) return false;
+	if (!direct.validPlan(value)) { VALIDATE_ERROR = 'direct_plan_invalid'; return false; }
+	if (access(ENGINE + '/nfqws2', 'x') !== true) { VALIDATE_ERROR = 'nfqws_unavailable'; return false; }
+	if (access(ENGINE + '/zapret-lib.lua', 'r') !== true ||
+		access(ENGINE + '/zapret-antidpi.lua', 'r') !== true) { VALIDATE_ERROR = 'zapret_lua_unavailable'; return false; }
+	if (!directory()) { VALIDATE_ERROR = 'direct_runtime_unavailable'; return false; }
+	if (!write('check.conf', direct.config(value) + '--intercept=0\n')) { VALIDATE_ERROR = 'direct_check_write_failed'; return false; }
 	let ok = command([ENGINE + '/nfqws2', '@' + ROOT + '/check.conf']);
 	unlink(ROOT + '/check.conf');
+	if (!ok) VALIDATE_ERROR = 'nfqws_validation_failed';
 	return ok;
 }
 function check(value) {
@@ -176,12 +182,11 @@ function run() {
 }
 
 let ok = false;
-let REPORT_ENABLED = null;
 try { ok = run(); } catch (e) {
 	if (ARGV[0] == 'up') try { closeGuard(); } catch (ignored) {}
 	ok = false;
 }
-let response = ok ? { ok: true } : { ok: false, code: 'direct_zapret_unavailable' };
+let response = ok ? { ok: true } : { ok: false, code: VALIDATE_ERROR || 'direct_zapret_unavailable' };
 if (ARGV[0] == 'check' && type(REPORT_ENABLED) == 'bool') response.enabled = REPORT_ENABLED;
 printf('%J\n', response);
 exit(ok ? 0 : 1);

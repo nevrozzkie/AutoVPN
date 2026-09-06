@@ -162,9 +162,16 @@ def _validate_diagnostic_value(
                 for part in _FORBIDDEN_KEY_PARTS
             ):
                 raise RouterApplyValidationError("Diagnostic key may contain secret material")
-            validated[key] = _validate_diagnostic_value(
-                child, depth=depth + 1, budget=budget
-            )
+            if (
+                normalized_key in {"code", "stage"}
+                and isinstance(child, str)
+                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", child)
+            ):
+                validated[key] = child
+            else:
+                validated[key] = _validate_diagnostic_value(
+                    child, depth=depth + 1, budget=budget
+                )
         return validated
     raise RouterApplyValidationError("Diagnostics contain an unsupported value")
 

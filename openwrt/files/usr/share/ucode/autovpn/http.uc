@@ -166,7 +166,7 @@ function diagnosticValue(value, depth, budget) {
 		return length(value) <= 500 && match(value, /^[\x20-\x7e]*$/) != null &&
 			index(value, '<') < 0 && index(value, '>') < 0 &&
 			match(lc(value), /(authorization:|bearer |password=|private key|presharedkey|avrt_|vless:\/\/|hy2:\/\/|vpn:\/\/)/) == null &&
-			match(value, /^[A-Za-z0-9_+\/=-]{32,256}$/) == null &&
+			(length(value) < 32 || length(value) > 256 || match(value, /^[A-Za-z0-9_+\/=-]+$/) == null) &&
 			match(value, /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/) == null;
 	if (type(value) == 'array') {
 		if (length(value) > 32)
@@ -182,11 +182,13 @@ function diagnosticValue(value, depth, budget) {
 		for (let key in value) {
 			let normalized = replace(lc(key), /-/g, '_');
 			let compact = replace(normalized, /_/g, '');
+			let statusValue = (normalized == 'code' || normalized == 'stage') &&
+				type(value[key]) == 'string' && match(value[key], /^[a-z][a-z0-9_]{0,63}$/) != null;
 			if (length(key) < 1 || length(key) > 64 || match(key, /^[\x20-\x7e]+$/) == null ||
 				index(key, '<') >= 0 || index(key, '>') >= 0 ||
 				match(normalized, /(authorization|cookie|password|privatekey|private_key|preshared|secret|token)/) != null ||
 				match(compact, /(authorization|cookie|password|privatekey|preshared|secret|token)/) != null ||
-				!diagnosticValue(value[key], depth + 1, budget))
+				(!statusValue && !diagnosticValue(value[key], depth + 1, budget)))
 				return false;
 		}
 		return true;

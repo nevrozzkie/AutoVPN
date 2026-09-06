@@ -17,9 +17,10 @@ const OWNED = ROOT + '/awg-owned';
 /* Preserve primary ownership metadata byte-for-byte; secondary is disjoint. */
 const ALIAS = LANE != null && LANE.id == 'vpn_zapret' ? 'autovpn-awg-zapret-v1' : 'autovpn-awg-v1';
 /*
- * Keep a durable intent before creating the device. iproute2 puts the alias
- * and link type in the same RTM_NEWLINK request, so a post-crash cleanup can
- * require marker + alias + type without ever claiming an arbitrary avpnwg0.
+ * Keep a durable intent before creating the device. Some AmneziaWG kernels
+ * ignore IFLA_IFALIAS in RTM_NEWLINK, so set and verify the alias immediately
+ * after creation. Cleanup still requires marker + alias + type and therefore
+ * never claims an arbitrary avpnwg0.
  */
 const MARKER = ALIAS + '\n';
 const IP = '/sbin/ip';
@@ -31,6 +32,13 @@ const MODPROBE = '/sbin/modprobe';
  * make us guess which wire format a kernel accepts.
  */
 const ENGINE_RECEIPT = '/usr/share/autovpn/awg-engine.json';
+
+function hasExactKeys(value, expected) {
+	if (type(value) != 'object') return false;
+	let actual = sort(keys(value));
+	let wanted = sort(expected);
+	return join(',', actual) == join(',', wanted);
+}
 
 function engineMode() {
 	let info = lstat(ENGINE_RECEIPT);
@@ -64,12 +72,6 @@ function output(argv, limit) {
 	if (pipe == null) return null;
 	let value = pipe.read(limit + 1) || '';
 	return pipe.close() == 0 && length(value) <= limit ? value : null;
-}
-function hasExactKeys(value, expected) {
-	if (type(value) != 'object') return false;
-	let actual = sort(keys(value));
-	let wanted = sort(expected);
-	return join(',', actual) == join(',', wanted);
 }
 function key(value) { return type(value) == 'string' && match(value, /^[A-Za-z0-9+\/]{43}=$/) != null; }
 function ipv4Cidr(value) {
@@ -169,8 +171,14 @@ function moduleReady() {
 	if (access('/sys/module/amneziawg') === true) return true;
 	return command([MODPROBE, 'amneziawg']) && access('/sys/module/amneziawg') === true;
 }
+function availabilityError() {
+	if (engineMode() == null) return 'engine_receipt_invalid';
+	if (awgBin() == null) return 'awg_tools_unavailable';
+	if (!moduleReady()) return 'amneziawg_module_unavailable';
+	return null;
+}
 function available() {
-	return engineMode() != null && awgBin() != null && moduleReady();
+	return availabilityError() == null;
 }
 function down() {
 	/* Never delete an interface that was not created by this controller. */
@@ -193,8 +201,13 @@ function up(path) {
 	if (!available() || !down()) return false;
 	/* Refuse a foreign/orphan link before recording a new creation intent. */
 	if (access('/sys/class/net/' + DEVICE) === true || !privateWrite(OWNED, MARKER)) return false;
-	if (!command([IP, 'link', 'add', 'dev', DEVICE, 'alias', ALIAS, 'type', 'amneziawg']))
+	if (!command([IP, 'link', 'add', 'dev', DEVICE, 'type', 'amneziawg']))
 		return false;
+	if (!command([IP, 'link', 'set', 'dev', DEVICE, 'alias', ALIAS])) {
+		command([IP, 'link', 'del', 'dev', DEVICE]);
+		unlink(OWNED);
+		return false;
+	}
 	let peer = value.peer;
 	let o = value.obfuscation;
 	let config = '[Interface]\nPrivateKey = ' + value.interface.private_key + '\n' +
@@ -223,14 +236,22 @@ function up(path) {
 function check(path) {
 	let value = profile(path);
 	let awg = awgBin();
-	return engineMode() != null && awg != null && valid(value) && marker() && link() === true && command([awg, 'show', DEVICE]);
+	return engineMode() != null && awg != null && valid(value) && marker() && link() === true &&
+		output([awg, 'show', DEVICE], 32768) != null;
 }
 
 let action = ARGV[0];
 let result = false;
+let code = null;
 if (LANE != null && action == 'down') result = down();
 else if (LANE != null && action == 'up' && type(ARGV[1]) == 'string' && ARGV[1] == ROOT + '/awg.json') result = up(ARGV[1]);
 else if (LANE != null && action == 'check' && type(ARGV[1]) == 'string' && ARGV[1] == ROOT + '/awg.json') result = check(ARGV[1]);
-else if (LANE != null && action == 'available') result = available();
-printf('{"ok":%s}\n', result ? 'true' : 'false');
+else if (LANE != null && action == 'available') {
+	code = availabilityError();
+	result = code == null;
+}
+if (result)
+	printf('{"ok":true}\n');
+else
+	printf('{"ok":false,"code":"%s"}\n', code || 'amneziawg_operation_failed');
 exit(result ? 0 : 1);

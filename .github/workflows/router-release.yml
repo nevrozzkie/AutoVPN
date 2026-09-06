@@ -1,0 +1,132 @@
+name: Router release
+
+on:
+  push:
+    tags:
+      - "router-v*-openwrt-25.12.5-r*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: router-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SDK_URL: https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/openwrt-sdk-25.12.5-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+      SDK_SHA256: ff4a38a397caa2cfe1c39e18f84ddede14878221b3593c3f2c4cfe24e3ec4c25
+      PREVIOUS_RELEASE_BASE: https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.6-openwrt-25.12.5-r1
+      PUBLIC_KEY_SHA256: 8de142b46bef77db5dec1fe7b3c0395020dc5868c9961831aabb9607ec94e97a
+      AWG_TOOLS_SHA256: 3514ec4fdfad03646be865615720c2abafc4de6fda892e3397d81ec8cfbbec0c
+      AWG_KMOD_SHA256: f018cb5bb959708a4efe25c4bd2c8ea304baa3f0690d37bcd87941aaef64a456
+      RELEASE_TAG: ${{ github.ref_name }}
+      APK_SIGNING_KEY: ${{ secrets.AUTOVPN_APK_SIGNING_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check release tag and source version
+        run: |
+          set -eu
+          version="$(sed -n 's/^PKG_VERSION:=//p' openwrt/Makefile)"
+          expected="router-v${version}-openwrt-25.12.5-r1"
+          test "$RELEASE_TAG" = "$expected"
+          test -n "$APK_SIGNING_KEY"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib gettext git libncurses-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget zstd
+
+      - name: Download and verify pinned inputs
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/downloads"
+          cd "$RUNNER_TEMP/downloads"
+          curl --fail --location --retry 4 --output sdk.tar.zst "$SDK_URL"
+          printf '%s  %s\n' "$SDK_SHA256" sdk.tar.zst | sha256sum --check
+          curl --fail --location --retry 4 --output autovpn-signing.pem "$PREVIOUS_RELEASE_BASE/autovpn-signing.pem"
+          curl --fail --location --retry 4 --output amneziawg-tools-1.0.20250903-r1.apk "$PREVIOUS_RELEASE_BASE/amneziawg-tools-1.0.20250903-r1.apk"
+          curl --fail --location --retry 4 --output kmod-amneziawg-6.12.94.1.0.20251004-r1.apk "$PREVIOUS_RELEASE_BASE/kmod-amneziawg-6.12.94.1.0.20251004-r1.apk"
+          printf '%s  %s\n' "$PUBLIC_KEY_SHA256" autovpn-signing.pem | sha256sum --check
+          printf '%s  %s\n' "$AWG_TOOLS_SHA256" amneziawg-tools-1.0.20250903-r1.apk | sha256sum --check
+          printf '%s  %s\n' "$AWG_KMOD_SHA256" kmod-amneziawg-6.12.94.1.0.20251004-r1.apk | sha256sum --check
+
+      - name: Prepare SDK
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar --zstd -xf "$RUNNER_TEMP/downloads/sdk.tar.zst" -C "$RUNNER_TEMP/sdk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/sdk/package/autovpn-controller"
+          cp openwrt/Makefile openwrt/LICENSE "$RUNNER_TEMP/sdk/package/autovpn-controller/"
+          cp -R openwrt/files "$RUNNER_TEMP/sdk/package/autovpn-controller/files"
+          cat > "$RUNNER_TEMP/sdk/.config" <<'EOF'
+          # CONFIG_ALL is not set
+          # CONFIG_ALL_NONSHARED is not set
+          # CONFIG_ALL_KMODS is not set
+          # CONFIG_AUTOREBUILD is not set
+          # CONFIG_AUTOREMOVE is not set
+          CONFIG_SIGNED_PACKAGES=y
+          CONFIG_PACKAGE_autovpn-controller=m
+          EOF
+          make -C "$RUNNER_TEMP/sdk" -j1 defconfig
+
+      - name: Build and sign controller APK
+        run: |
+          set -eu
+          make -C "$RUNNER_TEMP/sdk" -j1 package/autovpn-controller/compile V=s NO_DEPS=1
+          unsigned="$(find "$RUNNER_TEMP/sdk/bin/packages" -type f -name 'autovpn-controller-0.14.7-r1.apk' -print -quit)"
+          test -n "$unsigned"
+          mkdir -p "$RUNNER_TEMP/release-input" "$RUNNER_TEMP/verify-key"
+          cp "$unsigned" "$RUNNER_TEMP/release-input/autovpn-controller-0.14.7-r1.apk"
+          printf '%s\n' "$APK_SIGNING_KEY" > "$RUNNER_TEMP/private-key.pem"
+          chmod 0600 "$RUNNER_TEMP/private-key.pem"
+          openssl pkey -in "$RUNNER_TEMP/private-key.pem" -pubout -out "$RUNNER_TEMP/derived-public.pem"
+          cmp "$RUNNER_TEMP/derived-public.pem" "$RUNNER_TEMP/downloads/autovpn-signing.pem"
+          cp "$RUNNER_TEMP/downloads/autovpn-signing.pem" "$RUNNER_TEMP/verify-key/autovpn-signing.pem"
+          apk_cli="$RUNNER_TEMP/sdk/staging_dir/host/bin/apk"
+          "$apk_cli" adbsign --allow-untrusted --reset-signatures --sign-key "$RUNNER_TEMP/private-key.pem" "$RUNNER_TEMP/release-input/autovpn-controller-0.14.7-r1.apk"
+          "$apk_cli" verify --keys-dir "$RUNNER_TEMP/verify-key" "$RUNNER_TEMP/release-input/autovpn-controller-0.14.7-r1.apk"
+
+      - name: Assemble release assets
+        run: |
+          set -eu
+          cp "$RUNNER_TEMP/downloads/"amneziawg-tools-*.apk "$RUNNER_TEMP/release-input/"
+          cp "$RUNNER_TEMP/downloads/"kmod-amneziawg-*.apk "$RUNNER_TEMP/release-input/"
+          python3 openwrt/scripts/prepare-release.py \
+            --apk "$RUNNER_TEMP/sdk/staging_dir/host/bin/apk" \
+            --release 25.12.5 \
+            --target mediatek/filogic \
+            --architecture aarch64_cortex-a53 \
+            --kernel-release 6.12.94 \
+            --kernel-package '6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1' \
+            --release-base "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}" \
+            --signing-key "$RUNNER_TEMP/downloads/autovpn-signing.pem" \
+            --package "$RUNNER_TEMP/release-input/autovpn-controller-0.14.7-r1.apk" \
+            --package "$RUNNER_TEMP/release-input/amneziawg-tools-1.0.20250903-r1.apk" \
+            --package "$RUNNER_TEMP/release-input/kmod-amneziawg-6.12.94.1.0.20251004-r1.apk" \
+            --min-free-kib 38912 \
+            --min-tmp-kib 65536 \
+            --output "$RUNNER_TEMP/router-release"
+          cd "$RUNNER_TEMP/router-release"
+          sha256sum ./* > SHA256SUMS
+
+      - name: Publish immutable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && {
+            echo "Release already exists; refusing to replace immutable assets." >&2
+            exit 1
+          }
+          gh release create "$RELEASE_TAG" "$RUNNER_TEMP/router-release/"* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "AutoVPN router 0.14.7 for OpenWrt 25.12.5" \
+            --notes "OpenWrt 25.12.5 package release for Cudy WR3000S v1. Reuses the established AutoVPN APK signing trust root and the unchanged AmneziaWG packages from 0.14.6."

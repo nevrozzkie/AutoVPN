@@ -72,6 +72,10 @@ closed() {
 	[ "$guard_ok" -eq 1 ]
 }
 helper() { ucode "$HELPER" "$1" "$JOURNAL" "${2:-}" "$LANE" 2>/dev/null >"$SCRATCH/result.json"; }
+helper_error() {
+	value="$(jsonfilter -i "$SCRATCH/result.json" -e '@.code' 2>/dev/null || true)"
+	case "$value" in ''|*[!a-z0-9_]*) printf runtime_helper_failed ;; *) printf '%s' "$value" ;; esac
+}
 empty() { grep -Eq '"empty"[[:space:]]*:[[:space:]]*true' "$SCRATCH/result.json"; }
 zapret() {
 	# Explicit helper state always wins over stale files from another schema.
@@ -100,8 +104,9 @@ awg_healthy() {
 }
 
 routes() {
+	ROUTE_ERROR=route_setup_failed
 	# Fixed table/priority ownership. Refuse collisions; never flush a route table.
-	ip -4 rule show >"$SCRATCH/rules.txt" 2>/dev/null || return 1
+	ip -4 rule show >"$SCRATCH/rules.txt" 2>/dev/null || { ROUTE_ERROR=route_rule_read_failed; return 1; }
 	for priority in "$ROUTE_PRIORITY" "$UNREACHABLE_PRIORITY"; do
 		lines="$(grep -E "^$priority:" "$SCRATCH/rules.txt" || true)"
 		if [ "$priority" = "$ROUTE_PRIORITY" ]; then
@@ -109,20 +114,21 @@ routes() {
 		else
 			expected="$priority: from all iif $BRIDGE unreachable"
 		fi
-		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | tr -s '[:space:]' ' ')" = "$expected" ] || return 1
+		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | sed 's/[[:space:]][[:space:]]*/ /g')" = "$expected" ] || { ROUTE_ERROR=route_rule_collision; return 1; }
 	done
 	# Dump all tables: querying an empty numbered table alone can return ENOENT.
 	# Numeric output also prevents rt_tables aliases from hiding a collision.
-	ip -N -4 route show table all >"$SCRATCH/all-routes.txt" 2>/dev/null || return 1
+	ip -N -4 route show table all >"$SCRATCH/all-routes.txt" 2>/dev/null || { ROUTE_ERROR=route_table_read_failed; return 1; }
 	grep -E " table $ROUTE_TABLE( |$)" "$SCRATCH/all-routes.txt" >"$SCRATCH/routes.txt" || true
 	while IFS= read -r route; do
+		route="$(printf '%s' "$route" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
 		[ "$route" = "default dev $TUN table $ROUTE_TABLE" ] ||
-			[ "$route" = "default dev $TUN table $ROUTE_TABLE scope 253" ] || return 1
+			[ "$route" = "default dev $TUN table $ROUTE_TABLE scope 253" ] || { ROUTE_ERROR=route_table_collision; return 1; }
 	done <"$SCRATCH/routes.txt"
 	# The unreachable rule survives TUN disappearance, preventing main-table fallback.
-	grep -q "^$UNREACHABLE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$UNREACHABLE_PRIORITY" iif "$BRIDGE" unreachable || return 1
-	grep -q "^$ROUTE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$ROUTE_PRIORITY" iif "$BRIDGE" lookup "$ROUTE_TABLE" || return 1
-	ip -4 route replace default dev "$TUN" table "$ROUTE_TABLE" >/dev/null 2>&1 || return 1
+	grep -q "^$UNREACHABLE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$UNREACHABLE_PRIORITY" iif "$BRIDGE" unreachable || { ROUTE_ERROR=route_unreachable_rule_failed; return 1; }
+	grep -q "^$ROUTE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$ROUTE_PRIORITY" iif "$BRIDGE" lookup "$ROUTE_TABLE" || { ROUTE_ERROR=route_lan_rule_failed; return 1; }
+	ip -4 route replace default dev "$TUN" table "$ROUTE_TABLE" >/dev/null 2>&1 || { ROUTE_ERROR=route_tun_default_failed; return 1; }
 	if ! awg_active; then return 0; fi
 	# sing-box marks plaintext entering the AWG device. AWG marks its own UDP
 	# socket differently, so the encrypted outer packet keeps the WAN route.
@@ -133,55 +139,57 @@ routes() {
 		else
 			expected="$priority: from all fwmark $AWG_MARK_HEX unreachable"
 		fi
-		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | tr -s '[:space:]' ' ')" = "$expected" ] || return 1
+		[ -z "$lines" ] || [ "$(printf '%s' "$lines" | sed 's/[[:space:]][[:space:]]*/ /g')" = "$expected" ] || { ROUTE_ERROR=route_awg_rule_collision; return 1; }
 	done
 	grep -E " table $AWG_TABLE( |$)" "$SCRATCH/all-routes.txt" >"$SCRATCH/awg-routes.txt" || true
 	while IFS= read -r route; do
+		route="$(printf '%s' "$route" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
 		[ "$route" = "default dev $AWG_DEVICE table $AWG_TABLE" ] ||
-			[ "$route" = "default dev $AWG_DEVICE table $AWG_TABLE scope 253" ] || return 1
+			[ "$route" = "default dev $AWG_DEVICE table $AWG_TABLE scope 253" ] || { ROUTE_ERROR=route_awg_table_collision; return 1; }
 	done <"$SCRATCH/awg-routes.txt"
-	grep -q "^$AWG_UNREACHABLE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$AWG_UNREACHABLE_PRIORITY" fwmark "$AWG_TABLE" unreachable || return 1
-	grep -q "^$AWG_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$AWG_PRIORITY" fwmark "$AWG_TABLE" lookup "$AWG_TABLE" || return 1
+	grep -q "^$AWG_UNREACHABLE_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$AWG_UNREACHABLE_PRIORITY" fwmark "$AWG_TABLE" unreachable || { ROUTE_ERROR=route_awg_unreachable_rule_failed; return 1; }
+	grep -q "^$AWG_PRIORITY:" "$SCRATCH/rules.txt" || ip -4 rule add priority "$AWG_PRIORITY" fwmark "$AWG_TABLE" lookup "$AWG_TABLE" || { ROUTE_ERROR=route_awg_rule_failed; return 1; }
 	# An unavailable optional AWG candidate must neither leak through WAN nor
 	# prevent routing the currently selected VLESS/Hysteria tunnel.
 	ip link show dev "$AWG_DEVICE" >/dev/null 2>&1 || { ! selected_awg; return; }
-	ip -4 route replace default dev "$AWG_DEVICE" table "$AWG_TABLE" >/dev/null 2>&1
+	ip -4 route replace default dev "$AWG_DEVICE" table "$AWG_TABLE" >/dev/null 2>&1 || { ROUTE_ERROR=route_awg_default_failed; return 1; }
 }
 start() {
 	local hard_awg_failure=0 fallback_profile
-	closed || return 1
+	START_ERROR=runtime_activation_failed
+	closed || { START_ERROR=runtime_close_failed; return 1; }
 	# The scoped queue/listener must exist before AWG or sing-box send a handshake.
-	zapret up || return 1
+	zapret up || { START_ERROR=transport_zapret_start_failed; return 1; }
 	if awg_active && ! awg_up; then
-		[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down '' "$LANE" >/dev/null 2>&1 || return 1
+		[ ! -f "$ROOT/awg-owned" ] || ucode "$AWG_HELPER" down '' "$LANE" >/dev/null 2>&1 || { START_ERROR=amneziawg_cleanup_failed; return 1; }
 		if selected_awg; then
 			# A kernel-interface failure is definite, not a slow-network sample.
 			# Stage a non-AWG probe runtime; manual AWG is deliberately refused.
-			helper fallback-awg || return 1
+			helper fallback-awg || { START_ERROR="amneziawg_fallback_$(helper_error)"; return 1; }
 			hard_awg_failure=1
 		else
-			helper disable-awg || return 1
+			helper disable-awg || { START_ERROR="amneziawg_disable_$(helper_error)"; return 1; }
 		fi
-		check || return 1
-		zapret up || return 1
+		check || { START_ERROR=fallback_config_check_failed; return 1; }
+		zapret up || { START_ERROR=transport_zapret_restart_failed; return 1; }
 	fi
 	if awg_active; then
-		cp "$ROOT/awg.json" "$ROOT/awg-run.json.new" || return 1
-		mv "$ROOT/awg-run.json.new" "$ROOT/awg-run.json" || return 1
+		cp "$ROOT/awg.json" "$ROOT/awg-run.json.new" || { START_ERROR=amneziawg_state_copy_failed; return 1; }
+		mv "$ROOT/awg-run.json.new" "$ROOT/awg-run.json" || { START_ERROR=amneziawg_state_commit_failed; return 1; }
 	else
 		rm -f "$ROOT/awg-run.json"
 	fi
-	cp "$ROOT/candidate.json" "$ROOT/run.json.new" || return 1
-	mv "$ROOT/run.json.new" "$ROOT/run.json" || return 1
-	"$SERVICE" start >/dev/null 2>&1 || return 1
+	cp "$ROOT/candidate.json" "$ROOT/run.json.new" || { START_ERROR=runtime_config_copy_failed; return 1; }
+	mv "$ROOT/run.json.new" "$ROOT/run.json" || { START_ERROR=runtime_config_commit_failed; return 1; }
+	"$SERVICE" start >/dev/null 2>&1 || { START_ERROR=tunnel_service_start_failed; return 1; }
 	attempt=0
 	while ! ip link show dev "$TUN" >/dev/null 2>&1; do
 		attempt=$((attempt + 1))
-		[ "$attempt" -lt 6 ] || return 1
+		[ "$attempt" -lt 6 ] || { START_ERROR=tunnel_device_missing; return 1; }
 		sleep 1
 	done
-	"$SERVICE" running >/dev/null 2>&1 || return 1
-	routes || return 1
+	"$SERVICE" running >/dev/null 2>&1 || { START_ERROR=tunnel_service_not_running; return 1; }
+	routes || { START_ERROR="$ROUTE_ERROR"; return 1; }
 	if [ "$hard_awg_failure" -eq 1 ]; then
 		ucode "$PROBE_HELPER" bootstrap "$JOURNAL" '' "$LANE" >"$SCRATCH/probe-result.json" 2>/dev/null || return 1
 		fallback_profile="$(jsonfilter -i "$SCRATCH/probe-result.json" -e '@.next_profile' 2>/dev/null || true)"
@@ -300,7 +308,7 @@ case "${1:-}" in
 		if empty; then closed || error fail_closed_unconfirmed; cat "$SCRATCH/result.json"; exit 0; fi
 		preflight || error runtime_preflight_failed
 		check || error sing_box_check_failed
-		start || error runtime_activation_failed
+		start || error "$START_ERROR"
 		ok
 		;;
 	verify)
@@ -324,7 +332,7 @@ case "${1:-}" in
 		if [ "$1" = restore ] && cmp -s "$ROOT/candidate.json" "$ROOT/run.json" && \
 			{ ! selected_awg || awg_healthy; } && zapret check && \
 			"$SERVICE" running >/dev/null 2>&1 && ip link show dev "$TUN" >/dev/null 2>&1; then
-			routes || error route_restore_failed
+			routes || error "$ROUTE_ERROR"
 			# Reusing a committed runtime must not bypass failure hysteresis or
 			# reselect a faster candidate on subscription refresh.
 			cat "$SCRATCH/result.json"
@@ -351,7 +359,7 @@ case "${1:-}" in
 			check && start || { closed || true; error runtime_restore_failed; }
 		fi
 		# procd may have recreated TUN since the last round, losing its routes.
-		routes || { closed || true; error route_restore_failed; }
+		routes || { route_error="$ROUTE_ERROR"; closed || true; error "$route_error"; }
 		monitor health || { closed || true; error health_check_failed; }
 		helper status || { closed || true; error runtime_bundle_mismatch; }
 		cat "$SCRATCH/result.json"
