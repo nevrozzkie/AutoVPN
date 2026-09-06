@@ -34,7 +34,7 @@ function validCredential(value) {
 
 function validBaseUrl(value) {
 	return type(value) == 'string' && length(value) <= 255 &&
-		match(value, /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%\/-]*)?$/) != null;
+		match(value, /^https:\/\/[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?(\/[A-Za-z0-9._~!$&'()*+,;=:@%\/-]*)?$/) != null;
 }
 
 function presence(path) {

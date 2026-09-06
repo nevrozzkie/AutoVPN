@@ -78,6 +78,15 @@ function maintenanceRequest(nonce, extra = {}) {
 	};
 }
 
+test('setup RPC reports controller contention instead of a missing setup result', () => {
+	const env = fixture({ behavior: call => call.mode === 'r'
+		? { output: JSON.stringify({ l3_device: 'pppoe-wan' }) }
+		: { status: 75 } });
+	const result = env.api.setup_configure.call(maintenanceRequest(env.nonce));
+	assert.deepEqual(result, { ok: false, code: 'busy' });
+	assert.equal(env.files.size, 0);
+});
+
 test('maintenance RPC sends the credential only through stdin, never argv or its result', () => {
 	const env = fixture({
 		behavior: () => ({ status: 0, result: JSON.stringify({ ok: true, rotated: true }) })

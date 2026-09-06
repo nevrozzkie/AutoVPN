@@ -5,16 +5,16 @@
 
 ## Что уже готово и что ещё нельзя считать проверенным
 
-Controller 0.14.2, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
+Controller 0.14.3, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`. Требуемый пакет kernel:
 `6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1`.
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Доступен [предварительный установочный релиз 0.14.2](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.2-openwrt-25.12.5-r1).
-Он сохраняет исправления ucode и APK-архитектуры из 0.14.1 и заменяет вызов
-отсутствующего BusyBox applet `timeout` на `/usr/bin/timeout` из уже объявленной
-зависимости `coreutils-timeout`. AmneziaWG APK не изменены.
+Доступен [предварительный установочный релиз 0.14.3](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.3-openwrt-25.12.5-r1).
+Он сохраняет исправления предыдущих выпусков, заменяет бесхозные процессы
+блокировки на дескрипторный `flock` и исправляет несовместимые с native ucode
+проверки URL и SSID, вызывавшие `setup_failed`. AmneziaWG APK не изменены.
 Установщик по-прежнему устанавливает `coreutils-stty` для скрытого ввода пароля.
 Команда ниже загружает готовый установщик из него. Нельзя просто
 запустить исходный `openwrt/scripts/install.sh`: это шаблон, который откажется
@@ -59,7 +59,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.2-openwrt-25.12.5-r1/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.3-openwrt-25.12.5-r1/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -104,27 +104,36 @@ SSH, проверьте подключение к `x` другим устрой�
 в терминале. Без подтверждения применяется откат сетевых изменений. VPN-сети
 до готовности соответствующего подключения закрыты и не подменяются обычным WAN.
 
-### Если 0.14.0 или 0.14.1 установил пакеты, но остановился до настройки Wi-Fi
+### Если 0.14.0–0.14.2 установил пакеты, но привязка к сайту не завершена
 
 Не запускайте полную установку заново и не удаляйте trust/journal-файлы.
 Для ошибок `No module named 'autovpn.network-transaction'` и
-`timeout: applet not found` предусмотрен
-отдельный ремонт **ещё не настроенного** контроллера:
+`timeout: applet not found`, а также `setup_failed` при ещё не сохранённой
+привязке предусмотрен отдельный ремонт **ещё не привязанного** контроллера:
 
 ```sh
 (autovpn_repair="$(mktemp /tmp/autovpn-repair-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_repair"' EXIT &&
-  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.2-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
+  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.3-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
   sh "$autovpn_repair")
 ```
 
 Скрипт проверяет существующий ключ доверия, закреплённые SHA-256 и подпись APK,
-заменяет только controller и затем запускает установленный мастер Wi-Fi.
+заменяет только controller. Если первичный Wi-Fi уже создан и его транзакция
+подтверждена, скрипт проверяет неизменность настроек и не запускает мастер Wi-Fi
+повторно: после обновления продолжайте First setup в LuCI. Если Wi-Fi ещё не
+создан и сетевого журнала нет, запускается установленный мастер Wi-Fi.
 Ядро, AmneziaWG, WAN и настройки сайта не переустанавливаются. Существующие
 настройки сохраняются; мастер Wi-Fi отдельно запросит имя, WPA2-пароль и
 подтверждение сетевых изменений. Для уже привязанного к сайту роутера или
 незавершённой сетевой транзакции этот узкий repair откажется работать:
 сохраните ошибку, не сбрасывайте конфигурацию вручную.
+
+Если старый выпуск оставил зависший процесс `lock`, исправление не убивает его
+автоматически: это могло бы прервать живую операцию. Не удаляйте lock-файл и не
+убивайте PID вслепую; сначала убедитесь, что нет выполняющегося обновления или
+сетевой транзакции. Само наличие файла `.lock` после обновления нормально —
+занятость определяется ядром, а не наличием файла.
 
 ## 3. Привязка сайта в LuCI
 

@@ -92,6 +92,8 @@ function configureSetup(request) {
 	if (process == null) return { ok: false, code: 'setup_start_failed' };
 	let wrote = process.write(encoded);
 	let status = process.close();
+	/* A competing controller exits before the helper can create its result. */
+	if (status == 75) return { ok: false, code: 'busy' };
 	if (wrote == null || status != 0) {
 		let result = setupResult(nonce);
 		return result.ok === true ? { ok: false, code: 'setup_failed' } : result;

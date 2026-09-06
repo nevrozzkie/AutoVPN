@@ -1,5 +1,5 @@
 #!/bin/sh
-# Narrow recovery template for an unconfigured AutoVPN 0.14.0/0.14.1 install.
+# Narrow recovery template for an unpaired AutoVPN 0.14.0-0.14.2 install.
 # prepare-release.py pins the same public, non-secret release values as install.sh.
 set -eu
 umask 077
@@ -8,7 +8,7 @@ export LC_ALL=C
 RELEASE_BASE='@AUTOVPN_RELEASE_BASE@'
 PUBLIC_KEY_SHA256='@AUTOVPN_SIGNING_KEY_SHA256@'
 MANIFEST_SHA256='@AUTOVPN_MANIFEST_SHA256@'
-TARGET_CONTROLLER_VERSION='0.14.2-r1'
+TARGET_CONTROLLER_VERSION='0.14.3-r1'
 TRUST_ROOT=/etc/autovpn
 RELEASE_RECEIPT="$TRUST_ROOT/release.json"
 RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
@@ -21,6 +21,8 @@ UPDATE_GATE="$TRUST_ROOT/state/update.lock"
 UPDATE_LOCK=/var/lock/autovpn-update.lock
 CONTROLLER_LOCK=/var/lock/autovpn-controller.lock
 WIFI_HELPER=/usr/libexec/autovpn/install-wifi
+NETWORK_HELPER=/usr/libexec/autovpn/network-helper.uc
+TIMEOUT=/usr/bin/timeout
 WORK=''
 HAVE_UPDATE_LOCK=0
 HAVE_CONTROLLER_LOCK=0
@@ -29,11 +31,11 @@ fail() { printf 'AutoVPN repair: %s\n' "$*" >&2; exit 1; }
 say() { printf 'AutoVPN repair: %s\n' "$*"; }
 release_locks() {
 	if [ "$HAVE_CONTROLLER_LOCK" = 1 ]; then
-		lock -u "$CONTROLLER_LOCK" || true
+		exec 9>&-
 		HAVE_CONTROLLER_LOCK=0
 	fi
 	if [ "$HAVE_UPDATE_LOCK" = 1 ]; then
-		lock -u "$UPDATE_LOCK" || true
+		exec 8>&-
 		HAVE_UPDATE_LOCK=0
 	fi
 }
@@ -43,13 +45,14 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT
+trap 'exit 129' HUP
 trap 'exit 143' TERM
 
 case "${1-}" in
 	'') ;;
 	--help)
 		printf '%s\n' 'Usage: sh repair-bootstrap.sh' \
-			'Repairs only an unconfigured AutoVPN 0.14.0/0.14.1 controller install.'
+			'Repairs only an unpaired AutoVPN 0.14.0-0.14.2 controller install.'
 		exit 0
 		;;
 	*) fail 'Unknown option; do not pass site URLs, router IDs or credentials.' ;;
@@ -61,15 +64,19 @@ for value in "$PUBLIC_KEY_SHA256" "$MANIFEST_SHA256"; do
 	printf '%s\n' "$value" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release pins are missing.'
 done
 [ "$(id -u)" = 0 ] || fail 'Run as root on the OpenWrt router.'
-for tool in apk curl ubus jsonfilter sha256sum df awk grep wc mktemp uname tr cp chmod mkdir mv rm lock uci sync; do
+for tool in apk curl ubus jsonfilter sha256sum df awk grep wc mktemp uname tr cp chmod mkdir mv rm flock uci sync; do
 	command -v "$tool" >/dev/null 2>&1 || fail "Missing $tool."
 done
 
 WORK=$(mktemp -d /tmp/autovpn-repair.XXXXXX) || fail 'Cannot create temporary directory.'
 chmod 0700 "$WORK"
-if ! lock -n "$UPDATE_LOCK"; then fail 'Another AutoVPN update is running.'; fi
+exec 8>>"$UPDATE_LOCK" || fail 'Cannot open the AutoVPN update lock.'
+if ! flock -n 8; then exec 8>&-; fail 'Another AutoVPN update is running.'; fi
+printf '0\n' >"$UPDATE_LOCK" || { exec 8>&-; fail 'Cannot replace the legacy AutoVPN update lock owner.'; }
 HAVE_UPDATE_LOCK=1
-if ! lock -n "$CONTROLLER_LOCK"; then fail 'The AutoVPN controller is busy.'; fi
+exec 9>>"$CONTROLLER_LOCK" || fail 'Cannot open the AutoVPN controller lock.'
+if ! flock -n 9; then exec 9>&-; fail 'The AutoVPN controller is busy.'; fi
+printf '0\n' >"$CONTROLLER_LOCK" || { exec 9>&-; fail 'Cannot replace the legacy AutoVPN controller lock owner.'; }
 HAVE_CONTROLLER_LOCK=1
 
 field() { jsonfilter -i "$1" -e "$2" 2>/dev/null; }
@@ -109,14 +116,30 @@ case "$configured_credential" in ''|/etc/autovpn/credentials) ;; *)
 	fail 'A custom credential path is configured.' ;;
 esac
 bootstrap_completed=$(uci -q get autovpn.wifi.bootstrap_completed 2>/dev/null || true)
-case "$bootstrap_completed" in ''|0) ;; *) fail 'Wi-Fi bootstrap has already completed.' ;; esac
+primary_lan=$(uci -q get autovpn.wifi.primary_lan 2>/dev/null || true)
 for config in autovpn network wireless dhcp firewall; do
 	[ -z "$(uci -q changes "$config" 2>/dev/null || true)" ] ||
 		fail 'Uncommitted UCI changes must be resolved manually.'
 done
-for path in "$CREDENTIAL_FILE" "$CONTROLLER_JOURNAL" "$NETWORK_JOURNAL" "$MAINTENANCE_GATE" "$RESUME_MAINTENANCE_GATE" "$UPDATE_GATE"; do
+for path in "$CREDENTIAL_FILE" "$CONTROLLER_JOURNAL" "$MAINTENANCE_GATE" "$RESUME_MAINTENANCE_GATE" "$UPDATE_GATE"; do
 	regular_absent "$path" || fail 'Credentials, runtime journals or maintenance state already exist.'
 done
+bootstrap_confirmed=0
+case "$bootstrap_completed:$primary_lan" in
+	1:1)
+		[ -f "$NETWORK_JOURNAL" ] && [ ! -L "$NETWORK_JOURNAL" ] ||
+			fail 'Confirmed Wi-Fi requires a regular network journal.'
+		[ "$(field "$NETWORK_JOURNAL" '@.phase' || true)" = confirmed ] ||
+			fail 'The network journal is not confirmed.'
+		[ -f "$NETWORK_HELPER" ] && [ ! -L "$NETWORK_HELPER" ] && [ -x "$NETWORK_HELPER" ] ||
+			fail 'The installed network safety helper is missing or unsafe.'
+		[ -x "$TIMEOUT" ] && "$TIMEOUT" 20 "$NETWORK_HELPER" network-gate >/dev/null 2>&1 ||
+			fail 'The confirmed network configuration failed its safety gate.'
+		bootstrap_confirmed=1
+		;;
+	:*|0:*) regular_absent "$NETWORK_JOURNAL" || fail 'Unexpected network journal before Wi-Fi bootstrap.' ;;
+	*) fail 'Wi-Fi bootstrap state is inconsistent.' ;;
+esac
 
 # Reuse only the already-installed trust root. The release tag may advance,
 # but both scripts must pin the same key and the same GitHub owner/repository.
@@ -134,7 +157,7 @@ valid_hash "$receipt_key_hash" || fail 'Release receipt has an invalid key pin.'
 	fail 'Recovery release belongs to a different GitHub repository.'
 key_actual=$(sha256sum "$RELEASE_KEY") || fail 'Cannot hash the installed signing key.'
 [ "${key_actual%% *}" = "$PUBLIC_KEY_SHA256" ] || fail 'Installed signing key does not match the pinned key.'
-case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
+case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
 	fail 'Release receipt is outside this recovery path.' ;;
 esac
 
@@ -224,7 +247,7 @@ apk query --installed --match name --fields name,version --format json autovpn-c
 [ "$(field "$WORK/current.json" '@[0].name')" = autovpn-controller ] || fail 'Controller is not installed.'
 current_version=$(field "$WORK/current.json" '@[0].version') || fail 'Installed controller version is missing.'
 case "$current_version" in
-	0.14.0-r1|0.14.0-r3|0.14.1-r1)
+	0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1)
 		plan=$(apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/keys" \
 			add --simulate "$WORK/$controller_filename") || fail 'Controller upgrade plan failed.'
 		plan_lines=$(printf '%s\n' "$plan" | grep -E '^\([[:space:]]*[0-9]+/[0-9]+\) ' || true)
@@ -236,7 +259,7 @@ case "$current_version" in
 			add "$WORK/$controller_filename" || fail 'Controller upgrade failed.'
 		;;
 	"$TARGET_CONTROLLER_VERSION")
-		say 'Controller is already repaired; continuing the interrupted Wi-Fi bootstrap.'
+		say 'Controller is already repaired.'
 		;;
 	*) fail 'Installed controller version is outside this recovery path.' ;;
 esac
@@ -246,8 +269,12 @@ apk query --installed --match name --fields version --format json autovpn-contro
 	fail 'Installed controller version differs from the pinned recovery release.'
 sync
 
-[ -x "$WIFI_HELPER" ] || fail 'The repaired Wi-Fi bootstrap helper is missing.'
 release_locks
-say 'Controller repaired. Starting the installed Wi-Fi bootstrap.'
-"$WIFI_HELPER" || fail 'Controller is repaired, but Wi-Fi setup did not complete; rerun this repair only if no recovery journal was created.'
-say 'Controller repair and primary Wi-Fi bootstrap completed.'
+if [ "$bootstrap_confirmed" = 1 ]; then
+	say 'Controller repaired. Confirmed primary Wi-Fi is unchanged; continue setup in LuCI.'
+else
+	[ -x "$WIFI_HELPER" ] || fail 'The repaired Wi-Fi bootstrap helper is missing.'
+	say 'Controller repaired. Starting the installed Wi-Fi bootstrap.'
+	"$WIFI_HELPER" || fail 'Controller is repaired, but Wi-Fi setup did not complete; rerun this repair only if no recovery journal was created.'
+	say 'Controller repair and primary Wi-Fi bootstrap completed.'
+fi

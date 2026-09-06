@@ -14,11 +14,12 @@ function fixture(t, options = {}) {
 	t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
 	const bin = path.join(dir, 'bin'), root = path.join(dir, 'autovpn'), assets = path.join(dir, 'assets');
 	const etcApk = path.join(dir, 'etc-apk'), libApk = path.join(dir, 'lib-apk');
-	for (const directory of [bin, root, assets, etcApk, libApk, path.join(root, 'state')]) fs.mkdirSync(directory);
+	const locks = path.join(dir, 'locks');
+	for (const directory of [bin, root, assets, etcApk, libApk, locks, path.join(root, 'state')]) fs.mkdirSync(directory);
 	if (!options.noArchFile) {
 		fs.writeFileSync(path.join(options.libArchFile ? libApk : etcApk, 'arch'), options.archFile || 'aarch64_cortex-a53\n');
 	}
-	for (const name of ['apk', 'curl', 'jsonfilter', 'ubus', 'uname', 'df', 'lock', 'sync', 'uci', 'ucode', 'runtime']) {
+	for (const name of ['apk', 'curl', 'jsonfilter', 'ubus', 'uname', 'df', 'flock', 'sync', 'uci', 'ucode', 'runtime']) {
 		fs.copyFileSync(path.join(__dirname, 'fake-update.cjs'), path.join(bin, name));
 		fs.chmodSync(path.join(bin, name), 0o755);
 	}
@@ -52,6 +53,7 @@ function fixture(t, options = {}) {
 		return result;
 	};
 	return {run, root, commit, gate: path.join(root, 'state/update.lock'),
+		updateLock: path.join(locks, 'autovpn-update.lock'), controllerLock: path.join(locks, 'autovpn-controller.lock'),
 		status: () => JSON.parse(run(['status']).stdout),
 		calls: () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse),
 		check: () => {
@@ -152,6 +154,29 @@ test('busy check and failed download cannot alter a live plan or stop VPN', t =>
 	assert.notEqual(f.run(['check-worker', 'v0.8.0'], {FAKE_DOWNLOAD_FAIL: '1'}).status, 0);
 	assert.equal(fs.existsSync(f.gate), false);
 	assert.equal(f.calls().some(c => c.name === 'runtime'), false);
+});
+
+test('descriptor locks preserve their inodes and replace legacy PID contents only after acquisition', t => {
+	const f = fixture(t);
+	fs.writeFileSync(f.updateLock, '1234\n');
+	fs.writeFileSync(f.controllerLock, '5678\n');
+	const updateInode = fs.statSync(f.updateLock).ino;
+	const controllerInode = fs.statSync(f.controllerLock).ino;
+	const id = f.check();
+	assert.equal(f.run(['worker', id]).status, 0);
+	assert.equal(fs.statSync(f.updateLock).ino, updateInode);
+	assert.equal(fs.statSync(f.controllerLock).ino, controllerInode);
+	assert.equal(fs.readFileSync(f.updateLock, 'utf8'), '0\n');
+	assert.equal(fs.readFileSync(f.controllerLock, 'utf8'), '0\n');
+	assert.equal(f.calls().some(call => call.name === 'flock' && call.args.includes('-u')), false);
+});
+
+test('a rejected descriptor lock leaves legacy PID contents untouched', t => {
+	const f = fixture(t);
+	fs.writeFileSync(f.updateLock, '1234\n');
+	const result = f.run(['check-worker', 'v0.8.0'], {FAKE_LOCK_BUSY: '1'});
+	assert.equal(result.status, 75);
+	assert.equal(fs.readFileSync(f.updateLock, 'utf8'), '1234\n');
 });
 
 test('a same-version no-op cannot falsely repair a failed installation', t => {

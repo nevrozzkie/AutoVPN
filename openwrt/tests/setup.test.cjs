@@ -40,7 +40,7 @@ function helperFixture(overrides = {}) {
 		.replace("const processRunner = require('autovpn.process');", 'const processRunner = injectedProcess;')
 		.replace(/let action = ARGV\[0\];[\s\S]*$/, 'return { configure, activate, resume, saveResult };');
 	const api = new Function('access', 'chmod', 'fsError', 'lstat', 'mkdir', 'readfile', 'rename', 'stat', 'unlink', 'writefile', 'cursor',
-		'injectedPolicy', 'injectedProcess', 'type', 'length', 'keys', 'match', 'substr', 'rindex', 'json', 'sprintf', 'trim', source)(
+		'injectedPolicy', 'injectedProcess', 'type', 'length', 'keys', 'match', 'index', 'substr', 'rindex', 'json', 'sprintf', 'trim', source)(
 		access, () => true, () => lastError, name => {
 			if (files.has(name)) return { type: 'file' };
 			lastError = 'No such file or directory'; return null;
@@ -56,7 +56,8 @@ function helperFixture(overrides = {}) {
 		{ popen: () => ({ read: () => JSON.stringify({ ok: !overrides.invalidNetwork }), close: () => overrides.invalidNetwork ? 1 : 0 }) },
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value === 'number' ? 'int' : typeof value,
 		value => typeof value === 'string' ? Buffer.byteLength(value) : value.length, Object.keys,
-		(value, expression) => value.match(expression), (value, start, count) => count === undefined ? value.substring(start) : value.substring(start, start + count),
+		(value, expression) => value.match(expression), (value, needle) => value.indexOf(needle),
+		(value, start, count) => count === undefined ? value.substring(start) : value.substring(start, start + count),
 		value => value.lastIndexOf('/'), JSON.parse, (format, value) => format === '%J\n' ? JSON.stringify(value) + '\n' : JSON.stringify(value), value => value.trim()
 	);
 	return { api, files, values, events };
@@ -76,6 +77,19 @@ test('injected helper configures a clean first run, and rejects invalid nonce be
 	const invalid = helperFixture({ files: { '/dev/stdin': validRequest() } });
 	assert.equal(invalid.api.configure('bad').code, 'invalid_setup_nonce');
 	assert.equal(invalid.events.length, 0);
+});
+
+test('SSID validation rejects NUL, controls and DEL without rejecting ordinary UTF-8 or WPA2 input', () => {
+	for (const base_ssid of ['bad\0ssid', 'bad\x01ssid', 'bad\x1fssid', 'bad\x7fssid']) {
+		const request = { ...JSON.parse(validRequest()), base_ssid };
+		const env = helperFixture({ files: { '/dev/stdin': JSON.stringify(request) } });
+		assert.equal(env.api.configure('nonce-0123456789').code, 'setup_request_invalid');
+		assert.equal(env.events.length, 0);
+	}
+	const request = { ...JSON.parse(validRequest()), base_ssid: 'вифи' };
+	const accepted = helperFixture({ files: { '/dev/stdin': JSON.stringify(request) } });
+	assert.deepEqual(accepted.api.configure('nonce-0123456789'), { ok: true, configured: true, wan_device: 'eth0' });
+	assert.equal(accepted.values['wifi.password'], 'good-pass');
 });
 
 test('injected helper preserves active setup and makes credential-write failure safely retryable', () => {
@@ -179,7 +193,7 @@ test('first-run activation is gated by a confirmed network transaction', () => {
 	assert.match(cli, /\/etc\/init\.d\/autovpn enable/);
 	assert.match(cli, /\/etc\/init\.d\/autovpn start/);
 	assert.doesNotMatch(cli, /\/etc\/init\.d\/autovpn restart/);
-	assert.match(cli, /trap - EXIT INT TERM[\s\S]*lock -u "\$LOCK_FILE"\s+[\s\S]*\/etc\/init\.d\/autovpn enable/);
+	assert.match(cli, /exec 9>&-[\s\S]*\/etc\/init\.d\/autovpn enable/);
 	assert.match(cli, /uci set autovpn\.main\.enabled=0/);
 });
 
@@ -245,9 +259,16 @@ if (name === 'ucode') {
   process.exit(process.env.MOCK_HELPER_FAIL ? 1 : 0);
 }
 if (name === 'init-autovpn' && args[0] === 'start' && process.env.MOCK_START_FAIL) process.exit(1);
+if (name === 'init-autovpn') {
+  try {
+    const fd = fs.fstatSync(9), lock = fs.statSync(path.join(path.dirname(process.argv[1]), 'controller.lock'));
+    if (fd.dev === lock.dev && fd.ino === lock.ino) process.exit(90);
+  } catch (_) {}
+}
 `;
-	for (const name of ['lock', 'uci', 'ucode', 'init-autovpn']) fs.writeFileSync(path.join(tmp, name), program, { mode: 0o755 });
+	for (const name of ['flock', 'uci', 'ucode', 'init-autovpn']) fs.writeFileSync(path.join(tmp, name), program, { mode: 0o755 });
 	const script = read('files/usr/sbin/autovpnctl')
+		.replace('/var/lock/autovpn-controller.lock', path.join(tmp, 'controller.lock'))
 		.replaceAll('/etc/autovpn/state', path.join(tmp, 'state'))
 		.replace('/usr/libexec/autovpn/credential.sh', path.join(root, 'files/usr/libexec/autovpn/credential.sh'))
 		.replaceAll('/usr/bin/ucode', path.join(tmp, 'ucode'))
@@ -265,10 +286,9 @@ if (name === 'init-autovpn' && args[0] === 'start' && process.env.MOCK_START_FAI
 	const success = run({});
 	assert.equal(success.status, 0, success.stderr);
 	assert.deepEqual(JSON.parse(success.stdout), { ok: true, enabled: true });
-	const unlock = success.events.findIndex(e => e[0] === 'lock' && e[1] === '-u');
 	const start = success.events.findIndex(e => e[0] === 'init-autovpn' && e[1] === 'start');
-	assert.ok(unlock >= 0 && start > unlock);
-	assert.equal(success.events.filter(e => e[0] === 'lock' && e[1] === '-u').length, 1);
+	assert.ok(start >= 0);
+	assert.equal(success.events.filter(e => e[0] === 'flock').length, 1);
 	assert.equal(success.events.some(e => e.includes('restart') || e.includes('stop')), false);
 	const failed = run({ MOCK_START_FAIL: '1' });
 	assert.notEqual(failed.status, 0);
@@ -280,9 +300,8 @@ if (name === 'init-autovpn' && args[0] === 'start' && process.env.MOCK_START_FAI
 	assert.equal(denied.events.some(e => e[0] === 'init-autovpn'), false);
 	const resumed = run({}, 'setup-resume');
 	assert.equal(resumed.status, 0, resumed.stderr);
-	const resumeUnlock = resumed.events.findIndex(e => e[0] === 'lock' && e[1] === '-u');
 	const resumeStart = resumed.events.findIndex(e => e[0] === 'init-autovpn' && e[1] === 'start');
-	assert.ok(resumeUnlock >= 0 && resumeStart > resumeUnlock);
+	assert.ok(resumeStart >= 0);
 	const state = path.join(tmp, 'state');
 	fs.mkdirSync(state);
 	fs.writeFileSync(path.join(state, 'maintenance.lock'), JSON.stringify({ schema_version: 1, action: 'rebind', phase: 'ready' }));
