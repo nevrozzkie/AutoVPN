@@ -129,18 +129,18 @@ function closeRuntime() {
 	return status == 0 && type(response) == 'object' && response.ok === true;
 }
 
-function writeLock(action, phase) {
-	if (!atomic(STATE + '/maintenance.lock', sprintf('%J\n', {
-		schema_version: 1, action: action, phase: phase
-	}))) return false;
-	return syncFilesystem();
-}
-
 function syncFilesystem() {
 	let process = processRunner.popen(['/bin/sync'], 'r');
 	if (process == null) return false;
 	process.read(1);
 	return process.close() == 0;
+}
+
+function writeLock(action, phase) {
+	if (!atomic(STATE + '/maintenance.lock', sprintf('%J\n', {
+		schema_version: 1, action: action, phase: phase
+	}))) return false;
+	return syncFilesystem();
 }
 
 function persistDisabled(ctx) {

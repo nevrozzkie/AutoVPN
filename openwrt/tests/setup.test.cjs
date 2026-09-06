@@ -51,7 +51,7 @@ function helperFixture(overrides = {}) {
 			if (overrides.unreadable === name) { lastError = 'Permission denied'; return null; }
 		if (files.has(name)) return { type: 'file' };
 			lastError = 'No such file or directory'; return null;
-		}, name => files.delete(name),
+		}, name => overrides.unlinkFails === name ? null : files.delete(name),
 		(name, value) => { files.set(name, value); return value.length; }, () => ctx, policy,
 		{ popen: () => ({ read: () => JSON.stringify({ ok: !overrides.invalidNetwork }), close: () => overrides.invalidNetwork ? 1 : 0 }) },
 		value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value === 'number' ? 'int' : typeof value,
@@ -231,6 +231,60 @@ test('resume requires a strict ready gate, clean valid binding and confirmed net
 	assert.equal(invalid.api.resume().code, 'networks_not_confirmed');
 	assert.equal(invalid.files.has('/etc/autovpn/state/maintenance.lock'), true);
 	assert.equal(invalid.values['main.enabled'], '0');
+});
+
+test('resume clears an update-only gate for an unpaired controller without manufacturing setup state', () => {
+	const update = '/etc/autovpn/state/update.lock';
+	const network = '/etc/autovpn/networks/journal.json';
+	const gateFiles = {
+		[update]: JSON.stringify({ schema_version: 1, phase: 'ready' }),
+		[network]: JSON.stringify({ phase: 'confirmed' })
+	};
+	const missingCredential = helperFixture({
+		files: gateFiles,
+		values: { 'main.setup_prepared': '0', 'main.base_url': '', 'main.router_id': '' }
+	});
+	assert.deepEqual(missingCredential.api.resume(), { ok: true, enabled: false, resumed: true, setup_required: true });
+	assert.equal(missingCredential.files.has(update), false);
+	assert.equal(missingCredential.values['main.enabled'], '0');
+	assert.equal(missingCredential.values['main.setup_prepared'], '0');
+	assert.equal(missingCredential.values['main.base_url'], '');
+	assert.equal(missingCredential.values['main.router_id'], '');
+	assert.deepEqual(missingCredential.events, ['set:main.enabled']);
+
+	const invalidIdentity = helperFixture({
+		files: { ...gateFiles, '/etc/autovpn/credentials': 'avrt_abcdefgh.' + 's'.repeat(43) + '\n' },
+		values: { 'main.setup_prepared': '1', 'main.base_url': 'invalid', 'main.router_id': 'short' }
+	});
+	assert.deepEqual(invalidIdentity.api.resume(), { ok: true, enabled: false, resumed: true, setup_required: true });
+	assert.equal(invalidIdentity.files.has(update), false);
+	assert.equal(invalidIdentity.values['main.setup_prepared'], '1');
+	assert.equal(invalidIdentity.values['main.base_url'], 'invalid');
+	assert.equal(invalidIdentity.values['main.router_id'], 'short');
+	assert.equal(invalidIdentity.files.get('/etc/autovpn/credentials'), 'avrt_abcdefgh.' + 's'.repeat(43) + '\n');
+	assert.deepEqual(invalidIdentity.events, ['set:main.enabled']);
+});
+
+test('resume keeps an incomplete controller disabled when update gate clearing fails or maintenance is present', () => {
+	const update = '/etc/autovpn/state/update.lock';
+	const maintenance = '/etc/autovpn/state/maintenance.lock';
+	const files = {
+		[update]: JSON.stringify({ schema_version: 1, phase: 'ready' }),
+		'/etc/autovpn/networks/journal.json': JSON.stringify({ phase: 'confirmed' })
+	};
+	const failed = helperFixture({ files, values: { 'main.setup_prepared': '1' }, unlinkFails: update });
+	assert.equal(failed.api.resume().code, 'maintenance_gate_clear_failed');
+	assert.equal(failed.values['main.enabled'], '0');
+	assert.equal(failed.values['main.setup_prepared'], '1');
+	assert.equal(failed.files.has(update), true);
+
+	const maintenanceBlocked = helperFixture({ files: {
+		...files,
+		[maintenance]: JSON.stringify({ schema_version: 1, action: 'rebind', phase: 'ready' })
+	} });
+	assert.equal(maintenanceBlocked.api.resume().code, 'setup_incomplete');
+	assert.equal(maintenanceBlocked.files.has(update), true);
+	assert.equal(maintenanceBlocked.files.has(maintenance), true);
 });
 
 test('wizard asks rpcd to detect WAN and leaves radio/offload policy to LuCI', () => {

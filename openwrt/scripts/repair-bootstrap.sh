@@ -1,5 +1,5 @@
 #!/bin/sh
-# Narrow recovery template for an unpaired AutoVPN 0.14.0-0.14.2 install.
+# Narrow recovery template for an unpaired AutoVPN 0.14.0-0.14.3 install.
 # prepare-release.py pins the same public, non-secret release values as install.sh.
 set -eu
 umask 077
@@ -8,7 +8,7 @@ export LC_ALL=C
 RELEASE_BASE='@AUTOVPN_RELEASE_BASE@'
 PUBLIC_KEY_SHA256='@AUTOVPN_SIGNING_KEY_SHA256@'
 MANIFEST_SHA256='@AUTOVPN_MANIFEST_SHA256@'
-TARGET_CONTROLLER_VERSION='0.14.3-r1'
+TARGET_CONTROLLER_VERSION='0.14.4-r1'
 TRUST_ROOT=/etc/autovpn
 RELEASE_RECEIPT="$TRUST_ROOT/release.json"
 RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
@@ -52,7 +52,7 @@ case "${1-}" in
 	'') ;;
 	--help)
 		printf '%s\n' 'Usage: sh repair-bootstrap.sh' \
-			'Repairs only an unpaired AutoVPN 0.14.0-0.14.2 controller install.'
+			'Repairs only an unpaired or stranded-rebind AutoVPN 0.14.0-0.14.3 controller install.'
 		exit 0
 		;;
 	*) fail 'Unknown option; do not pass site URLs, router IDs or credentials.' ;;
@@ -102,15 +102,12 @@ check_hash() {
 	[ "${actual%% *}" = "$2" ]
 }
 
-# This recovery must never inherit a configured router identity or runtime.
+# Every supported recovery state is disabled and has no controller runtime.
 [ "$(uci -q get autovpn.main.enabled 2>/dev/null || true)" = 0 ] ||
-	fail 'Controller is not in the disabled factory state.'
+	fail 'Controller is not in a disabled recovery state.'
 setup_prepared=$(uci -q get autovpn.main.setup_prepared 2>/dev/null || true)
-case "$setup_prepared" in ''|0) ;; *) fail 'Controller setup has already been prepared.' ;; esac
-[ -z "$(uci -q get autovpn.main.base_url 2>/dev/null || true)" ] ||
-	fail 'Site URL is already configured.'
-[ -z "$(uci -q get autovpn.main.router_id 2>/dev/null || true)" ] ||
-	fail 'Router ID is already configured.'
+base_url=$(uci -q get autovpn.main.base_url 2>/dev/null || true)
+router_id=$(uci -q get autovpn.main.router_id 2>/dev/null || true)
 configured_credential=$(uci -q get autovpn.main.credential_file 2>/dev/null || true)
 case "$configured_credential" in ''|/etc/autovpn/credentials) ;; *)
 	fail 'A custom credential path is configured.' ;;
@@ -121,9 +118,37 @@ for config in autovpn network wireless dhcp firewall; do
 	[ -z "$(uci -q changes "$config" 2>/dev/null || true)" ] ||
 		fail 'Uncommitted UCI changes must be resolved manually.'
 done
-for path in "$CREDENTIAL_FILE" "$CONTROLLER_JOURNAL" "$MAINTENANCE_GATE" "$RESUME_MAINTENANCE_GATE" "$UPDATE_GATE"; do
+for path in "$CONTROLLER_JOURNAL" "$RESUME_MAINTENANCE_GATE" "$UPDATE_GATE"; do
 	regular_absent "$path" || fail 'Credentials, runtime journals or maintenance state already exist.'
 done
+stranded_rebind=0
+if ! regular_absent "$MAINTENANCE_GATE"; then
+	[ -f "$MAINTENANCE_GATE" ] && [ ! -L "$MAINTENANCE_GATE" ] &&
+		[ "$(field "$MAINTENANCE_GATE" '@.schema_version' || true)" = 1 ] &&
+		[ "$(field "$MAINTENANCE_GATE" '@.action' || true)" = rebind ] &&
+		[ "$(field "$MAINTENANCE_GATE" '@.phase' || true)" = running ] ||
+		fail 'Maintenance state is not a stranded Rebind.'
+	stranded_rebind=1
+fi
+if [ "$stranded_rebind" = 1 ]; then
+	case "$setup_prepared" in ''|0|1) ;; *) fail 'Controller setup state is invalid.' ;; esac
+	[ -z "$base_url" ] || printf '%s\n' "$base_url" | grep -Eq '^https://[A-Za-z0-9][A-Za-z0-9.:/_~!$&()*+,;=@%-]{0,254}$' ||
+		fail 'Configured site URL is invalid.'
+	[ -z "$router_id" ] || printf '%s\n' "$router_id" | grep -Eq '^[A-Za-z0-9_-]{8,64}$' ||
+		fail 'Configured router ID is invalid.'
+	if ! regular_absent "$CREDENTIAL_FILE"; then
+		[ -f "$CREDENTIAL_FILE" ] && [ ! -L "$CREDENTIAL_FILE" ] &&
+			[ "$(wc -c <"$CREDENTIAL_FILE")" -le 257 ] &&
+			[ "$(wc -l <"$CREDENTIAL_FILE")" -eq 1 ] &&
+			grep -Eq '^avrt_[A-Za-z0-9_-]{8,64}\.[A-Za-z0-9_-]{43,128}$' "$CREDENTIAL_FILE" ||
+			fail 'Configured credential is invalid or unsafe.'
+	fi
+else
+	case "$setup_prepared" in ''|0) ;; *) fail 'Controller setup has already been prepared.' ;; esac
+	[ -z "$base_url" ] || fail 'Site URL is already configured.'
+	[ -z "$router_id" ] || fail 'Router ID is already configured.'
+	regular_absent "$CREDENTIAL_FILE" || fail 'Credentials already exist.'
+fi
 bootstrap_confirmed=0
 case "$bootstrap_completed:$primary_lan" in
 	1:1)
@@ -140,6 +165,8 @@ case "$bootstrap_completed:$primary_lan" in
 	:*|0:*) regular_absent "$NETWORK_JOURNAL" || fail 'Unexpected network journal before Wi-Fi bootstrap.' ;;
 	*) fail 'Wi-Fi bootstrap state is inconsistent.' ;;
 esac
+[ "$stranded_rebind" = 0 ] || [ "$bootstrap_confirmed" = 1 ] ||
+	fail 'Stranded Rebind recovery requires confirmed primary Wi-Fi.'
 
 # Reuse only the already-installed trust root. The release tag may advance,
 # but both scripts must pin the same key and the same GitHub owner/repository.
@@ -157,9 +184,20 @@ valid_hash "$receipt_key_hash" || fail 'Release receipt has an invalid key pin.'
 	fail 'Recovery release belongs to a different GitHub repository.'
 key_actual=$(sha256sum "$RELEASE_KEY") || fail 'Cannot hash the installed signing key.'
 [ "${key_actual%% *}" = "$PUBLIC_KEY_SHA256" ] || fail 'Installed signing key does not match the pinned key.'
-case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
-	fail 'Release receipt is outside this recovery path.' ;;
-esac
+if [ "$stranded_rebind" = 1 ]; then
+	[ "$receipt_version" = 0.14.3-r1 ] || fail 'Stranded Rebind receipt is outside this recovery path.'
+else
+	case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
+		fail 'Release receipt is outside this recovery path.' ;;
+	esac
+fi
+
+apk query --installed --match name --fields name,version --format json autovpn-controller >"$WORK/current.json" ||
+	fail 'Installed controller could not be read.'
+[ "$(field "$WORK/current.json" '@[0].name')" = autovpn-controller ] || fail 'Controller is not installed.'
+current_version=$(field "$WORK/current.json" '@[0].version') || fail 'Installed controller version is missing.'
+[ "$stranded_rebind" = 0 ] || [ "$current_version" = 0.14.3-r1 ] ||
+	fail 'Stranded Rebind controller is outside this recovery path.'
 
 ubus call system board >"$WORK/board.json" || fail 'Cannot identify OpenWrt.'
 release=$(field "$WORK/board.json" '@.release.version') || fail 'Missing OpenWrt release.'
@@ -242,12 +280,8 @@ apk adbdump --format json "$WORK/$controller_filename" >"$WORK/controller.json" 
 controller_arch=$(field "$WORK/controller.json" '@.info.arch') || fail 'Controller package architecture is missing.'
 case "$controller_arch" in noarch|all|"$architecture") ;; *) fail 'Controller package architecture mismatch.' ;; esac
 
-apk query --installed --match name --fields name,version --format json autovpn-controller >"$WORK/current.json" ||
-	fail 'Installed controller could not be read.'
-[ "$(field "$WORK/current.json" '@[0].name')" = autovpn-controller ] || fail 'Controller is not installed.'
-current_version=$(field "$WORK/current.json" '@[0].version') || fail 'Installed controller version is missing.'
 case "$current_version" in
-	0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1)
+	0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1)
 		plan=$(apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/keys" \
 			add --simulate "$WORK/$controller_filename") || fail 'Controller upgrade plan failed.'
 		plan_lines=$(printf '%s\n' "$plan" | grep -E '^\([[:space:]]*[0-9]+/[0-9]+\) ' || true)
@@ -270,7 +304,9 @@ apk query --installed --match name --fields version --format json autovpn-contro
 sync
 
 release_locks
-if [ "$bootstrap_confirmed" = 1 ]; then
+if [ "$stranded_rebind" = 1 ]; then
+	say 'Controller repaired. Retry Rebind explicitly in LuCI.'
+elif [ "$bootstrap_confirmed" = 1 ]; then
 	say 'Controller repaired. Confirmed primary Wi-Fi is unchanged; continue setup in LuCI.'
 else
 	[ -x "$WIFI_HELPER" ] || fail 'The repaired Wi-Fi bootstrap helper is missing.'

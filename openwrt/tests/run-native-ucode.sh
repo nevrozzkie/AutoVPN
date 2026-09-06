@@ -5,7 +5,7 @@ UCODE=${AUTOVPN_UCODE_BINARY:?Set AUTOVPN_UCODE_BINARY to the real OpenWrt SDK h
 MODULES=${AUTOVPN_UCODE_MODULES:?Set AUTOVPN_UCODE_MODULES to the SDK host lib/ucode directory}
 FILES=${1:-"$ROOT/files"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/autovpn-native-ucode.XXXXXX")
-trap 'rm -f "$WORK/compiled.uc" "$WORK/native-setup-harness.uc"; rmdir "$WORK"' EXIT
+trap 'rm -f "$WORK/compiled.uc" "$WORK/native-setup-harness.uc" "$WORK/native-maintenance-harness.uc"; rmdir "$WORK"' EXIT
 "$UCODE" -L "$MODULES" -L "$FILES/usr/share/ucode" \
 	"$ROOT/tests/native-modules.uc" "$FILES/usr/share/ucode/autovpn"
 "$UCODE" -L "$MODULES" -L "$FILES/usr/share/ucode" \
@@ -21,3 +21,5 @@ printf '%s\n' 'All packaged ucode entry points compiled successfully.'
 # actual helper with in-memory FS/UCI/process fixtures, never real settings.
 python3 "$ROOT/tests/native-setup-harness.py" "$ROOT" "$FILES" >"$WORK/native-setup-harness.uc"
 "$UCODE" -L "$MODULES" "$WORK/native-setup-harness.uc"
+python3 "$ROOT/tests/native-maintenance-harness.py" "$ROOT" "$FILES" >"$WORK/native-maintenance-harness.uc"
+"$UCODE" -L "$MODULES" "$WORK/native-maintenance-harness.uc"

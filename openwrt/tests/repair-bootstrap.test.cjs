@@ -25,7 +25,7 @@ function fixture(t, options = {}) {
 	const key = '-----BEGIN PUBLIC KEY-----\nexisting fixture key\n-----END PUBLIC KEY-----\n';
 	const keyHash = digest(key);
 	const controller = 'signed controller fixture';
-	const controllerName = 'autovpn-controller-0.14.3-r1.apk';
+	const controllerName = 'autovpn-controller-0.14.4-r1.apk';
 	fs.writeFileSync(path.join(assets, controllerName), controller);
 	for (const name of ['kmod-amneziawg-6.12.85-r1.apk', 'amneziawg-tools-1-r1.apk']) {
 		fs.writeFileSync(path.join(assets, name), 'must never be downloaded');
@@ -40,7 +40,7 @@ function fixture(t, options = {}) {
 		kernel_package: options.manifestKernelPackage || '6.12.85~fixture-r1',
 		signing_key_sha256: options.manifestKeyHash || keyHash,
 		packages: [
-			{ name: 'autovpn-controller', filename: controllerName, sha256: digest(controller), version: '0.14.3-r1' },
+			{ name: 'autovpn-controller', filename: controllerName, sha256: digest(controller), version: '0.14.4-r1' },
 			{ name: 'amneziawg-tools', filename: 'amneziawg-tools-1-r1.apk', sha256: '1'.repeat(64) },
 			{ name: 'kmod-amneziawg', filename: 'kmod-amneziawg-6.12.85-r1.apk', sha256: '2'.repeat(64) },
 		],
@@ -66,7 +66,7 @@ function fixture(t, options = {}) {
 	const networkHelper = path.join(bin, 'network-helper.uc');
 	const timeout = path.join(bin, 'timeout');
 	let source = template
-		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/AutoVPN/releases/download/router-v0.14.3-openwrt-25.12.5-r1')
+		.replace('@AUTOVPN_RELEASE_BASE@', 'https://github.com/example/AutoVPN/releases/download/router-v0.14.4-openwrt-25.12.5-r1')
 		.replace('@AUTOVPN_SIGNING_KEY_SHA256@', keyHash)
 		.replace('@AUTOVPN_MANIFEST_SHA256@', options.badManifestPin ? '0'.repeat(64) : digest(manifestBytes))
 		.replaceAll('/etc/autovpn', trust)
@@ -144,14 +144,14 @@ else if (name === 'apk') {
   } else if (args.includes('verify')) {
     if (env.MOCK_BAD_SIGNATURE === '1') process.exit(1);
   } else if (args[0] === 'adbdump') {
-    output({info:{name:env.MOCK_APK_NAME || 'autovpn-controller',version:env.MOCK_APK_VERSION || '0.14.3-r1',arch:env.MOCK_APK_ARCH || 'noarch'}});
+		output({info:{name:env.MOCK_APK_NAME || 'autovpn-controller',version:env.MOCK_APK_VERSION || '0.14.4-r1',arch:env.MOCK_APK_ARCH || 'noarch'}});
   } else if (args.includes('--simulate')) {
     const current = fs.existsSync(env.MOCK_INSTALLED_FILE) ? fs.readFileSync(env.MOCK_INSTALLED_FILE, 'utf8') : (env.MOCK_CURRENT || '0.14.0-r3');
-    if (env.MOCK_UNSAFE_PLAN === '1') output('(1/2) Upgrading autovpn-controller (' + current + ' -> 0.14.3-r1)\\n(2/2) Installing surprise (1-r1)');
-    else output('(1/1) Upgrading autovpn-controller (' + current + ' -> 0.14.3-r1)');
+		if (env.MOCK_UNSAFE_PLAN === '1') output('(1/2) Upgrading autovpn-controller (' + current + ' -> 0.14.4-r1)\\n(2/2) Installing surprise (1-r1)');
+		else output('(1/1) Upgrading autovpn-controller (' + current + ' -> 0.14.4-r1)');
   } else if (args.includes('add')) {
     if (env.MOCK_COMMIT_FAIL === '1') process.exit(1);
-    fs.writeFileSync(env.MOCK_INSTALLED_FILE, '0.14.3-r1');
+		fs.writeFileSync(env.MOCK_INSTALLED_FILE, '0.14.4-r1');
   } else process.exit(91);
 }
 else if (name === 'install-wifi') {
@@ -168,6 +168,9 @@ else throw new Error('unexpected mock tool ' + name);
 	return {
 		root, trust, script, receiptBefore, keyBefore, updateLock, controllerLock,
 		networkJournal: path.join(trust, 'networks/journal.json'),
+		maintenanceGate: path.join(trust, 'state/maintenance.lock'),
+		controllerJournal: path.join(trust, 'state/journal.json'),
+		credential: path.join(trust, 'credentials'),
 		run(env = {}) {
 			fs.rmSync(logFile, { force: true });
 			const result = spawnSync('/bin/sh', [script], {
@@ -210,7 +213,7 @@ test('repairs only the controller, preserves trust and UCI, then releases both l
 	const downloads = result.calls.filter(call => call.name === 'curl').map(call => path.basename(call.args.at(-1)));
 	assert.deepEqual(downloads, [
 		'manifest-25.12.5-mediatek-filogic-aarch64_cortex-a53.json',
-		'autovpn-controller-0.14.3-r1.apk',
+		'autovpn-controller-0.14.4-r1.apk',
 	]);
 	const plans = result.calls.filter(call => call.name === 'apk' && call.args.includes('--simulate'));
 	const commits = result.calls.filter(call => call.name === 'apk' && call.args.includes('add') && !call.args.includes('--simulate'));
@@ -293,7 +296,7 @@ test('0.14.0 receipt with installed 0.14.1 upgrades to the pinned repair without
 
 test('safe rerun at the repaired version skips APK mutation and retries Wi-Fi with locks released', t => {
 	const f = fixture(t, { receiptVersion: '0.14.0-r1' });
-	const result = f.run({ MOCK_CURRENT: '0.14.3-r1' });
+	const result = f.run({ MOCK_CURRENT: '0.14.4-r1' });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.calls.some(call => call.name === 'apk' && call.args.includes('--simulate')), false);
 	assert.equal(committed(result), false);
@@ -342,6 +345,79 @@ test('confirmed bootstrap recovery rejects unsafe journal states, mismatched fla
 			fs.writeFileSync(f.networkJournal, entry.journal);
 		}
 		const result = f.run({ MOCK_CURRENT: '0.14.2-r1', ...entry.env });
+		assert.notEqual(result.status, 0, JSON.stringify(entry));
+		assert.equal(result.calls.some(call => call.name === 'curl'), false);
+		assert.equal(committed(result), false);
+		assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
+	}
+});
+
+test('stranded running Rebind upgrades 0.14.3 while preserving identity, credential, confirmed Wi-Fi and its retry gate', t => {
+	const f = fixture(t, { receiptVersion: '0.14.3-r1' });
+	fs.mkdirSync(path.dirname(f.networkJournal), { recursive: true });
+	fs.mkdirSync(path.dirname(f.maintenanceGate), { recursive: true });
+	const journal = JSON.stringify({ phase: 'confirmed', retained: 'network fixture' }) + '\n';
+	const gate = JSON.stringify({ schema_version: 1, action: 'rebind', phase: 'running' }) + '\n';
+	const credential = 'avrt_oldrouter.' + 'o'.repeat(43) + '\n';
+	fs.writeFileSync(f.networkJournal, journal, { mode: 0o600 });
+	fs.writeFileSync(f.maintenanceGate, gate, { mode: 0o600 });
+	fs.writeFileSync(f.credential, credential, { mode: 0o600 });
+	const result = f.run({
+		MOCK_CURRENT: '0.14.3-r1',
+		MOCK_SETUP_PREPARED: '1',
+		MOCK_BASE_URL: 'https://vpn.example',
+		MOCK_ROUTER_ID: 'old_router',
+		MOCK_WIFI_COMPLETE: '1',
+		MOCK_WIFI_PRIMARY_LAN: '1',
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(committed(result), true);
+	assert.equal(fs.readFileSync(f.networkJournal, 'utf8'), journal);
+	assert.equal(fs.readFileSync(f.maintenanceGate, 'utf8'), gate);
+	assert.equal(fs.readFileSync(f.credential, 'utf8'), credential);
+	assert.equal(result.calls.some(call => call.name === 'install-wifi'), false);
+	assert.equal(result.calls.some(call => call.name === 'uci' && ['set', 'commit'].some(word => call.args.includes(word))), false);
+	assert.match(result.stdout, /Retry Rebind explicitly in LuCI/);
+});
+
+test('stranded Rebind recovery rejects every other maintenance or unsafe runtime state before mutation', t => {
+	const validGate = { schema_version: 1, action: 'rebind', phase: 'running' };
+	const cases = [
+		{ gate: { schema_version: 1, action: 'reset', phase: 'running' } },
+		{ gate: { schema_version: 1, action: 'rebind', phase: 'ready' } },
+		{ gate: { schema_version: 1, action: 'rebind', phase: 'failed' } },
+		{ gate: '{invalid' },
+		{ gate: validGate, gateSymlink: true },
+		{ gate: validGate, controllerJournal: true },
+		{ gate: validGate, networkPhase: 'pending' },
+		{ gate: validGate, env: { MOCK_ENABLED: '1' } },
+		{ gate: validGate, env: { MOCK_DIRTY_UCI: 'autovpn' } },
+		{ gate: validGate, receiptVersion: '0.14.2-r1' },
+		{ gate: validGate, env: { MOCK_CURRENT: '0.14.2-r1' } },
+	];
+	for (const entry of cases) {
+		const f = fixture(t, { receiptVersion: entry.receiptVersion || '0.14.3-r1' });
+		fs.mkdirSync(path.dirname(f.networkJournal), { recursive: true });
+		fs.mkdirSync(path.dirname(f.maintenanceGate), { recursive: true });
+		fs.writeFileSync(f.networkJournal, JSON.stringify({ phase: entry.networkPhase || 'confirmed' }));
+		const gateBytes = typeof entry.gate === 'string' ? entry.gate : JSON.stringify(entry.gate);
+		if (entry.gateSymlink) {
+			const target = f.maintenanceGate + '.target';
+			fs.writeFileSync(target, gateBytes);
+			fs.symlinkSync(target, f.maintenanceGate);
+		} else {
+			fs.writeFileSync(f.maintenanceGate, gateBytes);
+		}
+		if (entry.controllerJournal) fs.writeFileSync(f.controllerJournal, '{}');
+		const result = f.run({
+			MOCK_CURRENT: '0.14.3-r1',
+			MOCK_SETUP_PREPARED: '1',
+			MOCK_BASE_URL: 'https://vpn.example',
+			MOCK_ROUTER_ID: 'old_router',
+			MOCK_WIFI_COMPLETE: '1',
+			MOCK_WIFI_PRIMARY_LAN: '1',
+			...(entry.env || {}),
+		});
 		assert.notEqual(result.status, 0, JSON.stringify(entry));
 		assert.equal(result.calls.some(call => call.name === 'curl'), false);
 		assert.equal(committed(result), false);
