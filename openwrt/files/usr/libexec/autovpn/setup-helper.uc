@@ -243,9 +243,21 @@ function resume() {
 	let ctx = cursor();
 	if (!ctx.load('autovpn') || !uciClean(ctx, 'autovpn')) return { ok: false, code: 'config_not_clean' };
 	let path = credentialPath(ctx);
+	if (!defaultControllerPaths(ctx) || path == null)
+		return { ok: false, code: 'setup_incomplete' };
 	let credential = path != null ? readfile(path, 257) : null;
-	if (!defaultControllerPaths(ctx) || path == null || !validBaseUrl(ctx.get('autovpn', 'main', 'base_url')) ||
-		!validRouterId(ctx.get('autovpn', 'main', 'router_id')) || !validCredential(trim(credential || '')))
+	let bindingValid = validBaseUrl(ctx.get('autovpn', 'main', 'base_url')) &&
+		validRouterId(ctx.get('autovpn', 'main', 'router_id')) && validCredential(trim(credential || ''));
+	if (!bindingValid && blocking.update.present && !blocking.maintenance.present) {
+		/* An update may have started before first-run pairing completed.  Clear
+		 * only that ready gate, without manufacturing setup state or identity. */
+		if (!ctx.set('autovpn', 'main', 'enabled', '0') || !ctx.commit('autovpn'))
+			return { ok: false, code: 'config_write_failed' };
+		if (unlink(ROOT + '/state/update.lock') == null)
+			return { ok: false, code: 'maintenance_gate_clear_failed' };
+		return { ok: true, enabled: false, resumed: true, setup_required: true };
+	}
+	if (!bindingValid)
 		return { ok: false, code: 'setup_incomplete' };
 	/* Commit enable first.  If removal cannot complete, immediately restore the
 	 * administrative disable; the persistent gate also protects a failed UCI
