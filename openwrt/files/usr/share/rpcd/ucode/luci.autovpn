@@ -39,6 +39,20 @@ function pingAll(request) {
 	return callController('ping-all', target, lane);
 }
 
+function diagnosticsStart(request) {
+	let scope = request.args.scope;
+	if (type(scope) != 'string' || index(['direct', 'vless', 'hysteria2'], scope) < 0)
+		return { ok: false, code: 'invalid_diagnostics_scope' };
+	return callController('zapret-diagnostics-start', scope);
+}
+
+function diagnosticsApply(request) {
+	let candidate = request.args.candidate_id;
+	if (type(candidate) != 'string' || match(candidate, /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/) == null)
+		return { ok: false, code: 'invalid_diagnostics_candidate' };
+	return callController('zapret-diagnostics-apply', candidate);
+}
+
 function validSetupNonce(value) {
 	return type(value) == 'string' && match(value, /^[A-Za-z0-9_-]{16,48}$/) != null;
 }
@@ -199,6 +213,20 @@ return {
 		ping_all: {
 			args: { target: '', lane: '' },
 			call: function(request) { return pingAll(request); },
+		},
+		zapret_diagnostics_start: {
+			args: { scope: '' },
+			call: function(request) { return diagnosticsStart(request); },
+		},
+		zapret_diagnostics_status: {
+			call: function() { return callController('zapret-diagnostics-status'); },
+		},
+		zapret_diagnostics_cancel: {
+			call: function() { return callController('zapret-diagnostics-cancel'); },
+		},
+		zapret_diagnostics_apply: {
+			args: { candidate_id: '' },
+			call: function(request) { return diagnosticsApply(request); },
 		},
 	},
 };

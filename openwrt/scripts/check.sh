@@ -59,6 +59,7 @@ node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/networks.js"
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/setup.js"
 node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/maintenance.js"
+node --input-type=commonjs --check <"$ROOT/files/www/luci-static/resources/view/autovpn/diagnostics.js"
 
 for source in $(grep -oE '\./files/[^[:space:]\\]+' "$ROOT/Makefile" | sort -u); do
 	[ -e "$ROOT/${source#./}" ] || {

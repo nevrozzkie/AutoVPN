@@ -8,6 +8,7 @@ const runner = require('autovpn.process');
 const ROOT = '/var/run/autovpn-zapret';
 const INPUT = '/etc/autovpn/runtime/zapret.json';
 const DUAL_INPUT = '/etc/autovpn/runtime-zapret/zapret.json';
+const DIAGNOSTIC_INPUT = '/tmp/autovpn-zapret-diagnostics/transport-plan.json';
 const ENGINE = '/usr/lib/autovpn-zapret';
 const SERVICE = '/etc/init.d/autovpn-zapret';
 const NFT = '/usr/sbin/nft';
@@ -104,14 +105,15 @@ function run() {
 	let action = ARGV[0];
 	if (index(['validate', 'up', 'check', 'down'], action) < 0) return false;
 	if (action == 'down') return stopped();
-	if (ARGV[1] != INPUT && ARGV[1] != DUAL_INPUT) return false;
+	if (ARGV[1] != INPUT && ARGV[1] != DUAL_INPUT && ARGV[1] != DIAGNOSTIC_INPUT) return false;
 	let raw = readfile(ARGV[1], 65537);
 	if (raw == null || length(raw) > 65536) return false;
 	let value;
 	try { value = json(raw); } catch (e) { return false; }
 	if (!zapret.validPlan(value)) return false;
 	if (value != null && ((ARGV[1] == INPUT && value.version != 1) ||
-		(ARGV[1] == DUAL_INPUT && (value.version != 2 || value.lane != 'vpn_zapret')))) return false;
+		((ARGV[1] == DUAL_INPUT || ARGV[1] == DIAGNOSTIC_INPUT) &&
+			(value.version != 2 || value.lane != 'vpn_zapret')))) return false;
 	if (action == 'validate') return validate(value);
 	if (action == 'check') return check(value);
 	return up(value);

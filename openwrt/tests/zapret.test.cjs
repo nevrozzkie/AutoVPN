@@ -49,6 +49,21 @@ test('UDP strategies handle obfuscated payloads while preserving AWG inner/outer
 	assert.doesNotMatch(config, /--daemon|--writable|--lua-init=[^@]/);
 });
 
+test('diagnostic transport strategies are typed and render only bounded nfqws recipes', () => {
+	assert.deepEqual(zapret.diagnosticStrategies('vless-reality'),
+		['split', 'multidisorder', 'fake_multidisorder', 'fake_multisplit']);
+	assert.deepEqual(zapret.diagnosticStrategies('hysteria2'), ['fake', 'fake_plain', 'fake11']);
+	assert.deepEqual(zapret.diagnosticStrategies('amneziawg'), []);
+	for (const strategy of zapret.diagnosticStrategies('vless-reality')) {
+		const value = zapret.diagnosticPlan(plan(), 'vless-reality', strategy);
+		assert.equal(zapret.validPlan(value), true);
+		assert.equal(value.flows[0].strategy, strategy);
+		assert.match(zapret.config(value), /--payload=tls_client_hello/);
+	}
+	assert.equal(zapret.diagnosticPlan(plan(), 'vless-reality', 'x;sh'), null);
+	assert.equal(zapret.diagnosticPlan(plan(), 'hysteria2', 'fake'), null);
+});
+
 test('zapret policy rejects shell/Lua, unsafe WAN/marks, duplicates and excessive work', () => {
 	for (const change of [{ vless: 'split;id' }, { repeats: 100 }, { repeats: '2' }, { hysteria2: '--lua-init=evil' }, { injected: true }])
 		assert.equal(zapret.validPolicy({ ...settings, ...change }), false);
@@ -84,4 +99,21 @@ test('LuCI uses bounded strategy controls and ACL protected installation without
 	assert.ok(acl['luci-app-autovpn'].write.ubus['luci.autovpn'].includes('zapret_install'));
 	const rpc = fs.readFileSync(path.join(root, 'files/usr/share/rpcd/ucode/luci.autovpn'), 'utf8');
 	assert.match(rpc, /zapret_install: \{ call: function\(\) \{ return callController\('zapret-install'\); \} \}/);
+});
+
+test('LuCI diagnostics exposes only fixed scopes and candidate identifiers', () => {
+	const rpc = fs.readFileSync(path.join(root, 'files/usr/share/rpcd/ucode/luci.autovpn'), 'utf8');
+	assert.match(rpc, /index\(\['direct', 'vless', 'hysteria2'\], scope\)/);
+	assert.match(rpc, /callController\('zapret-diagnostics-start', scope\)/);
+	assert.match(rpc, /callController\('zapret-diagnostics-status'\)/);
+	assert.match(rpc, /callController\('zapret-diagnostics-cancel'\)/);
+	assert.match(rpc, /callController\('zapret-diagnostics-apply', candidate\)/);
+	assert.match(rpc, /invalid_diagnostics_candidate/);
+	assert.doesNotMatch(rpc, /callController\('zapret-diagnostics-start', request\.args\./);
+	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json')));
+	assert.ok(acl['luci-app-autovpn'].read.ubus['luci.autovpn'].includes('zapret_diagnostics_status'));
+	for (const method of ['zapret_diagnostics_start', 'zapret_diagnostics_cancel', 'zapret_diagnostics_apply'])
+		assert.ok(acl['luci-app-autovpn'].write.ubus['luci.autovpn'].includes(method));
+	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json')));
+	assert.equal(menu['admin/services/autovpn/diagnostics'].action.path, 'autovpn/diagnostics');
 });

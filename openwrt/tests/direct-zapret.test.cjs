@@ -173,3 +173,18 @@ test('media queues remain direct-only with no late-STUN cutoff or repeated UDP44
 		assert.doesNotMatch(rules, /br-avpnz"|br-avpn"|queue num 20195|flush ruleset|\bbypass\b|ip6/);
 	}
 });
+
+test('blockcheck direct presets can force QUIC to TCP without opening another lane', () => {
+	for (const web_strategy of ['blockcheck-fake', 'blockcheck-fake-multisplit']) {
+		const value = direct.plan('pppoe-wan', true, { ...media(), web_strategy, quic_mode: 'block' });
+		assert.equal(value.version, 4);
+		assert.equal(direct.validPlan(value), true);
+		const config = direct.config(value);
+		assert.doesNotMatch(config, /--filter-udp=443|--filter-l7=quic|fake_default_quic/);
+		assert.match(config, /--payload=tls_client_hello,http_req/);
+		const rules = direct.nft(value);
+		assert.match(rules, /udp dport 443 udp length >= 264 .* drop/);
+		assert.doesNotMatch(rules, /udp dport 443 .*queue num 20196/);
+		assert.doesNotMatch(rules, /br-avpnz|queue num 20195|flush ruleset/);
+	}
+});

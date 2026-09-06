@@ -156,12 +156,24 @@ case "$command" in
 	update-status)
 		exec /usr/libexec/autovpn/update-helper status
 		;;
+	zapret-diagnostics-start)
+		exec /usr/libexec/autovpn/zapret-diagnostics start "${2:-}"
+		;;
+	zapret-diagnostics-status)
+		exec /usr/libexec/autovpn/zapret-diagnostics status
+		;;
+	zapret-diagnostics-cancel)
+		exec /usr/libexec/autovpn/zapret-diagnostics cancel
+		;;
 	ru-db-status)
 		exec /usr/libexec/autovpn/ru-db-update status
 		;;
 esac
 acquire_lock
 case "$command" in
+	zapret-diagnostics-apply)
+		/usr/libexec/autovpn/zapret-diagnostics apply "${2:-}"
+		;;
 	wifi-bootstrap-resume)
 		/usr/bin/ucode /usr/libexec/autovpn/wifi-bootstrap.uc resume
 		;;
@@ -226,7 +238,7 @@ case "$command" in
 		/usr/bin/ucode /usr/libexec/autovpn/network-helper.uc "$command" "${2:-}"
 		;;
 	*)
-		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|health-tick|ping-all [youtube|instagram]|zapret-install|zapret-install-status|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
+		printf 'usage: autovpnctl {status|refresh|recover|apply-policy|stop|health-tick|ping-all [youtube|instagram]|zapret-install|zapret-install-status|zapret-diagnostics-start SCOPE|zapret-diagnostics-status|zapret-diagnostics-cancel|zapret-diagnostics-apply ID|network-setup|network-confirm ID|network-status|network-tick|network-boot|set-credential|set-router-id ID|setup NONCE|setup-activate|maintenance-resume|maintenance NONCE|update-check TAG|update-apply ID|update-status}\n' >&2
 		exit 64
 		;;
 esac

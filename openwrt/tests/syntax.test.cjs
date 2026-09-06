@@ -116,8 +116,8 @@ test('menu-bound ACL grants the authenticated first-run action but no file acces
 	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json'), 'utf8'));
 	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json'), 'utf8'));
 	assert.deepEqual(Object.keys(acl), ['luci-app-autovpn']);
-	assert.deepEqual(acl['luci-app-autovpn'].read.ubus['luci.autovpn'], ['status', 'ru_db_status', 'network_status', 'update_status', 'zapret_install_status']);
-	assert.deepEqual(acl['luci-app-autovpn'].write.ubus['luci.autovpn'], ['refresh', 'apply_policy', 'ping_all', 'zapret_install', 'network_setup', 'network_confirm', 'setup_configure', 'setup_activate', 'maintenance_action', 'maintenance_resume', 'update_check', 'update_apply']);
+	assert.deepEqual(acl['luci-app-autovpn'].read.ubus['luci.autovpn'], ['status', 'ru_db_status', 'network_status', 'update_status', 'zapret_install_status', 'zapret_diagnostics_status']);
+	assert.deepEqual(acl['luci-app-autovpn'].write.ubus['luci.autovpn'], ['refresh', 'apply_policy', 'ping_all', 'zapret_install', 'network_setup', 'network_confirm', 'setup_configure', 'setup_activate', 'maintenance_action', 'maintenance_resume', 'update_check', 'update_apply', 'zapret_diagnostics_start', 'zapret_diagnostics_cancel', 'zapret_diagnostics_apply']);
 	assert.deepEqual(acl['luci-app-autovpn'].write.uci, ['autovpn']);
 	assert.deepEqual(menu['admin/services/autovpn'].depends.acl, ['luci-app-autovpn']);
 	assert.equal(JSON.stringify(acl).includes('/etc/autovpn'), false);

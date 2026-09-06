@@ -89,13 +89,16 @@ function setting() {
 	let discordMedia = uci.get('autovpn', 'direct', 'discord_media');
 	let stun = uci.get('autovpn', 'direct', 'stun');
 	let webStrategy = uci.get('autovpn', 'direct', 'web_strategy');
+	let quicMode = uci.get('autovpn', 'direct', 'quic_mode');
 	let mediaStrategy = uci.get('autovpn', 'direct', 'media_strategy');
 	let mediaRepeats = uci.get('autovpn', 'direct', 'media_repeats');
-	let hasOptions = webStrategy != null || discordMedia != null || stun != null || mediaStrategy != null || mediaRepeats != null;
+	let hasOptions = webStrategy != null || quicMode != null || discordMedia != null || stun != null || mediaStrategy != null || mediaRepeats != null;
 	if ((discordMedia != null && (type(discordMedia) != 'string' || index(['0', '1'], discordMedia) < 0)) ||
 		(stun != null && (type(stun) != 'string' || index(['0', '1'], stun) < 0)) ||
 		(webStrategy != null && (type(webStrategy) != 'string' ||
-			index(['upstream', 'legacy-split', 'legacy-split-badsum'], webStrategy) < 0)) ||
+			index(['upstream', 'legacy-split', 'legacy-split-badsum',
+				'blockcheck-fake', 'blockcheck-fake-multisplit'], webStrategy) < 0)) ||
+		(quicMode != null && (type(quicMode) != 'string' || index(['process', 'block'], quicMode) < 0)) ||
 		(mediaStrategy != null && (type(mediaStrategy) != 'string' ||
 			index(['fake', 'fake_badsum'], mediaStrategy) < 0)) ||
 		(mediaRepeats != null && (type(mediaRepeats) != 'string' || match(mediaRepeats, /^[1-6]$/) == null)))
@@ -109,6 +112,7 @@ function setting() {
 	}
 	let value = hasOptions ? direct.plan(wan, true, {
 		web_strategy: webStrategy == null ? 'upstream' : webStrategy,
+		quic_mode: quicMode == null ? 'process' : quicMode,
 		discord_media: discordMedia == '1',
 		stun: stun == '1',
 		media_strategy: mediaStrategy == null ? 'fake' : mediaStrategy,

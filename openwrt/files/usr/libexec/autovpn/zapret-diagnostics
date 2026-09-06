@@ -1,0 +1,223 @@
+#!/bin/sh
+# Provider-specific, bounded zapret diagnostics. Jobs and upstream sources live
+# only in tmpfs. LuCI can select a fixed scope/candidate, never a command line.
+set -eu
+umask 077
+export LC_ALL=C
+
+ROOT=/tmp/autovpn-zapret-diagnostics
+STATE="$ROOT/status.json"
+OWNER="$ROOT/owner"
+CANCEL="$ROOT/cancel"
+WORK="$ROOT/work"
+CONTROLLER_LOCK=/var/lock/autovpn-controller.lock
+DIAGNOSTIC_LOCK=/var/lock/autovpn-zapret-diagnostics.lock
+ARCHIVE=zapret2-v1.0.5-openwrt-embedded.tar.gz
+ARCHIVE_URL=https://github.com/bol-van/zapret2/releases/download/v1.0.5/zapret2-v1.0.5-openwrt-embedded.tar.gz
+ARCHIVE_SHA256=40040fef1747012a68f2dd5892b9a0bece91846e9bce37b59e35b641fdcb2a4e
+PREFIX=zapret2-v1.0.5
+TRANSPORT_PLAN="$ROOT/transport-plan.json"
+SOURCE_PLAN=/etc/autovpn/runtime-zapret/zapret.json
+DIRECT_HELPER=/usr/libexec/autovpn/direct-zapret-helper.uc
+TRANSPORT_HELPER=/usr/libexec/autovpn/zapret-helper.uc
+PLAN_HELPER=/usr/libexec/autovpn/zapret-diagnostics-helper.uc
+
+reply() { printf '%s\n' "$1"; }
+valid_scope() { case "${1:-}" in direct|vless|hysteria2) return 0;; *) return 1;; esac; }
+valid_candidate() {
+	case "${1:-}:${2:-}" in
+		direct:direct:blockcheck-fake|direct:direct:blockcheck-fake-multisplit|\
+		vless:vless:split|vless:vless:multidisorder|vless:vless:fake_multidisorder|vless:vless:fake_multisplit|\
+		hysteria2:hysteria2:fake|hysteria2:hysteria2:fake_plain|hysteria2:hysteria2:fake11) return 0;;
+		*) return 1;;
+	esac
+}
+ensure_root() {
+	if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then mkdir "$ROOT"; fi
+	[ -d "$ROOT" ] && [ ! -L "$ROOT" ] || return 1
+	[ "$(stat -c %u "$ROOT" 2>/dev/null)" = 0 ] || return 1
+	chmod 0700 "$ROOT"
+	if [ ! -e "$OWNER" ] && [ ! -L "$OWNER" ]; then
+		printf '%s\n' autovpn-zapret-diagnostics-v1 >"$OWNER.new"
+		chmod 0600 "$OWNER.new"; mv -f "$OWNER.new" "$OWNER"
+	fi
+	[ -f "$OWNER" ] && [ ! -L "$OWNER" ] && [ "$(stat -c %u "$OWNER" 2>/dev/null)" = 0 ] &&
+		grep -Fqx autovpn-zapret-diagnostics-v1 "$OWNER"
+}
+write_state() {
+	json=$1
+	ensure_root || return 1
+	printf '%s\n' "$json" >"$STATE.new"
+	chmod 0600 "$STATE.new"; mv -f "$STATE.new" "$STATE"
+}
+phase() { jsonfilter -i "$STATE" -e '@.phase' 2>/dev/null || true; }
+cancelled() { [ -f "$CANCEL" ] && [ ! -L "$CANCEL" ]; }
+cleanup_work() { [ ! -e "$WORK" ] || { [ -d "$WORK" ] && [ ! -L "$WORK" ] && rm -rf -- "$WORK"; }; rm -f "$TRANSPORT_PLAN"; }
+restore_direct() { /usr/bin/ucode "$DIRECT_HELPER" up >/dev/null 2>&1 || true; }
+restore_transport() { /usr/bin/ucode "$TRANSPORT_HELPER" up "$SOURCE_PLAN" >/dev/null 2>&1 || true; }
+fail_worker() {
+	code=$1 scope=$2
+	write_state "{\"ok\":false,\"phase\":\"failed\",\"scope\":\"$scope\",\"code\":\"$code\",\"candidates\":[]}" || true
+	exit 1
+}
+download_bundle() {
+	free="$(df -Pk /tmp | awk 'NR == 2 {print $4}')"
+	case "$free" in ''|*[!0-9]*) return 1;; esac
+	[ "$free" -ge 24576 ] || return 1
+	mkdir "$WORK" "$WORK/extract"
+	(ulimit -f 10240; curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+		--connect-timeout 15 --max-time 120 --output "$WORK/$ARCHIVE" "$ARCHIVE_URL") || return 1
+	actual="$(sha256sum "$WORK/$ARCHIVE")" || return 1
+	[ "${actual%% *}" = "$ARCHIVE_SHA256" ] || return 1
+	tar -xzf "$WORK/$ARCHIVE" -C "$WORK/extract" || return 1
+}
+run_bounded() {
+	limit=$1; shift
+	/usr/bin/timeout -k 15 "$limit" "$@" & child=$!
+	while kill -0 "$child" 2>/dev/null; do
+		if cancelled; then
+			kill "$child" 2>/dev/null || true
+			wait "$child" 2>/dev/null || true
+			return 130
+		fi
+		sleep 1
+	done
+	wait "$child"
+}
+direct_worker() {
+	trap 'restore_direct; cleanup_work' EXIT
+	trap 'exit 130' HUP INT TERM
+	/usr/bin/ucode "$DIRECT_HELPER" down >/dev/null 2>&1 || fail_worker direct_close_failed direct
+	download_bundle || fail_worker diagnostic_bundle_failed direct
+	base="$WORK/extract/$PREFIX"
+	out="$WORK/blockcheck.log"
+	set +e
+	BATCH=1 TEST=custom DOMAINS='www.youtube.com discord.com' IPVS=4 ENABLE_HTTP=0 \
+	ENABLE_HTTPS_TLS12=1 ENABLE_HTTPS_TLS13=1 ENABLE_HTTP3=0 REPEATS=2 PARALLEL=0 \
+	SCANLEVEL=force SKIP_DNSCHECK=1 run_bounded 300 sh "$base/blockcheck2.sh" >"$out" 2>&1
+	status=$?
+	set -e
+	[ "$status" -ne 130 ] || { write_state '{"ok":false,"phase":"cancelled","scope":"direct","code":"cancelled","candidates":[]}' || true; return; }
+	[ "$status" -eq 0 ] || fail_worker direct_blockcheck_failed direct
+	awk '/^\* COMMON/{copy=1;next} /^Please note/{copy=0} copy' "$out" >"$WORK/summary"
+	candidates=''
+	if grep -Fq -- '--payload=tls_client_hello --lua-desync=fake:blob=0x00000000:tcp_md5:repeats=1 --lua-desync=fake:blob=fake_default_tls:tcp_md5:tls_mod=rnd,dupsid:repeats=1 --lua-desync=multisplit:pos=2' "$WORK/summary"; then
+		candidates='{"candidate_id":"direct:blockcheck-fake-multisplit","strategy":"blockcheck-fake-multisplit","status":"ok","quic":"force_tcp"}'
+	fi
+	if grep -Fq -- '--payload tls_client_hello --lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000' "$WORK/summary"; then
+		[ -z "$candidates" ] || candidates="$candidates,"
+		candidates="$candidates{\"candidate_id\":\"direct:blockcheck-fake\",\"strategy\":\"blockcheck-fake\",\"status\":\"ok\",\"quic\":\"force_tcp\"}"
+	fi
+	if [ -z "$candidates" ]; then
+		write_state '{"ok":true,"phase":"ready","scope":"direct","code":"no_common_strategy","quic_test":"unavailable","media_test":"unverified","candidates":[]}'
+	else
+		write_state "{\"ok\":true,\"phase\":\"ready\",\"scope\":\"direct\",\"code\":null,\"quic_test\":\"unavailable\",\"media_test\":\"unverified\",\"candidates\":[$candidates]}"
+	fi
+}
+transport_worker() {
+	scope=$1
+	profile=$scope; [ "$scope" != vless ] || profile=vless-reality
+	port=1110; [ "$scope" != vless ] || port=1109
+	strategies='fake fake_plain fake11'; [ "$scope" != vless ] || strategies='split multidisorder fake_multidisorder fake_multisplit'
+	trap 'restore_transport; cleanup_work' EXIT
+	trap 'exit 130' HUP INT TERM
+	[ -f "$SOURCE_PLAN" ] && [ ! -L "$SOURCE_PLAN" ] || fail_worker transport_plan_missing "$scope"
+	candidates=''
+	for strategy in $strategies; do
+		if cancelled; then write_state "{\"ok\":false,\"phase\":\"cancelled\",\"scope\":\"$scope\",\"code\":\"cancelled\",\"candidates\":[]}"; return; fi
+		/usr/bin/ucode "$PLAN_HELPER" make-plan "$profile" "$strategy" >/dev/null 2>&1 || continue
+		/usr/bin/ucode "$TRANSPORT_HELPER" up "$TRANSPORT_PLAN" >/dev/null 2>&1 || continue
+		result="$(curl --disable --silent --head --output /dev/null --write-out '%{http_code} %{time_starttransfer}' \
+			--proxy "socks5h://127.0.0.1:$port" --noproxy '' --proto '=https' --connect-timeout 4 --max-time 8 \
+			https://www.youtube.com/generate_204 2>/dev/null || true)"
+		case "$result" in 204\ [0-9]*.[0-9]*)
+			latency="$(printf '%s\n' "${result#* }" | awk '{printf "%d", $1*1000}')"
+			id="$scope:$strategy"
+			[ -z "$candidates" ] || candidates="$candidates,"
+			candidates="$candidates{\"candidate_id\":\"$id\",\"strategy\":\"$strategy\",\"status\":\"ok\",\"latency_ms\":$latency}";;
+		esac
+	done
+	if [ -z "$candidates" ]; then
+		write_state "{\"ok\":true,\"phase\":\"ready\",\"scope\":\"$scope\",\"code\":\"no_working_strategy\",\"candidates\":[]}"
+	else
+		write_state "{\"ok\":true,\"phase\":\"ready\",\"scope\":\"$scope\",\"code\":null,\"candidates\":[$candidates]}"
+	fi
+}
+worker() {
+	scope=$1
+	valid_scope "$scope" || exit 64
+	ensure_root || exit 1
+	exec 9>>"$CONTROLLER_LOCK"
+	flock -n 9 || fail_worker controller_busy "$scope"
+	printf '0\n' >"$CONTROLLER_LOCK"
+	for gate in /etc/autovpn/state/maintenance.lock /etc/autovpn/state/update.lock; do
+		[ ! -e "$gate" ] && [ ! -L "$gate" ] || fail_worker maintenance_locked "$scope"
+	done
+	cleanup_work
+	write_state "{\"ok\":true,\"phase\":\"running\",\"scope\":\"$scope\",\"code\":null,\"candidates\":[]}"
+	if [ "$scope" = direct ]; then direct_worker; else transport_worker "$scope"; fi
+}
+queue() {
+	scope=$1
+	valid_scope "$scope" || { reply '{"ok":false,"code":"invalid_diagnostic_scope"}'; exit 64; }
+	ensure_root || { reply '{"ok":false,"code":"unsafe_diagnostic_state"}'; exit 1; }
+	exec 8>>"$DIAGNOSTIC_LOCK"
+	flock -n 8 || { reply '{"ok":false,"code":"diagnostic_busy"}'; exit 75; }
+	case "$(phase)" in queued|running) reply '{"ok":false,"code":"diagnostic_busy"}'; exit 75;; esac
+	cleanup_work; rm -f "$CANCEL"
+	write_state "{\"ok\":true,\"phase\":\"queued\",\"scope\":\"$scope\",\"code\":null,\"candidates\":[]}"
+	cp "$0" "$ROOT/worker"; chmod 0700 "$ROOT/worker"
+	("$ROOT/worker" worker "$scope") </dev/null >/dev/null 2>&1 &
+	reply "{\"ok\":true,\"phase\":\"queued\",\"scope\":\"$scope\"}"
+}
+status() {
+	ensure_root || { reply '{"ok":false,"phase":"failed","code":"unsafe_diagnostic_state","candidates":[]}'; exit 1; }
+	[ -f "$STATE" ] && [ ! -L "$STATE" ] || { reply '{"ok":true,"phase":"idle","code":null,"candidates":[]}'; return; }
+	[ "$(stat -c %u "$STATE" 2>/dev/null)" = 0 ] && [ "$(wc -c <"$STATE")" -le 8192 ] || {
+		reply '{"ok":false,"phase":"failed","code":"invalid_diagnostic_state","candidates":[]}'; exit 1; }
+	jsonfilter -i "$STATE" -e '@.phase' >/dev/null 2>&1 || { reply '{"ok":false,"phase":"failed","code":"invalid_diagnostic_state","candidates":[]}'; exit 1; }
+	cat "$STATE"
+}
+cancel() {
+	ensure_root || { reply '{"ok":false,"code":"unsafe_diagnostic_state"}'; exit 1; }
+	case "$(phase)" in queued|running) :;; *) reply '{"ok":true,"phase":"idle","cancelled":false}'; return;; esac
+	printf '%s\n' cancel >"$CANCEL.new"; chmod 0600 "$CANCEL.new"; mv -f "$CANCEL.new" "$CANCEL"
+	reply '{"ok":true,"phase":"cancelling","cancelled":true}'
+}
+apply_candidate() {
+	id=$1
+	ensure_root || { reply '{"ok":false,"code":"unsafe_diagnostic_state"}'; exit 1; }
+	[ "$(phase)" = ready ] || { reply '{"ok":false,"code":"diagnostic_not_ready"}'; exit 1; }
+	scope="$(jsonfilter -i "$STATE" -e '@.scope' 2>/dev/null || true)"
+	valid_candidate "$scope" "$id" || { reply '{"ok":false,"code":"invalid_diagnostic_candidate"}'; exit 64; }
+	/usr/bin/ucode "$PLAN_HELPER" validate-result "$scope" "$id" >/dev/null 2>&1 || {
+		reply '{"ok":false,"code":"candidate_not_found"}'; exit 1; }
+	old_web="$(uci -q get autovpn.direct.web_strategy || true)"; old_quic="$(uci -q get autovpn.direct.quic_mode || true)"
+	old_vless="$(uci -q get autovpn.runtime.zapret_vless || true)"; old_hy="$(uci -q get autovpn.runtime.zapret_hysteria2 || true)"
+	strategy=${id#*:}
+	if [ "$scope" = direct ]; then uci set "autovpn.direct.web_strategy=$strategy"; uci set autovpn.direct.quic_mode=block
+	elif [ "$scope" = vless ]; then uci set "autovpn.runtime.zapret_vless=$strategy"
+	else uci set "autovpn.runtime.zapret_hysteria2=$strategy"; fi
+	uci commit autovpn
+	if { [ "$scope" = direct ] && /usr/bin/ucode "$DIRECT_HELPER" up >/dev/null; } ||
+		{ [ "$scope" != direct ] && /usr/bin/ucode /usr/libexec/autovpn/controller.uc apply-policy >/dev/null; }; then
+		reply "{\"ok\":true,\"applied\":true,\"candidate_id\":\"$id\"}"; return
+	fi
+	[ -z "$old_web" ] || uci set "autovpn.direct.web_strategy=$old_web"; [ -n "$old_web" ] || uci -q delete autovpn.direct.web_strategy
+	[ -z "$old_quic" ] || uci set "autovpn.direct.quic_mode=$old_quic"; [ -n "$old_quic" ] || uci -q delete autovpn.direct.quic_mode
+	[ -z "$old_vless" ] || uci set "autovpn.runtime.zapret_vless=$old_vless"; [ -n "$old_vless" ] || uci -q delete autovpn.runtime.zapret_vless
+	[ -z "$old_hy" ] || uci set "autovpn.runtime.zapret_hysteria2=$old_hy"; [ -n "$old_hy" ] || uci -q delete autovpn.runtime.zapret_hysteria2
+	uci commit autovpn
+	[ "$scope" != direct ] || restore_direct
+	[ "$scope" = direct ] || /usr/bin/ucode /usr/libexec/autovpn/controller.uc apply-policy >/dev/null 2>&1 || true
+	reply '{"ok":false,"code":"diagnostic_apply_failed"}'; exit 1
+}
+
+case "${1:-status}" in
+	start) queue "${2:-}";;
+	status) status;;
+	cancel) cancel;;
+	apply) apply_candidate "${2:-}";;
+	worker) worker "${2:-}";;
+	*) reply '{"ok":false,"code":"invalid_diagnostic_action"}'; exit 64;;
+esac

@@ -15,8 +15,8 @@ function ip(value) {
 }
 function validPolicy(value) {
 	return exact(value, ['vless', 'hysteria2', 'amneziawg', 'repeats']) &&
-		index(['off', 'split'], value.vless) >= 0 &&
-		index(['off', 'fake'], value.hysteria2) >= 0 &&
+		index(['off', 'split', 'multidisorder', 'fake_multidisorder', 'fake_multisplit'], value.vless) >= 0 &&
+		index(['off', 'fake', 'fake_plain', 'fake11'], value.hysteria2) >= 0 &&
 		index(['off', 'fake'], value.amneziawg) >= 0 &&
 		type(value.repeats) == 'int' && value.repeats >= 1 && value.repeats <= 6;
 }
@@ -37,7 +37,9 @@ function validPlan(value) {
 		let position = index(PROFILES, flow.profile);
 		if (position <= previous || !ip(flow.ip) || type(flow.port) != 'int' || flow.port < 1 || flow.port > 65535 ||
 			flow.mark != (value.version == 2 && position == 2 ? 20214 : MARKS[position]) || flow.transport != (position == 0 ? 'tcp' : 'udp') ||
-			flow.strategy != (position == 0 ? 'split' : 'fake')) return false;
+			(position == 0 && index(['split', 'multidisorder', 'fake_multidisorder', 'fake_multisplit'], flow.strategy) < 0) ||
+			(position == 1 && index(['fake', 'fake_plain', 'fake11'], flow.strategy) < 0) ||
+			(position == 2 && flow.strategy != 'fake')) return false;
 		previous = position;
 	}
 	return true;
@@ -76,13 +78,50 @@ function config(value) {
 			push(args, '--payload=tls_client_hello');
 			push(args, '--lua-desync=multisplit:pos=1,midsld');
 		}
+		else if (flow.strategy == 'multidisorder') {
+			push(args, '--payload=tls_client_hello');
+			push(args, '--lua-desync=multidisorder:pos=1,midsld');
+		}
+		else if (flow.strategy == 'fake_multidisorder') {
+			push(args, '--payload=tls_client_hello');
+			push(args, '--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-10000');
+			push(args, '--lua-desync=multidisorder:pos=1,midsld');
+		}
+		else if (flow.strategy == 'fake_multisplit') {
+			push(args, '--payload=tls_client_hello');
+			push(args, '--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000');
+			push(args, '--lua-desync=multisplit:pos=2');
+		}
 		else {
 			/* AWG payloads may deliberately no longer match the WireGuard signature. */
 			push(args, '--payload=all');
-			push(args, '--lua-desync=fake:payload=all:blob=fake_default_quic:badsum:repeats=' + value.repeats);
+			let suffix = flow.strategy == 'fake_plain' || flow.strategy == 'fake11' ? '' : ':badsum';
+			let repeats = flow.strategy == 'fake11' ? 11 : value.repeats;
+			push(args, '--lua-desync=fake:payload=all:blob=fake_default_quic' + suffix + ':repeats=' + repeats);
 		}
 	}
 	return join('\n', args) + '\n';
+}
+
+function diagnosticStrategies(profile) {
+	if (profile == 'vless-reality')
+		return ['split', 'multidisorder', 'fake_multidisorder', 'fake_multisplit'];
+	if (profile == 'hysteria2') return ['fake', 'fake_plain', 'fake11'];
+	return [];
+}
+
+function diagnosticPlan(value, profile, strategy) {
+	if (!validPlan(value) || index(diagnosticStrategies(profile), strategy) < 0) return null;
+	let copy = json(sprintf('%J', value));
+	let found = false;
+	for (let i = 0; i < length(copy.flows); i++) {
+		let flow = copy.flows[i];
+		if (flow.profile != profile) continue;
+		if (found) return null;
+		flow.strategy = strategy;
+		found = true;
+	}
+	return found && validPlan(copy) ? copy : null;
 }
 function nft(value) {
 	if (value == null || !validPlan(value)) return null;
@@ -106,4 +145,5 @@ function nft(value) {
 	return output + ' }\n}\n';
 }
 
-return { validPolicy: validPolicy, validPlan: validPlan, plan: plan, config: config, nft: nft };
+return { validPolicy: validPolicy, validPlan: validPlan, plan: plan, config: config, nft: nft,
+	diagnosticStrategies: diagnosticStrategies, diagnosticPlan: diagnosticPlan };
