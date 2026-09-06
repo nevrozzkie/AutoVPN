@@ -166,7 +166,7 @@ function diagnosticValue(value, depth, budget) {
 		return length(value) <= 500 && match(value, /^[\x20-\x7e]*$/) != null &&
 			index(value, '<') < 0 && index(value, '>') < 0 &&
 			match(lc(value), /(authorization:|bearer |password=|private key|presharedkey|avrt_|vless:\/\/|hy2:\/\/|vpn:\/\/)/) == null &&
-			match(value, /^[A-Za-z0-9_+\/=\-]{32,256}$/) == null &&
+			match(value, /^[A-Za-z0-9_+\/=-]{32,256}$/) == null &&
 			match(value, /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/) == null;
 	if (type(value) == 'array') {
 		if (length(value) > 32)
