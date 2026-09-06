@@ -134,8 +134,9 @@ if (name === 'ucode') {
   process.exit(failed ? 1 : 0);
 }
 `;
-	for (const name of ['lock', 'uci', 'ucode']) fs.writeFileSync(path.join(tmp, name), mock, { mode: 0o755 });
+	for (const name of ['flock', 'uci', 'ucode']) fs.writeFileSync(path.join(tmp, name), mock, { mode: 0o755 });
 	const source = fs.readFileSync(path.join(root, 'files/usr/sbin/autovpnctl'), 'utf8')
+		.replace('/var/lock/autovpn-controller.lock', path.join(tmp, 'controller.lock'))
 		.replace('/usr/libexec/autovpn/credential.sh', path.join(root, 'files/usr/libexec/autovpn/credential.sh'))
 		.replaceAll('/usr/bin/ucode', path.join(tmp, 'ucode'));
 	fs.writeFileSync(path.join(tmp, 'ctl'), source);

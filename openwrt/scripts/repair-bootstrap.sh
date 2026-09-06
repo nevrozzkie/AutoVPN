@@ -29,11 +29,11 @@ fail() { printf 'AutoVPN repair: %s\n' "$*" >&2; exit 1; }
 say() { printf 'AutoVPN repair: %s\n' "$*"; }
 release_locks() {
 	if [ "$HAVE_CONTROLLER_LOCK" = 1 ]; then
-		lock -u "$CONTROLLER_LOCK" || true
+		exec 9>&-
 		HAVE_CONTROLLER_LOCK=0
 	fi
 	if [ "$HAVE_UPDATE_LOCK" = 1 ]; then
-		lock -u "$UPDATE_LOCK" || true
+		exec 8>&-
 		HAVE_UPDATE_LOCK=0
 	fi
 }
@@ -43,6 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT
+trap 'exit 129' HUP
 trap 'exit 143' TERM
 
 case "${1-}" in
@@ -61,15 +62,19 @@ for value in "$PUBLIC_KEY_SHA256" "$MANIFEST_SHA256"; do
 	printf '%s\n' "$value" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release pins are missing.'
 done
 [ "$(id -u)" = 0 ] || fail 'Run as root on the OpenWrt router.'
-for tool in apk curl ubus jsonfilter sha256sum df awk grep wc mktemp uname tr cp chmod mkdir mv rm lock uci sync; do
+for tool in apk curl ubus jsonfilter sha256sum df awk grep wc mktemp uname tr cp chmod mkdir mv rm flock uci sync; do
 	command -v "$tool" >/dev/null 2>&1 || fail "Missing $tool."
 done
 
 WORK=$(mktemp -d /tmp/autovpn-repair.XXXXXX) || fail 'Cannot create temporary directory.'
 chmod 0700 "$WORK"
-if ! lock -n "$UPDATE_LOCK"; then fail 'Another AutoVPN update is running.'; fi
+exec 8>>"$UPDATE_LOCK" || fail 'Cannot open the AutoVPN update lock.'
+if ! flock -n 8; then exec 8>&-; fail 'Another AutoVPN update is running.'; fi
+printf '0\n' >"$UPDATE_LOCK" || { exec 8>&-; fail 'Cannot replace the legacy AutoVPN update lock owner.'; }
 HAVE_UPDATE_LOCK=1
-if ! lock -n "$CONTROLLER_LOCK"; then fail 'The AutoVPN controller is busy.'; fi
+exec 9>>"$CONTROLLER_LOCK" || fail 'Cannot open the AutoVPN controller lock.'
+if ! flock -n 9; then exec 9>&-; fail 'The AutoVPN controller is busy.'; fi
+printf '0\n' >"$CONTROLLER_LOCK" || { exec 9>&-; fail 'Cannot replace the legacy AutoVPN controller lock owner.'; }
 HAVE_CONTROLLER_LOCK=1
 
 field() { jsonfilter -i "$1" -e "$2" 2>/dev/null; }

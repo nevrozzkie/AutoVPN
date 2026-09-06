@@ -28,7 +28,14 @@ test('a plan is frozen, then rechecked before install, under both maintenance lo
   assert.match(source, /expires_uptime/);
   assert.match(source, /check_now \"\$plan_tag\"/);
   assert.match(source, /update_plan_changed/);
-  assert.match(source, /lock -n \/var\/lock\/autovpn-controller\.lock/);
+  assert.match(source, /exec 8>>"\$LOCK"/);
+  assert.match(source, /flock -n 8/);
+  assert.match(source, /exec 9>>\/var\/lock\/autovpn-controller\.lock/);
+  assert.match(source, /flock -n 9/);
+	assert.match(source, /printf '0\\n' >"\$LOCK"/);
+	assert.match(source, /exec 8>&-/);
+	assert.match(source, /exec 9>&-/);
+	assert.doesNotMatch(source, /flock -u|lock -u|rm[^\n]*autovpn-(?:update|controller)\.lock/);
   assert.match(source, /maintenance\.lock/);
   assert.match(source, /network-helper\.uc network-gate/);
   assert.match(source, /runtime-adapter fail-closed/);
@@ -42,7 +49,7 @@ test('a plan is frozen, then rechecked before install, under both maintenance lo
 test('LuCI request queues a private copied worker and exposes only redacted status', () => {
   assert.match(source, /update-worker/);
   assert.match(source, /write_state queued/);
-  assert.match(source, /\(\"\$worker\" worker \"\$id\"\).*&/);
+  assert.match(source, /\(exec 8>&- 9>&-; "\$worker" worker "\$id"\).*&/);
   assert.match(source, /phase.*current_version.*candidate_id.*candidate_version/s);
   assert.doesNotMatch(source, /credential|token|private_key/i);
 });

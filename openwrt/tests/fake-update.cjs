@@ -35,14 +35,9 @@ else if (name === 'curl') {
 		if (env.FAKE_ADD_FAIL === '1') process.exit(1);
 		fs.writeFileSync(env.FAKE_COMMIT, '0.8.0-r1');
 	} else throw new Error('Unexpected apk command: ' + args.join(' '));
-} else if (name === 'lock') {
-	const file = args.at(-1);
-	if (args.includes('-u')) { fs.rmSync(file, {force: true}); }
-	else {
-		if (env.FAKE_LOCK_BUSY === '1') process.exit(1);
-		fs.mkdirSync(path.dirname(file), {recursive: true});
-		try { fs.closeSync(fs.openSync(file, 'wx')); } catch (_) { process.exit(1); }
-	}
+} else if (name === 'flock') {
+	if (args[0] !== '-n' || !/^\d+$/.test(args[1])) process.exit(2);
+	if (env.FAKE_LOCK_BUSY === '1') process.exit(1);
 } else if (name === 'uci') {
 	if (args.includes('changes') && env.FAKE_DIRTY_UCI === '1') write('autovpn.main.enabled=1');
 } else if (name === 'ucode') { if (env.FAKE_NETWORK_UNSAFE === '1') process.exit(1); }

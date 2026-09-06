@@ -88,13 +88,10 @@ log({name,args});
 if (name === 'id') output('0');
 else if (name === 'uname') output(env.MOCK_KERNEL_RELEASE || '6.12.85');
 else if (name === 'df') output('Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 100000 1 ' + (env.MOCK_FREE || '90000') + ' 1% /fixture');
-else if (name === 'lock') {
-  const target = args.at(-1), held = target + '.held';
-  if (args[0] === '-n') {
-    if (env.MOCK_BUSY_LOCK === path.basename(target) || fs.existsSync(held)) process.exit(1);
-    fs.writeFileSync(held, 'held');
-  } else if (args[0] === '-u') fs.rmSync(held, {force:true});
-  else process.exit(2);
+else if (name === 'flock') {
+  if (args[0] !== '-n' || !/^\\d+$/.test(args[1])) process.exit(2);
+  if ((env.MOCK_BUSY_LOCK === 'autovpn-update.lock' && args[1] === '8') ||
+      (env.MOCK_BUSY_LOCK === 'autovpn-controller.lock' && args[1] === '9')) process.exit(1);
 }
 else if (name === 'uci') {
   if (args[0] === '-q' && args[1] === 'get') {
@@ -149,12 +146,12 @@ else if (name === 'apk') {
   } else process.exit(91);
 }
 else if (name === 'install-wifi') {
-  log({name:'wifi-state',locksHeld:fs.existsSync(env.MOCK_UPDATE_LOCK + '.held') || fs.existsSync(env.MOCK_CONTROLLER_LOCK + '.held')});
+  log({name:'wifi-state'});
   if (env.MOCK_WIFI_FAIL === '1') process.exit(1);
 }
 else throw new Error('unexpected mock tool ' + name);
 `;
-	for (const name of ['id', 'uname', 'df', 'lock', 'uci', 'ubus', 'jsonfilter', 'curl', 'apk', 'install-wifi']) {
+	for (const name of ['id', 'uname', 'df', 'flock', 'uci', 'ubus', 'jsonfilter', 'curl', 'apk', 'install-wifi']) {
 		fs.writeFileSync(path.join(bin, name), mock, { mode: 0o755 });
 	}
 	const logFile = path.join(root, 'calls.jsonl');
@@ -218,7 +215,7 @@ test('repairs only the controller, preserves trust and UCI, then releases both l
 	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release.json')), f.receiptBefore);
 	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release-signing.pem')), f.keyBefore);
 	const wifi = result.calls.find(call => call.name === 'wifi-state');
-	assert.deepEqual(wifi, { name: 'wifi-state', locksHeld: false });
+	assert.deepEqual(wifi, { name: 'wifi-state' });
 });
 
 test('configured or stateful installations are rejected before download and mutation', t => {
@@ -281,7 +278,7 @@ test('0.14.0 receipt with installed 0.14.1 upgrades to the pinned repair without
 	assert.equal(committed(result), true);
 	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release.json')), f.receiptBefore);
 	assert.deepEqual(fs.readFileSync(path.join(f.trust, 'release-signing.pem')), f.keyBefore);
-	assert.deepEqual(result.calls.find(call => call.name === 'wifi-state'), { name: 'wifi-state', locksHeld: false });
+	assert.deepEqual(result.calls.find(call => call.name === 'wifi-state'), { name: 'wifi-state' });
 });
 
 test('safe rerun at the repaired version skips APK mutation and retries Wi-Fi with locks released', t => {
@@ -290,5 +287,32 @@ test('safe rerun at the repaired version skips APK mutation and retries Wi-Fi wi
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.calls.some(call => call.name === 'apk' && call.args.includes('--simulate')), false);
 	assert.equal(committed(result), false);
-	assert.deepEqual(result.calls.find(call => call.name === 'wifi-state'), { name: 'wifi-state', locksHeld: false });
+	assert.deepEqual(result.calls.find(call => call.name === 'wifi-state'), { name: 'wifi-state' });
+});
+
+test('descriptor locks keep their inodes, replace legacy PID contents and are never explicitly unlocked', t => {
+	const f = fixture(t);
+	fs.writeFileSync(f.updateLock, '1234\n');
+	fs.writeFileSync(f.controllerLock, '5678\n');
+	const updateInode = fs.statSync(f.updateLock).ino;
+	const controllerInode = fs.statSync(f.controllerLock).ino;
+	const result = f.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(fs.statSync(f.updateLock).ino, updateInode);
+	assert.equal(fs.statSync(f.controllerLock).ino, controllerInode);
+	assert.equal(fs.readFileSync(f.updateLock, 'utf8'), '0\n');
+	assert.equal(fs.readFileSync(f.controllerLock, 'utf8'), '0\n');
+	assert.equal(result.calls.some(call => call.name === 'flock' && call.args.includes('-u')), false);
+});
+
+test('busy descriptor locks fail closed without clearing legacy PID contents', t => {
+	for (const lockName of ['autovpn-update.lock', 'autovpn-controller.lock']) {
+		const f = fixture(t);
+		const lockPath = lockName === 'autovpn-update.lock' ? f.updateLock : f.controllerLock;
+		fs.writeFileSync(lockPath, '1234\n');
+		const result = f.run({MOCK_BUSY_LOCK: lockName});
+		assert.notEqual(result.status, 0);
+		assert.equal(fs.readFileSync(lockPath, 'utf8'), '1234\n');
+		assert.equal(committed(result), false);
+	}
 });

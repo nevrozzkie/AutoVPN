@@ -65,16 +65,40 @@ write_gate() {
 	sync
 }
 release_locks() {
-	[ "$HAVE_CONTROLLER_LOCK" = 0 ] || lock -u /var/lock/autovpn-controller.lock
-	[ "$HAVE_UPDATE_LOCK" = 0 ] || lock -u "$LOCK"
+	if [ "$HAVE_CONTROLLER_LOCK" = 1 ]; then
+		exec 9>&-
+		HAVE_CONTROLLER_LOCK=0
+	fi
+	if [ "$HAVE_UPDATE_LOCK" = 1 ]; then
+		exec 8>&-
+		HAVE_UPDATE_LOCK=0
+	fi
 }
 clean_work() { case "$WORK" in /tmp/autovpn-update.*) rm -rf -- "$WORK" ;; esac; }
 trap 'release_locks; clean_work' EXIT
 trap 'exit 130' INT
+trap 'exit 129' HUP
 trap 'exit 143' TERM
 
+acquire_update_lock() {
+	[ "$HAVE_UPDATE_LOCK" = 0 ] || return 0
+	exec 8>>"$LOCK" || return 1
+	if ! flock -n 8; then exec 8>&-; return 1; fi
+	# BusyBox lock(1) expects a numeric owner in this inode. Replace a stranded
+	# PID only after the descriptor lock is held so mixed versions interoperate.
+	printf '0\n' >"$LOCK" || { exec 8>&-; return 1; }
+	HAVE_UPDATE_LOCK=1
+}
+acquire_controller_lock() {
+	[ "$HAVE_CONTROLLER_LOCK" = 0 ] || return 0
+	exec 9>>/var/lock/autovpn-controller.lock || return 1
+	if ! flock -n 9; then exec 9>&-; return 1; fi
+	printf '0\n' >/var/lock/autovpn-controller.lock || { exec 9>&-; return 1; }
+	HAVE_CONTROLLER_LOCK=1
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || { printf '%s\n' "missing $1" >&2; exit 1; }; }
-for tool in apk curl ubus jsonfilter sha256sum awk grep wc df mktemp cp chmod mkdir mv rm uname tr cut lock uci sync; do need "$tool"; done
+for tool in apk curl ubus jsonfilter sha256sum awk grep wc df mktemp cp chmod mkdir mv rm uname tr cut flock uci sync; do need "$tool"; done
 
 receipt() {
 	[ -f "$RECEIPT" ] && [ ! -L "$RECEIPT" ] && [ -f "$KEY" ] && [ ! -L "$KEY" ] || return 1
@@ -152,8 +176,7 @@ check_now() {
 	tag=${1:-}
 	valid_tag "$tag" || fail invalid_update_tag
 	if [ "$HAVE_UPDATE_LOCK" = 0 ]; then
-		if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
-		HAVE_UPDATE_LOCK=1
+		if ! acquire_update_lock; then fail update_busy '' 75; fi
 	fi
 	recovery=0
 	if [ -e "$GATE" ] || [ -L "$GATE" ]; then
@@ -253,10 +276,8 @@ load_plan() {
 
 worker() {
 	id=${1:-}
-	if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
-	HAVE_UPDATE_LOCK=1
-	if ! lock -n /var/lock/autovpn-controller.lock; then fail update_busy '' 75; fi
-	HAVE_CONTROLLER_LOCK=1
+	if ! acquire_update_lock; then fail update_busy '' 75; fi
+	if ! acquire_controller_lock; then fail update_busy '' 75; fi
 	[ ! -e "$ROOT/state/maintenance.lock" ] && [ ! -L "$ROOT/state/maintenance.lock" ] || fail maintenance_in_progress
 	load_plan "$id" || fail stale_update_plan
 	if [ -e "$GATE" ]; then
@@ -311,21 +332,19 @@ worker() {
 check_queue() {
 	tag=${1:-}
 	valid_tag "$tag" || fail invalid_update_tag
-	if ! lock -n "$LOCK"; then fail update_busy '' 75; fi
-	HAVE_UPDATE_LOCK=1
+	if ! acquire_update_lock; then fail update_busy '' 75; fi
 	mkdir -p "$ROOT/state"; chmod 0700 "$ROOT" "$ROOT/state"
 	worker="$ROOT/state/update-check-worker"
 	cp "$0" "$worker"; chmod 0700 "$worker"
 	write_state checking '' ",\"tag\":\"$tag\""
-	lock -u "$LOCK"; HAVE_UPDATE_LOCK=0
-	("$worker" check-worker "$tag") </dev/null >/dev/null 2>&1 &
+	release_locks
+	(exec 8>&- 9>&-; "$worker" check-worker "$tag") </dev/null >/dev/null 2>&1 &
 	printf '{"ok":true,"phase":"checking","candidate_tag":"%s"}\n' "$tag"
 }
 
 queue() {
 	id=${1:-}
-	if ! lock -n "$LOCK"; then printf '%s\n' '{"ok":false,"code":"update_busy"}'; exit 75; fi
-	HAVE_UPDATE_LOCK=1
+	if ! acquire_update_lock; then printf '%s\n' '{"ok":false,"code":"update_busy"}'; exit 75; fi
 	load_plan "$id" || { printf '%s\n' '{"ok":false,"code":"stale_update_plan"}'; exit 1; }
 	[ "$(field "$STATE" '@.phase')" = checked ] || { printf '%s\n' '{"ok":false,"code":"update_already_queued"}'; exit 1; }
 	# The worker starts detached so rpcd/LuCI is never held across APK install.
@@ -338,9 +357,8 @@ queue() {
 	# Claim the frozen plan before forking. A second LuCI click now sees
 	# `queued` rather than launching a competing worker.
 	write_state queued '' ",\"id\":\"$id\",\"tag\":\"$tag\",\"version\":\"$version\",\"filename\":\"$filename\",\"sha256\":\"$sha\",\"expires_uptime\":$expires,\"recovery\":$recovery"
-	lock -u "$LOCK"
-	HAVE_UPDATE_LOCK=0
-	("$worker" worker "$id") </dev/null >/dev/null 2>&1 &
+	release_locks
+	(exec 8>&- 9>&-; "$worker" worker "$id") </dev/null >/dev/null 2>&1 &
 	printf '{"ok":true,"phase":"queued","id":"%s"}\n' "$id"
 }
 

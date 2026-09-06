@@ -174,8 +174,9 @@ test('CLI streams maintenance JSON only over stdin and never places credentials 
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 	const log = path.join(tmp, 'args');
 	const program = `#!${process.execPath}\nconst fs=require('node:fs'); fs.appendFileSync(process.env.MOCK_LOG, JSON.stringify(process.argv.slice(2))+'\\n');`;
-	for (const name of ['lock', 'uci', 'ucode']) fs.writeFileSync(path.join(tmp, name), program, { mode: 0o755 });
+	for (const name of ['flock', 'uci', 'ucode']) fs.writeFileSync(path.join(tmp, name), program, { mode: 0o755 });
 	const ctl = read('files/usr/sbin/autovpnctl')
+		.replace('/var/lock/autovpn-controller.lock', path.join(tmp, 'controller.lock'))
 		.replace('/usr/libexec/autovpn/credential.sh', path.join(root, 'files/usr/libexec/autovpn/credential.sh'))
 		.replaceAll('/usr/bin/ucode', path.join(tmp, 'ucode'));
 	fs.writeFileSync(path.join(tmp, 'ctl'), ctl, { mode: 0o755 });
