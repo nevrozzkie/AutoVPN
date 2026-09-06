@@ -326,13 +326,13 @@ test('HTTP adapter argv contains normalized bounded timeouts and conditional ETa
 	assert.equal(orchestration.safePersistentPath('/etc/autovpn/../shadow', '/etc/autovpn/state'), '/etc/autovpn/state');
 	assert.equal(orchestration.safePersistentPath('/etc/autovpn/custom-state', '/etc/autovpn/state'), '/etc/autovpn/custom-state');
 	assert.deepEqual(orchestration.fetchArguments(config, ''), [
-		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, '', 9, 45
+		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, '', '9', '45'
 	]);
 	assert.deepEqual(orchestration.fetchArguments(config, 'unquoted-etag'), [
-		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, '', 9, 45
+		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, '', '9', '45'
 	]);
 	assert.deepEqual(orchestration.fetchArguments(config, etag('a')), [
-		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, etag('a'), 9, 45
+		config.http_adapter, 'fetch', config.base_url, config.credential_file, config.state_dir, etag('a'), '9', '45'
 	]);
 	assert.equal(orchestration.validResponsePath(config.state_dir, '/etc/autovpn/state/http-response.42'), true);
 	assert.equal(orchestration.validResponsePath(config.state_dir, '/etc/autovpn/state/../credentials'), false);
@@ -347,8 +347,8 @@ test('HTTP adapter argv contains normalized bounded timeouts and conditional ETa
 		'r41-test-s1',
 		etag('a'),
 		'/etc/autovpn/state/journal.json',
-		9,
-		45
+		'9',
+		'45'
 	]);
 });
 

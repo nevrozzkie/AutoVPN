@@ -31,8 +31,8 @@ function fetchArguments(config, appliedEtag) {
 		config.credential_file,
 		config.state_dir,
 		validEtag(appliedEtag),
-		config.connect_timeout,
-		config.request_timeout,
+		sprintf('%d', config.connect_timeout),
+		sprintf('%d', config.request_timeout),
 	];
 }
 
@@ -53,8 +53,8 @@ function putResultArguments(config, pending, journalPath) {
 		pending.idempotency_key,
 		pending.etag,
 		journalPath,
-		config.connect_timeout,
-		config.request_timeout,
+		sprintf('%d', config.connect_timeout),
+		sprintf('%d', config.request_timeout),
 	];
 }
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Narrow recovery template for an unpaired AutoVPN 0.14.0-0.14.3 install.
+# Narrow recovery template for an unpaired AutoVPN 0.14.0-0.14.4 install.
 # prepare-release.py pins the same public, non-secret release values as install.sh.
 set -eu
 umask 077
@@ -8,7 +8,7 @@ export LC_ALL=C
 RELEASE_BASE='@AUTOVPN_RELEASE_BASE@'
 PUBLIC_KEY_SHA256='@AUTOVPN_SIGNING_KEY_SHA256@'
 MANIFEST_SHA256='@AUTOVPN_MANIFEST_SHA256@'
-TARGET_CONTROLLER_VERSION='0.14.4-r1'
+TARGET_CONTROLLER_VERSION='0.14.5-r1'
 TRUST_ROOT=/etc/autovpn
 RELEASE_RECEIPT="$TRUST_ROOT/release.json"
 RELEASE_KEY="$TRUST_ROOT/release-signing.pem"
@@ -52,7 +52,7 @@ case "${1-}" in
 	'') ;;
 	--help)
 		printf '%s\n' 'Usage: sh repair-bootstrap.sh' \
-			'Repairs only an unpaired or stranded-rebind AutoVPN 0.14.0-0.14.3 controller install.'
+			'Repairs only an unpaired AutoVPN 0.14.0-0.14.4 or stranded-rebind 0.14.3 controller install.'
 		exit 0
 		;;
 	*) fail 'Unknown option; do not pass site URLs, router IDs or credentials.' ;;
@@ -187,7 +187,7 @@ key_actual=$(sha256sum "$RELEASE_KEY") || fail 'Cannot hash the installed signin
 if [ "$stranded_rebind" = 1 ]; then
 	[ "$receipt_version" = 0.14.3-r1 ] || fail 'Stranded Rebind receipt is outside this recovery path.'
 else
-	case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
+	case "$receipt_version" in 0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1|0.14.4-r1|"$TARGET_CONTROLLER_VERSION") ;; *)
 		fail 'Release receipt is outside this recovery path.' ;;
 	esac
 fi
@@ -281,7 +281,7 @@ controller_arch=$(field "$WORK/controller.json" '@.info.arch') || fail 'Controll
 case "$controller_arch" in noarch|all|"$architecture") ;; *) fail 'Controller package architecture mismatch.' ;; esac
 
 case "$current_version" in
-	0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1)
+	0.14.0-r1|0.14.0-r3|0.14.1-r1|0.14.2-r1|0.14.3-r1|0.14.4-r1)
 		plan=$(apk --no-network --cache-dir "$WORK/empty-cache" --keys-dir "$WORK/keys" \
 			add --simulate "$WORK/$controller_filename") || fail 'Controller upgrade plan failed.'
 		plan_lines=$(printf '%s\n' "$plan" | grep -E '^\([[:space:]]*[0-9]+/[0-9]+\) ' || true)
