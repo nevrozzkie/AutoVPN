@@ -5,13 +5,13 @@
 
 ## Что уже готово и что ещё нельзя считать проверенным
 
-Controller 0.14.6, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
+Controller 0.14.7, AmneziaWG tools и модуль собраны и подписаны для OpenWrt
 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`. Требуемый пакет kernel:
 `6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1`.
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Доступен [предварительный установочный релиз 0.14.6](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.6-openwrt-25.12.5-r1).
+Доступен [предварительный установочный релиз 0.14.7](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.14.7-openwrt-25.12.5-r1).
 Он сохраняет исправления предыдущих выпусков и исправляет native ucode-вызов
 maintenance, из-за которого Rebind завершался `maintenance_failed`. Resume
 после обновления теперь также умеет безопасно оставить ещё не привязанный
@@ -65,7 +65,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.6-openwrt-25.12.5-r1/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.7-openwrt-25.12.5-r1/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -120,7 +120,7 @@ SSH, проверьте подключение к `x` другим устрой�
 ```sh
 (autovpn_repair="$(mktemp /tmp/autovpn-repair-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_repair"' EXIT &&
-  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.6-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
+  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.14.7-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
   sh "$autovpn_repair")
 ```
 
