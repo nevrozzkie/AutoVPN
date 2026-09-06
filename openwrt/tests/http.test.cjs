@@ -63,7 +63,9 @@ test('URL normalization accepts only bounded HTTPS URLs without userinfo, query 
 		'https://vpn.example/a//b',
 		'https://vpn.example/../admin',
 		'https://a.-invalid.example',
-		'https://vpn.example:0'
+		'https://vpn.example:0',
+		'https://vpn.example\0.evil',
+		'https://vpn.example/root\0evil'
 	])
 		assert.equal(http.normalizeBaseUrl(invalid), null, invalid);
 });

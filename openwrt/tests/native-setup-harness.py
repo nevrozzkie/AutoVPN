@@ -212,4 +212,16 @@ const fixtureProcessRunner = {
 };
 """
 
-sys.stdout.write(fixture + "\n" + helper)
+# The maintenance path has the same URL contract. Exercise its real validator
+# as well without loading its filesystem/process entry point.
+maintenance = (FILES / "usr/libexec/autovpn/maintenance-helper.uc").read_text()
+start = maintenance.index("function validBaseUrl(value) {")
+end = maintenance.index("\n}", start) + 2
+validator = maintenance[start:end].replace("validBaseUrl", "maintenanceValidBaseUrl", 1)
+probe = r"""
+if (!maintenanceValidBaseUrl('https://vpn.example:8443/api') ||
+    maintenanceValidBaseUrl('http://vpn.example') ||
+    maintenanceValidBaseUrl('https://user@vpn.example')) die('maintenance URL validator failed');
+print('Native maintenance URL validation passed.\n');
+"""
+sys.stdout.write(fixture + "\n" + validator + "\n" + probe + "\n" + helper)

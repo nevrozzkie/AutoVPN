@@ -42,7 +42,8 @@ function boundedTimeout(value, minimum, maximum) {
 
 function normalizeBaseUrl(value) {
 	if (type(value) != 'string' || length(value) < 9 || length(value) > 2048 ||
-		match(value, /^https:\/\//) == null || match(value, /[?#@\\\x00-\x20\x7f]/) != null)
+		index(value, '\x00') >= 0 || match(value, /^https:\/\//) == null ||
+		match(value, /[?#@\\\x01-\x20\x7f]/) != null)
 		return null;
 
 	let rest = substr(value, 8);
@@ -59,20 +60,20 @@ function normalizeBaseUrl(value) {
 
 	let port = null;
 	if (substr(authority, 0, 1) == '[') {
-		let ipv6 = match(authority, /^\[([0-9A-Fa-f:.]+)\](?::([0-9]+))?$/);
+		let ipv6 = match(authority, /^\[([0-9A-Fa-f:.]+)\](:([0-9]+))?$/);
 		if (ipv6 == null || index(ipv6[1], ':') < 0)
 			return null;
-		port = ipv6[2];
+		port = ipv6[3];
 	}
 	else {
-		let host = match(authority, /^([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]+))?$/);
+		let host = match(authority, /^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]+))?$/);
 		if (host == null || length(host[1]) > 253 || match(host[1], /\.\./) != null)
 			return null;
 		let labels = split(host[1], '.');
 		for (let i = 0; i < length(labels); i++)
-			if (length(labels[i]) > 63 || match(labels[i], /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/) == null)
+			if (length(labels[i]) > 63 || match(labels[i], /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) == null)
 				return null;
-		port = host[2];
+		port = host[4];
 	}
 	if (port != null && boundedTimeout(port, 1, 65535) == null)
 		return null;

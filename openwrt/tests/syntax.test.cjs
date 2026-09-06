@@ -36,6 +36,11 @@ const sources = [
 	'files/usr/libexec/autovpn/http-helper.uc'
 ];
 
+test('packaged ucode avoids unsupported non-capturing regex groups', () => {
+	for (const relative of sources)
+		assert.doesNotMatch(fs.readFileSync(path.join(root, relative), 'utf8'), /\(\?:/, relative);
+});
+
 test('ucode sources stay inside the host-parseable ECMAScript subset', () => {
 	for (const relative of sources) {
 		const source = fs.readFileSync(path.join(root, relative), 'utf8')

@@ -8,6 +8,8 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/autovpn-native-ucode.XXXXXX")
 trap 'rm -f "$WORK/compiled.uc" "$WORK/native-setup-harness.uc"; rmdir "$WORK"' EXIT
 "$UCODE" -L "$MODULES" -L "$FILES/usr/share/ucode" \
 	"$ROOT/tests/native-modules.uc" "$FILES/usr/share/ucode/autovpn"
+"$UCODE" -L "$MODULES" -L "$FILES/usr/share/ucode" \
+	"$ROOT/tests/native-http.uc"
 for helper in "$FILES"/usr/libexec/autovpn/*.uc "$FILES"/usr/share/rpcd/ucode/luci.autovpn; do
 	# Host ucode lacks ubus/UCI. Keep these as dynamic imports while compiling
 	# every real helper; do not execute network-affecting entry points here.
