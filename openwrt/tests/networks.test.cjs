@@ -34,10 +34,10 @@ test('creates personal WPA2 SSIDs on both bands and preserves management section
 	const plan = planner.plan(settings, base, []);
 	assert.equal(plan.ok, true);
 	assert.deepEqual(base, before);
-	assert.deepEqual(plan.ssids.map(s => s.ssid), ['Общага', 'Общага-в', 'Общага-з', 'Общага-вз']);
+	assert.deepEqual(plan.ssids.map(s => s.ssid), ['Общага', 'Общага-в']);
 	const aps = plan.sections.filter(s => s.config === 'wireless');
-	assert.equal(aps.length, 8);
-	assert.equal(aps.filter(s => s.values.disabled === '0').length, 8);
+	assert.equal(aps.length, 4);
+	assert.equal(aps.filter(s => s.values.disabled === '0').length, 4);
 	for (const ap of aps) {
 		assert.equal(ap.values.encryption, 'psk2+ccmp');
 		assert.equal(ap.values.key, settings.password);
@@ -47,7 +47,7 @@ test('creates personal WPA2 SSIDs on both bands and preserves management section
 	assert.equal(plan.sections.some(s => s.name === 'lan' || s.name === 'radio0'), false);
 	const direct = plan.sections.find(s => s.name === 'avpn_direct_wan');
 	assert.equal(direct.values.dest, 'wan');
-	assert.equal(plan.sections.filter(s => s.section_type === 'forwarding').length, 2);
+	assert.equal(plan.sections.filter(s => s.section_type === 'forwarding').length, 1);
 });
 test('repeat setup updates only owned sections and does not duplicate APs or bridges', () => {
 	const first = planner.plan(settings, configs(), []);
@@ -131,8 +131,6 @@ test('initial primary-LAN plan safely enables both stock-disabled radios without
 	assert.deepEqual(planned.ssids, [
 		{ ssid: 'OpenWrt', enabled: true, mode: 'direct', primary_lan: true },
 		{ ssid: 'OpenWrt-в', enabled: true, mode: 'vpn', primary_lan: false },
-		{ ssid: 'OpenWrt-з', enabled: true, mode: 'zapret', primary_lan: false },
-		{ ssid: 'OpenWrt-вз', enabled: true, mode: 'vpn_zapret', primary_lan: false },
 	]);
 	const directAps = planned.sections.filter(item => item.config === 'wireless' && item.name.startsWith('avpn_direct_'));
 	assert.equal(directAps.length, 2);

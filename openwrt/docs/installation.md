@@ -1,17 +1,22 @@
 # Установка AutoVPN на Cudy WR3000S v1
 
+В текущем пользовательском сценарии активны только базовая сеть Wi-Fi и VPN-сеть
+`-в`. Сети `-з` и `-вз`, а также zapret-only/VPN+zapret controls, скрыты из LuCI;
+старые backend-файлы могут присутствовать для совместимости, но не включаются этим
+сценарием.
+
 Корневой `install.sh` репозитория устанавливает **сайт на сервер**, не роутер.
 Здесь описан отдельный OpenWrt-установщик и последующая настройка в LuCI.
 
 ## Что уже готово и что ещё нельзя считать проверенным
 
-Controller 0.15.2, AmneziaWG tools и модуль предназначены для OpenWrt
+Controller 0.16.0, AmneziaWG tools и модуль предназначены для OpenWrt
 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`. Требуемый пакет kernel:
 `6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1`.
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Доступен [установочный релиз 0.15.2](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.15.2-openwrt-25.12.5-r1).
+Доступен [установочный релиз 0.16.0](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.16.0-openwrt-25.12.5-r1).
 Он добавляет ручную диагностику zapret для прямого YouTube/Discord и отдельно
 для внешнего транспорта VLESS/Hysteria2. Найденный вариант никогда не применяется
 автоматически: результат нужно выбрать и подтвердить в LuCI. AmneziaWG APK не изменены.
@@ -59,7 +64,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.15.2-openwrt-25.12.5-r1/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.16.0-openwrt-25.12.5-r1/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -86,14 +91,13 @@ df -h /overlay /tmp
 - WPA2-пароль с повтором и скрытым вводом: 8–63 печатных ASCII-символа либо
   64 шестнадцатеричных символа. Не передавайте пароль в командной строке.
 
-На обоих диапазонах создаются четыре сети с одним WPA2-паролем:
+На обоих диапазонах пользовательски активны две сети с одним WPA2-паролем:
 
 | SSID | Назначение |
 | --- | --- |
 | `x` | Обычный интернет и администрирование в существующей LAN |
 | `x-в` | VPN |
-| `x-з` | Прямое подключение с zapret, без VPN |
-| `x-вз` | VPN с обработкой внешнего трафика туннеля через zapret |
+| `x-з`, `x-вз` | Legacy SSID; не активируются текущим LuCI-сценарием |
 
 Имена на 2,4 и 5 ГГц одинаковые. **Диапазон выбирает клиент**; активный
 band steering не устанавливается. Это не гарантия автоматического перехода
@@ -114,7 +118,7 @@ SSH, проверьте подключение к `x` другим устрой�
 ```sh
 (autovpn_repair="$(mktemp /tmp/autovpn-repair-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_repair"' EXIT &&
-  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.15.2-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
+  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.16.0-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
   sh "$autovpn_repair")
 ```
 

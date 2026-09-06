@@ -33,10 +33,5 @@
     "title": "Networks",
     "order": 30,
     "action": { "type": "view", "path": "autovpn/networks" }
-  },
-  "admin/services/autovpn/diagnostics": {
-    "title": "Zapret diagnostics",
-    "order": 35,
-    "action": { "type": "view", "path": "autovpn/diagnostics" }
   }
 }

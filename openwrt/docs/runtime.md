@@ -1,5 +1,10 @@
 # Dual runtime: независимые VPN lanes и Ping all
 
+Пользовательский сценарий этого выпуска ограничен базовым Wi-Fi и VPN-сетью
+`-в`. Zapret-only и VPN+zapret lanes скрыты из LuCI и не считаются активными;
+упоминания ниже о `vpn_zapret`, `-вз` и связанных ресурсах описывают сохранённый
+legacy backend, а не доступный пользовательский режим.
+
 Есть две независимые VPN lane: `vpn` для Wi-Fi `-в` и `vpn_zapret` для Wi-Fi
 `-вз`. У каждой свой sing-box/AWG runtime, bridge, route table, guard, health и
 ручной/`auto` выбор VLESS REALITY, Hysteria2 или опционального kernel AmneziaWG.

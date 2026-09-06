@@ -226,7 +226,9 @@ case "$command" in
 		maintenance_action "${2:-}"
 		;;
 	direct-tick)
-		/usr/bin/ucode /usr/libexec/autovpn/direct-zapret-helper.uc up
+		# Kept as a compatibility no-op for an old loop during package replacement.
+		printf '%s\n' '{"ok":false,"code":"lane_removed"}'
+		exit 1
 		;;
 	status|refresh|recover|apply-policy|stop|health-tick|ping-all)
 		/usr/bin/ucode /usr/libexec/autovpn/controller.uc "$command" "${2:-}" "${3:-}"
