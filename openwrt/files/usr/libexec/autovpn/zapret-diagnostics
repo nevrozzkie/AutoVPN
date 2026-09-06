@@ -36,7 +36,9 @@ ensure_root() {
 	if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then mkdir "$ROOT"; fi
 	[ -d "$ROOT" ] && [ ! -L "$ROOT" ] || return 1
 	[ "$(stat -c %u "$ROOT" 2>/dev/null)" = 0 ] || return 1
-	chmod 0700 "$ROOT"
+	# nfqws2 deliberately drops root before loading the pinned public Lua files.
+	# Permit traversal only; status, owner, logs and worker remain private files.
+	chmod 0711 "$ROOT"
 	if [ ! -e "$OWNER" ] && [ ! -L "$OWNER" ]; then
 		printf '%s\n' autovpn-zapret-diagnostics-v1 >"$OWNER.new"
 		chmod 0600 "$OWNER.new"; mv -f "$OWNER.new" "$OWNER"
@@ -61,15 +63,28 @@ fail_worker() {
 	exit 1
 }
 download_bundle() {
+	local base binaries
 	free="$(df -Pk /tmp | awk 'NR == 2 {print $4}')"
 	case "$free" in ''|*[!0-9]*) return 1;; esac
 	[ "$free" -ge 24576 ] || return 1
 	mkdir "$WORK" "$WORK/extract"
+	chmod 0711 "$WORK" "$WORK/extract"
 	(ulimit -f 10240; curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
 		--connect-timeout 15 --max-time 120 --output "$WORK/$ARCHIVE" "$ARCHIVE_URL") || return 1
 	actual="$(sha256sum "$WORK/$ARCHIVE")" || return 1
 	[ "${actual%% *}" = "$ARCHIVE_SHA256" ] || return 1
 	tar -xzf "$WORK/$ARCHIVE" -C "$WORK/extract" || return 1
+	base="$WORK/extract/$PREFIX"
+	# The official embedded archive intentionally ships architecture-specific
+	# binaries below binaries/, while blockcheck2 expects prepared nfq2/ and
+	# mdig/ paths. Prepare only the fixed WR3000S arm64 layout in tmpfs; do not
+	# run the upstream installer or write outside this verified extraction.
+	[ "$(uname -m)" = aarch64 ] || return 1
+	binaries="$base/binaries/linux-arm64"
+	[ -x "$binaries/nfqws2" ] && [ -x "$binaries/mdig" ] || return 1
+	mkdir "$base/nfq2" "$base/mdig" || return 1
+	ln -s ../binaries/linux-arm64/nfqws2 "$base/nfq2/nfqws2" || return 1
+	ln -s ../binaries/linux-arm64/mdig "$base/mdig/mdig" || return 1
 }
 run_bounded() {
 	limit=$1; shift
