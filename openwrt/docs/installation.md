@@ -10,13 +10,13 @@ negative-VPN сеть `-нв`. Сети `-з` и `-вз`, а также zapret-o
 
 ## Что уже готово и что ещё нельзя считать проверенным
 
-Controller 0.17.0, AmneziaWG tools и модуль предназначены для OpenWrt
+Controller 0.17.1, AmneziaWG tools и модуль предназначены для OpenWrt
 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`. Требуемый пакет kernel:
 `6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1`.
 Сборка не равнозначна проверке установки, загрузки модуля или VPN handshake
 на роутере. [Артефакты и измеренный размер](awg-sdk-build.md).
 
-Доступен [установочный релиз 0.17.0](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.17.0-openwrt-25.12.5-r1).
+Доступен [установочный релиз 0.17.1](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.17.1-openwrt-25.12.5-r1).
 Он добавляет ручную диагностику zapret для прямого YouTube/Discord и отдельно
 для внешнего транспорта VLESS/Hysteria2. Найденный вариант никогда не применяется
 автоматически: результат нужно выбрать и подтвердить в LuCI. AmneziaWG APK не изменены.
@@ -64,7 +64,7 @@ df -h /overlay /tmp
 ```sh
 (autovpn_bootstrap="$(mktemp /tmp/autovpn-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_bootstrap"' EXIT &&
-  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.17.0-openwrt-25.12.5-r1/install.sh' &&
+  wget -O "$autovpn_bootstrap" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.17.1-openwrt-25.12.5-r1/install.sh' &&
   sh "$autovpn_bootstrap")
 ```
 
@@ -106,9 +106,9 @@ band steering не устанавливается. Это не гарантия 
 
 После привязки роутера откройте **Services → AutoVPN → Settings** и настройте
 negative VPN. Там явно показан точный состав каждого переключателя сервисов и
-поле ручных IPv4/CIDR. Переключатель «остальные популярные внешние сервисы» —
-не полный государственный реестр и не заявление, что он охватывает все возможные
-ограничения; полный перечень есть в [описании сетей](networks.md#негативный-vpn-что-выбирается-в-luci).
+поле ручных IPv4/CIDR. Сервисы выбираются независимо; Twitch и Reddit оставлены
+отдельными опциональными пунктами и не считаются повсеместно заблокированными.
+Полный состав есть в [описании сетей](networks.md#негативный-vpn-что-выбирается-в-luci).
 
 После создания сетей есть **3 минуты на подтверждение**. Сохраняйте кабельный
 SSH, проверьте подключение к `x` другим устройством и подтвердите результат
@@ -125,7 +125,7 @@ SSH, проверьте подключение к `x` другим устрой�
 ```sh
 (autovpn_repair="$(mktemp /tmp/autovpn-repair-bootstrap.XXXXXX)" &&
   trap 'rm -f "$autovpn_repair"' EXIT &&
-  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.17.0-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
+  wget -O "$autovpn_repair" 'https://github.com/nevrozzkie/AutoVPN/releases/download/router-v0.17.1-openwrt-25.12.5-r1/repair-bootstrap.sh' &&
   sh "$autovpn_repair")
 ```
 

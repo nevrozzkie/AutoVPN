@@ -122,8 +122,12 @@ test('package upgrade adds missing negative VPN settings without overwriting exi
 	const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
 	assert.match(makefile, /uci -q get autovpn\.runtime_negative[^\n]+\n\s*uci set autovpn\.runtime_negative=runtime/);
 	assert.match(makefile, /negative_telegram negative_youtube negative_instagram negative_x/);
+	assert.match(makefile, /negative_signal negative_twitch/);
+	assert.match(makefile, /negative_viber negative_whatsapp negative_bluesky/);
+	assert.match(makefile, /negative_service_presets_migrated/);
 	assert.match(makefile, /uci -q get "autovpn\.runtime_negative\.\$\$\{option\}"[^\n]+\|\|/);
-	assert.doesNotMatch(makefile, /uci set "autovpn\.runtime_negative\.\$\$\{option\}=1"/);
+	assert.match(makefile, /negative_extended_blocked_services[^]*negative_discord[^]*negative_viber[^]*=1/);
+	assert.match(makefile, /negative_extended_blocked_services=0/);
 });
 
 test('menu-bound ACL grants the authenticated first-run action but no file access', () => {

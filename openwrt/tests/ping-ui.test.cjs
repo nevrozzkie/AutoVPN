@@ -113,7 +113,10 @@ test('settings exposes positive and negative VPN lane controls with managed Wi-F
 	assert.deepEqual(sections.runtime_negative.options.map(option => option.name), [
 		'vpn_cidrs', 'vpn_domains',
 		'negative_telegram', 'negative_youtube', 'negative_instagram', 'negative_x',
-		'negative_chatgpt', 'negative_claude', 'negative_extended_blocked_services'
+		'negative_chatgpt', 'negative_claude', 'negative_discord', 'negative_facebook',
+		'negative_linkedin', 'negative_reddit', 'negative_tiktok', 'negative_soundcloud',
+		'negative_clubhouse', 'negative_patreon', 'negative_signal', 'negative_twitch',
+		'negative_viber', 'negative_whatsapp', 'negative_bluesky'
 	]);
 	assert.equal(sections.direct, undefined);
 });
@@ -125,7 +128,10 @@ test('negative VPN presets are opt-in, list exact local suffixes, and do not pro
 	const option = name => section.options.find(item => item.name === name);
 	for (const name of [
 		'negative_telegram', 'negative_youtube', 'negative_instagram', 'negative_x',
-		'negative_chatgpt', 'negative_claude', 'negative_extended_blocked_services'
+		'negative_chatgpt', 'negative_claude', 'negative_discord', 'negative_facebook',
+		'negative_linkedin', 'negative_reddit', 'negative_tiktok', 'negative_soundcloud',
+		'negative_clubhouse', 'negative_patreon', 'negative_signal', 'negative_twitch',
+		'negative_viber', 'negative_whatsapp', 'negative_bluesky'
 	]) {
 		assert.equal(option(name).default, '0');
 		assert.equal(option(name).rmempty, false);
@@ -138,8 +144,10 @@ test('negative VPN presets are opt-in, list exact local suffixes, and do not pro
 	assert.match(String(option('negative_x').description), /api\.x\.com/);
 	assert.match(String(option('negative_chatgpt').description), /oaiusercontent\.com/);
 	assert.match(String(option('negative_claude').description), /api\.anthropic\.com/);
-	assert.match(String(option('negative_extended_blocked_services').description), /not a complete or current register/);
-	assert.doesNotMatch(String(option('negative_extended_blocked_services').label), /all blocked/i);
+	assert.match(String(option('negative_twitch').description), /No nationwide block is currently confirmed/);
+	assert.match(String(option('negative_reddit').description), /No nationwide block is currently confirmed/);
+	assert.match(String(option('negative_bluesky').description), /ongoing blocking/);
+	assert.match(String(option('negative_whatsapp').description), /Calls and access can be restricted/);
 });
 
 test('RU bypass is shared, persisted by default, and does not replace manual rules', () => {

@@ -21,7 +21,7 @@ root-only сменяемый credential и journal/state отделены от �
 OpenWrt 25.12.5, подписаны и проверены; локальная проверка прошла 312 тестов.
 [Протокол сборки, kernel ABI и размер](docs/awg-sdk-build.md).
 Проверка прежнего релиза и AmneziaWG выполнена на Cudy WR3000S v1. Новый
-[установочный релиз 0.17.0](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.17.0-openwrt-25.12.5-r1)
+[установочный релиз 0.17.1](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.17.1-openwrt-25.12.5-r1)
 добавляет negative VPN и требует отдельной проверки новой LAN3/SSID-топологии.
 [Проверка 0.11.0](docs/validation-0.11.md)
 сохранена как исторический отчёт, а не актуальный статус сборки.

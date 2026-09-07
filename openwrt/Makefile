@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.17.0
+PKG_VERSION:=0.17.1
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -135,8 +135,23 @@ define Package/autovpn-controller/postinst
 	if ! uci -q get autovpn.runtime_negative >/dev/null 2>&1; then
 		uci set autovpn.runtime_negative=runtime
 	fi
+	# 0.17.0 had one aggregate switch. Split it once into equivalent service
+	# switches so an enabled old configuration keeps exactly the same routes.
+	if [ "$$(uci -q get autovpn.runtime_negative.negative_extended_blocked_services)" = "1" ] && \
+		[ -z "$$(uci -q get autovpn.runtime_negative.negative_service_presets_migrated)" ]; then
+		for option in negative_discord negative_facebook negative_linkedin negative_reddit \
+			negative_tiktok negative_soundcloud negative_clubhouse negative_patreon \
+			negative_signal negative_twitch negative_viber; do
+			uci set "autovpn.runtime_negative.$${option}=1"
+		done
+	fi
+	uci set autovpn.runtime_negative.negative_extended_blocked_services=0
+	uci set autovpn.runtime_negative.negative_service_presets_migrated=1
 	for option in negative_telegram negative_youtube negative_instagram negative_x \
-		negative_chatgpt negative_claude negative_extended_blocked_services; do
+		negative_chatgpt negative_claude negative_discord negative_facebook \
+		negative_linkedin negative_reddit negative_tiktok negative_soundcloud \
+		negative_clubhouse negative_patreon negative_signal negative_twitch \
+		negative_viber negative_whatsapp negative_bluesky; do
 		uci -q get "autovpn.runtime_negative.$${option}" >/dev/null 2>&1 || \
 			uci set "autovpn.runtime_negative.$${option}=0"
 	done

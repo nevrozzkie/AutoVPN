@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_VERSION = "0.17.0"
+APP_VERSION = "0.17.1"
 ALLOWED_PACKAGES = {"autovpn-controller", "kmod-amneziawg", "amneziawg-tools"}
 RELEASE_RE = re.compile(r"25\.12\.\d+")
 SAFE_OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
