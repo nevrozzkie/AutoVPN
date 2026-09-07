@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autovpn-controller
-PKG_VERSION:=0.16.1
+PKG_VERSION:=0.17.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -89,6 +89,7 @@ define Package/autovpn-controller/install
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/orchestration.uc $(1)/usr/share/ucode/autovpn/orchestration.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/http.uc $(1)/usr/share/ucode/autovpn/http.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/runtime.uc $(1)/usr/share/ucode/autovpn/runtime.uc
+	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/negative_presets.uc $(1)/usr/share/ucode/autovpn/negative_presets.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret.uc $(1)/usr/share/ucode/autovpn/zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/direct_zapret.uc $(1)/usr/share/ucode/autovpn/direct_zapret.uc
 	$(INSTALL_DATA) ./files/usr/share/ucode/autovpn/zapret_diagnostics.uc $(1)/usr/share/ucode/autovpn/zapret_diagnostics.uc
@@ -129,6 +130,17 @@ define Package/autovpn-controller/postinst
 	umask 077
 	mkdir -p /etc/autovpn/state
 	chmod 0700 /etc/autovpn /etc/autovpn/state
+	# Conffiles are preserved on upgrade, so add only missing negative-VPN
+	# options. Never overwrite a user's manual CIDRs, domains or preset flags.
+	if ! uci -q get autovpn.runtime_negative >/dev/null 2>&1; then
+		uci set autovpn.runtime_negative=runtime
+	fi
+	for option in negative_telegram negative_youtube negative_instagram negative_x \
+		negative_chatgpt negative_claude negative_extended_blocked_services; do
+		uci -q get "autovpn.runtime_negative.$${option}" >/dev/null 2>&1 || \
+			uci set "autovpn.runtime_negative.$${option}=0"
+	done
+	uci commit autovpn
 	/etc/init.d/autovpn-networks enable >/dev/null 2>&1 || true
 	/etc/init.d/autovpn enable >/dev/null 2>&1 || true
 	/etc/init.d/autovpn start >/dev/null 2>&1 || true

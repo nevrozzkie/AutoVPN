@@ -90,11 +90,16 @@ function fixture(options = {}) {
 		env.calls.push(argv);
 		if (argv[0] === '/bin/busybox' && argv[1] === 'timeout')
 			return { read: () => '', close: () => 127 };
+		let requestedBridge = null;
+		if (argv.includes('/bin/ubus') && argv.includes('network.device')) {
+			try { requestedBridge = JSON.parse(argv.at(-1)).name; } catch (_) {}
+		}
 		const output = argv.includes('/sbin/ip') && argv.includes('-j') ? '[]' :
 			argv.includes('/bin/ubus') && argv.includes('network.device') ?
-				JSON.stringify({ 'bridge-members': env.wiredReady ? ['lan3', 'lan4'] : ['lan3'] }) :
+				JSON.stringify({ 'bridge-members': env.wiredReady ?
+					(requestedBridge === 'br-avpnnv' ? ['lan3'] : ['lan4']) : [] }) :
 			argv.includes('/bin/ubus') ? JSON.stringify(Object.fromEntries(['radio0', 'radio1'].map(name => [name, {
-				up: true, interfaces: env.ready ? ['direct', 'vpn', 'zapret', 'vpn_zapret'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
+				up: true, interfaces: env.ready ? ['direct', 'vpn', 'negative'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
 			}]))) : '';
 		let status = 0;
 		if (argv.includes('/sbin/ip') && argv.includes('link') && argv.includes('dev')) {
@@ -159,8 +164,8 @@ test('network-bootstrap patches the actual stock radios and keeps the primary SS
 	const result = run('network-bootstrap');
 	assert.equal(env.exit, 0, JSON.stringify(result));
 	assert.equal(result.phase, 'pending');
-	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в']);
-	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true]);
+	assert.deepEqual(result.ssids.map(item => item.ssid), ['x', 'x-в', 'x-нв']);
+	assert.deepEqual(result.ssids.map(item => item.enabled), [true, true, true]);
 	assert.equal(result.ssids[0].primary_lan, true);
 	const wireless = JSON.parse(env.files.get('/etc/config/wireless'));
 	assert.deepEqual(wireless.find(item => item['.name'] === 'radio0'),
@@ -244,7 +249,7 @@ test('real helper confirms only after both generated APs are present on each rad
 	env.missingBridges.delete('br-avpnd');
 	assert.equal(run('network-confirm', [result.transaction_id]).phase, 'confirmed');
 });
-test('real helper confirms only when LAN3 and LAN4 joined the VPN bridge', () => {
+test('real helper confirms only when LAN4 joined VPN and LAN3 joined negative VPN', () => {
 	const { env, run } = fixture();
 	const result = run('network-setup');
 	env.wiredReady = false;

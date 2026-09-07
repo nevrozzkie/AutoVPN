@@ -56,8 +56,8 @@ AutoVPN — программное обеспечение для админис�
 ## AutoVPN 2.0: сайт и роутер в одном репозитории
 
 В состав 2.0 входит [OpenWrt-приложение](openwrt/README.md) для **Cudy WR3000S v1
-на OpenWrt 25.12.x**. Для OpenWrt 25.12.5 опубликован предварительный
-[установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.15.2-openwrt-25.12.5-r1):
+на OpenWrt 25.12.x**. Для OpenWrt 25.12.5 опубликован
+[установочный релиз](https://github.com/nevrozzkie/AutoVPN/releases/tag/router-v0.17.0-openwrt-25.12.5-r1):
 [установка одной командой](openwrt/docs/installation.md), дальнейшая настройка — через
 LuCI. Оно использует Router API этого же сайта, но сайт не раздаёт установочные
 файлы. Обычные зависимости роутера берутся из официальных feeds OpenWrt, наш APK
@@ -71,7 +71,7 @@ LuCI. Оно использует Router API этого же сайта, но с
 
 Существующие адреса сайта, страниц клиентов и подписок сохраняются. Перенос
 роутерной части не меняет маршруты API, базу данных или серверную установку.
-У APK своя техническая версия (`0.15.2`); это компонент общего обновления AutoVPN 2.0.
+У APK своя техническая версия (`0.17.0`); это компонент общего обновления AutoVPN 2.0.
 
 **Статус:** собраны и проверены подписи трёх APK: controller, AmneziaWG tools
 и модуль AmneziaWG для **OpenWrt 25.12.5 / mediatek/filogic / aarch64_cortex-a53**.
@@ -84,7 +84,7 @@ LuCI. Оно использует Router API этого же сайта, но с
 Инструкции:
 
 - [Сайт: новая установка и обновление с сохранением ссылок](docs/server-installation.md).
-- [Роутер: установка, четыре WPA2 SSID и настройка в LuCI](openwrt/docs/installation.md).
+- [Роутер: установка, WPA2 SSID и настройка VPN/negative VPN в LuCI](openwrt/docs/installation.md).
 - [Для сопровождающего: подготовка подписанного GitHub Release](openwrt/docs/releases.md).
 
 Проверки из корня репозитория:

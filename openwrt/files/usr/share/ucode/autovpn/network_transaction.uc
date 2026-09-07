@@ -10,7 +10,23 @@ function valid(state) {
 		index(['pending', 'confirmed', 'rolled_back', 'rollback_conflict'], state.phase) < 0 ||
 		type(state.before) != 'object' || type(state.after) != 'object' ||
 		type(state.ssids) != 'array' || type(state.radios) != 'array' ||
-		(state.wired_ports != null && type(state.wired_ports) != 'array')) return false;
+		(state.wired_ports != null && type(state.wired_ports) != 'array') ||
+		(state.wired_bridges != null && type(state.wired_bridges) != 'array')) return false;
+	if (length(state.wired_bridges || []) > 2) return false;
+	let seenBridges = {};
+	let seenPorts = {};
+	for (let i = 0; i < length(state.wired_bridges || []); i++) {
+		let member = state.wired_bridges[i];
+		if (type(member) != 'object' || type(member.bridge) != 'string' ||
+			index(['br-avpn', 'br-avpnnv'], member.bridge) < 0 || seenBridges[member.bridge] === true ||
+			type(member.ports) != 'array' || length(member.ports) != 1) return false;
+		seenBridges[member.bridge] = true;
+		for (let p = 0; p < length(member.ports); p++) {
+			let port = member.ports[p];
+			if (index(['lan3', 'lan4'], port) < 0 || seenPorts[port] === true) return false;
+			seenPorts[port] = true;
+		}
+	}
 	for (let i = 0; i < length(CONFIGS); i++) {
 		let name = CONFIGS[i];
 		if (type(state.before[name]) != 'string' || type(state.after[name]) != 'string' ||
@@ -72,7 +88,7 @@ function begin(settings, io, planner) {
 	let state = { version: 1, sequence: sequence, id: io.now() + '-' + sequence,
 		phase: 'pending', ready: false, deadline: io.now() + 180, expires_uptime: io.uptime() + 180,
 		before: before, after: staged.after, ssids: staged.ssids, radios: staged.radios,
-		wired_ports: staged.wired_ports || [] };
+		wired_bridges: staged.wired_bridges || [] };
 	if (!valid(state)) return fail('network_stage_invalid');
 	/* Refuse to merge staged edits from another session or overwrite a concurrent commit. */
 	if (!io.clean()) return fail('uncommitted_network_changes');

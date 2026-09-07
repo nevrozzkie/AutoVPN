@@ -103,15 +103,43 @@ function nodeText(node) {
 	return (node.children || []).map(nodeText).join(' ');
 }
 
-test('settings exposes only the active VPN lane and managed Wi-Fi options', () => {
+test('settings exposes positive and negative VPN lane controls with managed Wi-Fi options', () => {
 	const fixture = settingsFixture();
 	fixture.view.render();
 	const sections = Object.fromEntries(fixture.maps[0].sections.map(section => [section.id, section]));
 	assert.deepEqual(sections.runtime.options.map(option => option.name), [
 		'selection', 'hysteria_tls_mode', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs', 'ru_bypass'
 	]);
-	assert.equal(sections.runtime_zapret, undefined);
+	assert.deepEqual(sections.runtime_negative.options.map(option => option.name), [
+		'vpn_cidrs', 'vpn_domains',
+		'negative_telegram', 'negative_youtube', 'negative_instagram', 'negative_x',
+		'negative_chatgpt', 'negative_claude', 'negative_extended_blocked_services'
+	]);
 	assert.equal(sections.direct, undefined);
+});
+
+test('negative VPN presets are opt-in, list exact local suffixes, and do not promise every block', () => {
+	const fixture = settingsFixture();
+	fixture.view.render();
+	const section = fixture.maps[0].sections.find(item => item.id === 'runtime_negative');
+	const option = name => section.options.find(item => item.name === name);
+	for (const name of [
+		'negative_telegram', 'negative_youtube', 'negative_instagram', 'negative_x',
+		'negative_chatgpt', 'negative_claude', 'negative_extended_blocked_services'
+	]) {
+		assert.equal(option(name).default, '0');
+		assert.equal(option(name).rmempty, false);
+		assert.match(String(option(name).description), /Locally adds these domain suffixes/);
+	}
+	assert.match(String(option('negative_telegram').description), /api\.telegram\.org/);
+	assert.match(String(option('negative_telegram').description), /149\.154\.160\.0\/20/);
+	assert.match(String(option('negative_youtube').description), /googlevideo\.com/);
+	assert.match(String(option('negative_instagram').description), /cdninstagram\.com/);
+	assert.match(String(option('negative_x').description), /api\.x\.com/);
+	assert.match(String(option('negative_chatgpt').description), /oaiusercontent\.com/);
+	assert.match(String(option('negative_claude').description), /api\.anthropic\.com/);
+	assert.match(String(option('negative_extended_blocked_services').description), /not a complete or current register/);
+	assert.doesNotMatch(String(option('negative_extended_blocked_services').label), /all blocked/i);
 });
 
 test('RU bypass is shared, persisted by default, and does not replace manual rules', () => {
