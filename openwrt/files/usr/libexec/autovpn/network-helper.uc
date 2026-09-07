@@ -77,7 +77,7 @@ function stage(before, settings, module) {
 		after[name] = readfile(ROOT + '/stage/' + name, 65537);
 	}
 	return { ok: true, after: after, ssids: planned.ssids, radios: planned.radios,
-		wired_ports: planned.wired_ports || [] };
+		wired_bridges: planned.wired_bridges || [] };
 }
 function ready(state) {
 	let wireless = decoded(['/bin/ubus', 'call', 'network.wireless', 'status']);
@@ -97,13 +97,22 @@ function ready(state) {
 	for (let i = 0; i < length(state.ssids); i++) {
 		let mode = state.ssids[i];
 		if (!mode.enabled || (mode.mode == 'direct' && primaryLan)) continue;
-		let bridge = { direct: 'br-avpnd', vpn: 'br-avpn', zapret: 'br-avpndz', vpn_zapret: 'br-avpnz' }[mode.mode];
+		let bridge = { direct: 'br-avpnd', vpn: 'br-avpn', negative: 'br-avpnnv',
+			zapret: 'br-avpndz', vpn_zapret: 'br-avpnz' }[mode.mode];
 		if (bridge == null || command(['/sbin/ip', 'link', 'show', 'dev', bridge], 4096) == null) return false;
 	}
-	let vpnBridge = decoded(['/bin/ubus', 'call', 'network.device', 'status', '{"name":"br-avpn"}']);
-	if (type(vpnBridge) != 'object' || type(vpnBridge['bridge-members']) != 'array') return false;
-	for (let i = 0; i < length(state.wired_ports || []); i++)
-		if (index(vpnBridge['bridge-members'], state.wired_ports[i]) < 0) return false;
+	let expected = state.wired_bridges;
+	/* 0.16.1 journals tracked only the two positive-VPN ports. */
+	if (expected == null && state.wired_ports != null)
+		expected = [{ bridge: 'br-avpn', ports: state.wired_ports }];
+	for (let i = 0; i < length(expected || []); i++) {
+		let member = expected[i];
+		let bridge = decoded(['/bin/ubus', 'call', 'network.device', 'status',
+			'{"name":"' + member.bridge + '"}']);
+		if (type(bridge) != 'object' || type(bridge['bridge-members']) != 'array') return false;
+		for (let p = 0; p < length(member.ports); p++)
+			if (index(bridge['bridge-members'], member.ports[p]) < 0) return false;
+	}
 	return command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpn'], 4096) != null &&
 		(primaryLan || command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpnd'], 4096) != null);
 }

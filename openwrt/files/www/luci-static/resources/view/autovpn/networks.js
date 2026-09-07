@@ -39,13 +39,13 @@ return view.extend({
 			}) }, _('Keep these networks'));
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Managed WPA2 Wi-Fi')),
-			E('p', {}, _('First save the base Wi-Fi name and password in Settings. Existing LAN and SSIDs are preserved. All four WPA2 SSIDs use the same name on 2.4 and 5 GHz; the client chooses its band. VPN and zapret networks block traffic until their backend is ready.')),
+			E('p', {}, _('First save the base Wi-Fi name and password in Settings. Existing LAN and unrelated SSIDs are preserved. The three managed WPA2 SSIDs use the same name on 2.4 and 5 GHz; the client chooses its band. LAN4 shares the VPN network and LAN3 shares the negative VPN network. Both VPN-backed networks stay closed until the shared VPN runtime is ready.')),
 			E('p', {}, _('State: %s').format(state.ok ? state.phase : state.code)),
 			pending ? E('p', {}, _('Check the new Wi-Fi, then confirm before %s. Without confirmation the old network configuration will be restored.').format(new Date(state.deadline * 1000).toLocaleTimeString())) : '',
 			E('ul', {}, (state.ssids || []).map(function(item) {
 				return E('li', {}, item.ssid + ' — ' + (item.enabled ? _('enabled on available bands') : _('disabled')));
 			})),
-			E('p', {}, _('After confirming, use Refresh snapshot or Apply saved VPN settings on Overview to start the VPN. The installer primary LAN Wi-Fi retains administration access; isolated VPN and legacy direct managed networks do not.')),
+			E('p', {}, _('After confirming, use Refresh snapshot or Apply saved VPN settings on Overview to start the VPN. The primary LAN Wi-Fi retains administration access; the isolated VPN and negative VPN networks do not.')),
 			E('div', { 'class': 'cbi-page-actions' }, [setup, confirm])
 		]);
 	},

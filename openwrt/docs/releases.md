@@ -2,7 +2,7 @@
 
 Роутерные исходники входят в `openwrt/` единого репозитория AutoVPN и поставляются
 как часть AutoVPN 2.0. Команды подготовки ниже выполняются из корня AutoVPN.
-APK сохраняет собственную техническую версию, сейчас `0.16.1`, независимо от тега всего проекта.
+APK сохраняет собственную техническую версию, сейчас `0.17.0`, независимо от тега всего проекта.
 
 Этот проект не скачивает свои пакеты с AutoVPN-сервера. Роутер получает
 установочный `install.sh` из конкретного GitHub Release, а обычные зависимости
@@ -93,12 +93,12 @@ python3 openwrt/scripts/prepare-release.py \
   --kernel-package '6.6.99~example_abcdef' \
   --release-base https://github.com/nevrozzkie/AutoVPN/releases/download/v2.0.0 \
   --signing-key /safe/path/autovpn-signing.pem \
-  --package /path/to/autovpn-controller-0.16.1-r1.apk \
+  --package /path/to/autovpn-controller-0.17.0-r1.apk \
   --package /path/to/kmod-amneziawg-0-r1.apk \
   --package /path/to/amneziawg-tools-0-r1.apk \
   --min-free-kib 32768 \
   --min-tmp-kib 65536 \
-  --output /safe/path/autovpn-router-v0.16.1
+  --output /safe/path/autovpn-router-v0.17.0
 ```
 
 Числа ядра и размеров в примере — условные, а не готовая конфигурация WR3000S.

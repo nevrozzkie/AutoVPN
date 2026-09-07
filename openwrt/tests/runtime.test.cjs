@@ -77,8 +77,8 @@ test('runtime fixes auto to one profile and forces health and candidate probes b
 	]);
 	assert.equal(result.config.outbounds.some(outbound => outbound.type === 'urltest'), false);
 	assert.equal(result.config.dns.servers[0].detour, 'vless-reality');
-	assert.equal(result.config.inbounds[0].auto_route, false);
-	assert.equal(result.config.inbounds[0].auto_redirect, false);
+	assert.deepEqual(result.config.inbounds[0],
+		{ type: 'tproxy', tag: 'vpn-net', listen: '0.0.0.0', listen_port: 12080 });
 	assert.equal(result.config.inbounds[1].listen, '127.0.0.1');
 	assert.deepEqual(result.config.inbounds[2], { type: 'socks', tag: 'probe-vless-reality', listen: '127.0.0.1', listen_port: 1089 });
 	assert.equal(result.config.outbounds.find(outbound => outbound.type === 'direct').bind_interface, 'eth1');
@@ -152,11 +152,39 @@ test('runtime rejects policy injection, malformed addresses and server global co
 		{ wan_device: 'eth1;touch /tmp/pwned' }, { wan_device: 'avpn0' },
 		{ direct_domains: ['*.ru'] }, { direct_domains: ['https://example.com'] },
 		{ direct_cidrs: ['999.1.1.1/24'] }, { direct_cidrs: ['1.2.3.4/99'] },
+		{ vpn_domains: ['*.example.com'], vpn_cidrs: [] },
+		{ vpn_domains: [], vpn_cidrs: ['999.1.1.1/24'] },
+		{ vpn_domains: [] },
 		{ dns_server: '1.1.1.01' }, { injected: true }
 	]) assert.equal(runtime.render(snapshot, { ...policy(), ...override }, machine).ok, false, JSON.stringify(override));
 	const bad = clone(snapshot);
 	bad.protocols.vless.outbound.detour = 'direct';
 	assert.equal(runtime.render(bad, policy(), machine).code, 'snapshot_validation_failed');
+});
+
+test('negative VPN network shares the selected profile but is direct by default', () => {
+	const result = runtime.render(snapshot, { ...policy(), selection: 'vless-reality',
+		vpn_domains: ['youtube.com', 'googlevideo.com'], vpn_cidrs: ['203.0.113.0/24'] }, machine);
+	assert.equal(result.ok, true);
+	assert.deepEqual(result.config.inbounds.find(item => item.tag === 'negative-vpn-net'),
+		{ type: 'tproxy', tag: 'negative-vpn-net', listen: '0.0.0.0', listen_port: 12082 });
+	const selectedDomain = result.config.route.rules.find(item =>
+		item.inbound?.[0] === 'negative-vpn-net' && item.domain_suffix);
+	const selectedCidr = result.config.route.rules.find(item =>
+		item.inbound?.[0] === 'negative-vpn-net' && item.ip_cidr);
+	const fallback = result.config.route.rules.find(item =>
+		item.inbound?.[0] === 'negative-vpn-net' && !item.domain_suffix && !item.ip_cidr);
+	assert.deepEqual(selectedDomain, { inbound: ['negative-vpn-net'], domain_suffix: ['youtube.com', 'googlevideo.com'],
+		action: 'route', outbound: 'vless-reality' });
+	assert.deepEqual(selectedCidr, { inbound: ['negative-vpn-net'], ip_cidr: ['203.0.113.0/24'],
+		action: 'route', outbound: 'vless-reality' });
+	assert.deepEqual(fallback, { inbound: ['negative-vpn-net'], action: 'route', outbound: 'direct' });
+	assert.ok(result.config.route.rules.indexOf(selectedDomain) < result.config.route.rules.indexOf(fallback));
+	assert.ok(result.config.route.rules.indexOf(selectedCidr) < result.config.route.rules.indexOf(fallback));
+	assert.equal(result.config.route.final, 'vless-reality');
+	assert.equal(result.config.outbounds.find(item => item.tag === 'direct').bind_interface, 'eth1');
+	/* Existing persisted policies do not grow a listener on restore. */
+	assert.equal(runtime.render(snapshot, policy(), machine).config.inbounds.some(item => item.tag === 'negative-vpn-net'), false);
 });
 
 test('persistent bundle binds device, snapshot and local-policy attempt, rejects corruption', () => {
@@ -206,6 +234,7 @@ test('explicit policy apply reuses server snapshot with a new transaction and re
 function helperHarness() {
 	const storage = new Map();
 	const journal = loadUcodeModule(path.join(moduleRoot, 'journal.uc'));
+	const negativePresets = loadUcodeModule(path.join(moduleRoot, 'negative_presets.uc'));
 	const state = machine.initialState();
 	let localPolicy = policy();
 	let localRouter = snapshot.router_id;
@@ -215,7 +244,7 @@ function helperHarness() {
 	const source = fs.readFileSync(path.join(root, 'files/usr/libexec/autovpn/runtime-helper.uc'), 'utf8')
 		.replace(/^#![^\n]*\n/, '').replace(/^import\s+.*?;\s*$/gm, '');
 	const invoke = new Function('readfile', 'writefile', 'chmod', 'rename', 'access', 'cursor', 'require',
-		'length', 'sprintf', 'type', 'match', 'index', 'json', 'ARGV', 'printf', 'exit', 'int', source);
+		'length', 'sprintf', 'type', 'match', 'index', 'push', 'json', 'ARGV', 'printf', 'exit', 'int', source);
 	return {
 		state, storage,
 		setPolicy(value) { localPolicy = value; },
@@ -232,11 +261,13 @@ function helperHarness() {
 				file => localAwgAvailable && (file === '/usr/bin/awg' || file === '/sys/module/amneziawg'),
 				() => ({ load() {}, get(_config, section, key) { return section === 'main' ? localRouter : localPolicy[key]; } }),
 				name => ({ 'autovpn.state': machine, 'autovpn.journal': journal,
-					'autovpn.runtime': laneRuntime, 'autovpn.lanes': lanes })[name],
+					'autovpn.runtime': laneRuntime, 'autovpn.lanes': lanes,
+					'autovpn.negative_presets': negativePresets })[name],
 				value => value.length,
 				(format, value) => JSON.stringify(value) + (format.endsWith('\n') ? '\n' : ''),
 				value => value === null || value === undefined ? null : Array.isArray(value) ? 'array' : typeof value,
-				(value, expression) => value.match(expression), (values, value) => values.indexOf(value), JSON.parse,
+				(value, expression) => value.match(expression), (values, value) => values.indexOf(value),
+				(values, value) => values.push(value), JSON.parse,
 				[action, '/etc/autovpn/state/journal.json', selectedProfile], (_format, value) => { output = value; }, () => {}, Number
 			);
 			return output;
@@ -294,6 +325,20 @@ test('zapret settings persist with the VPN bundle, survive auto selection and ro
 	assert.equal(env.run('rollback').ok, true);
 	assert.equal(env.storage.get('/etc/autovpn/runtime/current.json'), previous);
 	assert.equal(JSON.parse(env.storage.get('/etc/autovpn/runtime/zapret.json')).repeats, 3);
+});
+
+test('runtime helper merges negative VPN presets with manual rules without replacing them', () => {
+	const env = helperHarness();
+	env.setPolicy({ ...policy(), vpn_domains: ['private.example'], vpn_cidrs: ['203.0.113.0/24'],
+		negative_telegram: '1', negative_youtube: '1' });
+	env.begin();
+	assert.equal(env.run('prepare').ok, true);
+	const staged = JSON.parse(env.storage.get('/etc/autovpn/runtime/prepared.json'));
+	assert.ok(staged.policy.vpn_domains.includes('private.example'));
+	assert.ok(staged.policy.vpn_domains.includes('api.telegram.org'));
+	assert.ok(staged.policy.vpn_domains.includes('googlevideo.com'));
+	assert.ok(staged.policy.vpn_cidrs.includes('203.0.113.0/24'));
+	assert.ok(staged.policy.vpn_cidrs.includes('149.154.160.0/20'));
 });
 
 test('helper refuses foreign router and failed backup without replacing the current bundle', () => {

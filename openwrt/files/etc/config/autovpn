@@ -31,6 +31,17 @@ config wifi 'wifi'
 config runtime 'runtime_zapret'
 	option selection 'auto'
 
+# Negative VPN shares the active VPN profile: its final route is direct and
+# only explicitly selected domain/IP rules use that profile.
+config runtime 'runtime_negative'
+	option negative_telegram '0'
+	option negative_youtube '0'
+	option negative_instagram '0'
+	option negative_x '0'
+	option negative_chatgpt '0'
+	option negative_claude '0'
+	option negative_extended_blocked_services '0'
+
 config health 'health'
 	option probe_url 'https://connectivitycheck.gstatic.com/generate_204'
 	option failure_threshold '3'

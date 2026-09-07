@@ -9,6 +9,7 @@ const journal = require('autovpn.journal');
 const runtime = require('autovpn.runtime');
 const processRunner = require('autovpn.process');
 const lanes = require('autovpn.lanes');
+const negativePresets = require('autovpn.negative_presets');
 let ROOT = null;
 let LANE = null;
 
@@ -34,6 +35,15 @@ function awgAvailable() {
 	if (access('/sys/module/amneziawg') === true) return true;
 	return command(['/sbin/modprobe', 'amneziawg']) && access('/sys/module/amneziawg') === true;
 }
+function values(value) { return type(value) == 'array' ? value : type(value) == 'string' ? [value] : []; }
+function merge(left, right) {
+	let result = [];
+	for (let i = 0; i < length(left); i++)
+		if (index(result, left[i]) < 0) push(result, left[i]);
+	for (let i = 0; i < length(right); i++)
+		if (index(result, right[i]) < 0) push(result, right[i]);
+	return result;
+}
 function policy() {
 	let uci = cursor();
 	uci.load('autovpn');
@@ -48,6 +58,22 @@ function policy() {
 		/* Optional package: never make VLESS/Hysteria depend on it. */
 		awg_available: awgAvailable(),
 	};
+	/* A separate managed bridge uses these as VPN inclusions, not exceptions.
+	 * It belongs only to the primary lane: a retired/secondary runtime must not
+	 * claim the fixed TPROXY listener. */
+	if (LANE.id == 'vpn') {
+		let flags = {};
+		for (let i = 0; i < length(negativePresets.names()); i++) {
+			let name = negativePresets.names()[i];
+			let enabled = uci.get('autovpn', 'runtime_negative', name);
+			if (enabled != null && enabled != '0' && enabled != '1') return {};
+			flags[name] = enabled == '1';
+		}
+		result.vpn_domains = merge(values(uci.get('autovpn', 'runtime_negative', 'vpn_domains')),
+			negativePresets.enabled(flags));
+		result.vpn_cidrs = merge(values(uci.get('autovpn', 'runtime_negative', 'vpn_cidrs')),
+			negativePresets.enabledCidrs(flags));
+	}
 	let ruBypass = uci.get('autovpn', 'runtime', 'ru_bypass');
 	if (ruBypass != null && ruBypass != '0' && ruBypass != '1') return {};
 	result.ru_bypass = ruBypass == null || ruBypass == '1';

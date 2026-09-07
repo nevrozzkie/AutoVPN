@@ -1,8 +1,8 @@
 # Автосоздание WPA2 SSID
 
-Пользовательский режим ограничен базовым SSID и VPN-SSID `-в`. Legacy `-з` и `-вз`
-могут встречаться в старых UCI/runtime данных, но скрыты из текущего LuCI и не
-активируются этим сценарием.
+Пользовательский режим создаёт базовый SSID, обычный VPN-SSID `-в` и
+«негативный VPN» SSID `-нв`. Legacy `-з` и `-вз` могут встречаться в старых
+UCI/runtime данных, но скрыты из текущего LuCI и не активируются этим сценарием.
 
 При первой установке имя и пароль запрашивает терминальный мастер. В дальнейшем
 они меняются в LuCI **Services → AutoVPN → Settings**, затем применяются через Networks:
@@ -12,7 +12,7 @@
 
 Пароля по умолчанию нет. Шифрование — WPA2-PSK/AES (`psk2+ccmp`), не WPA/WPA3 mixed.
 Для пароля допустимы 8–63 печатных ASCII-символа или ровно 64 шестнадцатеричных символа.
-Базовое имя ограничено 27 **байтами UTF-8**, чтобы самый длинный суффикс `-вз` помещался
+Базовое имя ограничено 27 **байтами UTF-8**, чтобы суффикс `-нв` помещался
 в лимит SSID 32 байта. Например, русская буква занимает два байта.
 
 ## Какие сети создаются
@@ -28,16 +28,20 @@
 | SSID для базы `Общага` | Мост / IPv4 | Состояние |
 | --- | --- | --- |
 | `Общага` | Существующая `lan` (на штатном роутере `br-lan`, `192.168.1.1/24`) | Прямой интернет и доступ к админке |
-| `Общага-в` | `br-avpn`, `192.168.30.1/24`, LAN3 и LAN4 | единая Wi-Fi/проводная VPN lane; при сбое forwarding закрыт |
+| `Общага-в` | VPN-мост и LAN4 | «всё кроме прямых исключений» через выбранный VPN; при сбое VPN forwarding закрыт |
+| `Общага-нв` | отдельный IPv4-мост и LAN3 | «только выбранные адреса/домены» через тот же VPN, всё остальное напрямую |
 
-Installer создаёт два WPA2 SSID. Только `Общага` присоединена к существующей LAN
-и даёт обычный доступ к LuCI/SSH. `Общага-в`, физические LAN3 и LAN4 находятся в
-одном `br-avpn`, получают адреса из одного DHCP и используют один выбранный VPN.
-Отсутствие VPN не превращает эту сеть в прямой WAN: guard закрывает forwarding.
+Installer создаёт три WPA2 SSID. Только `Общага` присоединена к существующей LAN
+и даёт обычный доступ к LuCI/SSH. `Общага-в` и LAN4 находятся в одной VPN-сети,
+получают адреса из одного DHCP и используют текущий выбранный VPN-профиль.
+`Общага-нв` и LAN3 образуют другую сеть с отдельным DHCP: в ней только выбранные
+в LuCI назначения идут через **тот же** текущий VPN-профиль, а всё невыбранное
+остаётся прямым WAN-трафиком. Пока общий VPN runtime недоступен, fail-closed guard
+закрывает всю `-нв`, поэтому выбранные назначения не могут случайно уйти напрямую.
 
-Для VPN создаются мост с физическими LAN3/LAN4, UCI interface, DHCPv4 и firewall
-zone; RA/DHCPv6 отключены, IPv6 блокируется. LAN3/LAN4 атомарно удаляются из
-`br-lan`; LAN1/LAN2 остаются в основной сети. При `bridge-vlan`, чужом использовании
+Для двух VPN-политик создаются отдельные мосты, UCI interface, DHCPv4 и firewall
+zone; RA/DHCPv6 отключены, IPv6 блокируется. LAN3 атомарно переносится в `-нв`,
+LAN4 — в `-в`; LAN1/LAN2 остаются в основной сети. При `bridge-vlan`, чужом использовании
 этих портов или неоднозначной DSA-топологии AutoVPN отказывается менять конфиг.
 Основная сеть использует существующие LAN DHCP/firewall/IPv6 и ничего в них не меняет.
 Для AP включён `isolate=1`
@@ -63,8 +67,8 @@ Installer до установки пакетов проверяет наличи
 
 ## Применение и откат
 
-1. Подключиться к роутеру по основной Wi-Fi либо через LAN1/LAN2: LAN3/LAN4 будут
-   перенесены в VPN-сеть и перестанут давать доступ к LuCI/SSH.
+1. Подключиться к роутеру по основной Wi-Fi либо через LAN1/LAN2: LAN3 будет
+   перенесён в `-нв`, LAN4 — в `-в`; оба перестанут давать доступ к LuCI/SSH.
    При обычном обновлении включить нужные radio; software/hardware flow offload должен быть выключен.
 2. В Settings указать имя/пароль, выполнить **Save & Apply**. Пароль хранится в
    `/etc/config/autovpn` и после создания — в стандартном `/etc/config/wireless`;
@@ -73,7 +77,8 @@ Installer до установки пакетов проверяет наличи
    закрывается и останавливается. Перезапуск radio может кратко оборвать старый Wi-Fi.
 4. Проверить новые сети. Вернуться в Networks через исходную management-сеть и
    (или основную LAN-сеть после bootstrap) и нажать **Keep these networks** в течение трёх минут. Проверяется также,
-   что LAN3/LAN4 действительно стали участниками `br-avpn`; наличие кабеля не требуется.
+   что LAN3 и LAN4 действительно стали участниками своих управляемых мостов;
+   наличие кабеля не требуется.
 5. В Overview выполнить **Refresh snapshot** либо **Apply saved VPN settings**,
    чтобы запустить VPN. После успешной проверки включить автоматический refresh.
 
@@ -103,6 +108,37 @@ VPN даже при фоновом refresh. Перед живыми UCI-прав
 
 CLI: `autovpnctl network-setup`, `autovpnctl network-status`,
 `autovpnctl network-confirm TRANSACTION_ID`. Пароль передавать через CLI не нужно.
+
+## Негативный VPN: что выбирается в LuCI
+
+В **Services → AutoVPN → Settings** для `-нв` задаётся список IPv4-адресов или
+CIDR, которые должны идти через VPN, и набор доменных переключателей. Домены
+сопоставляются по DNS и протоколам внутри локального sing-box; статические IP общих CDN
+намеренно не поставляются. Все остальные IPv4-назначения `-нв` используют WAN напрямую.
+Это не режим «весь интернет через VPN» и не замена правилам `-в`.
+
+Состав встроенных переключателей прозрачен и фиксирован в версии пакета:
+
+| Переключатель | Домены, направляемые через VPN |
+| --- | --- |
+| Telegram + API | `t.me`, `telegram.org`, `telegram.me`, `telegram.dog`, `tdesktop.com`, `telegram-cdn.org`, `api.telegram.org`, `core.telegram.org`, `web.telegram.org`, `desktop.telegram.org`, `updates.tdesktop.com`; дополнительно `149.154.160.0/20`, `91.108.4.0/22` |
+| YouTube | `youtube.com`, `youtu.be`, `youtube-nocookie.com`, `googlevideo.com`, `ytimg.com`, `youtubei.googleapis.com`, `youtube.googleapis.com`, `yt3.ggpht.com` |
+| Instagram | `instagram.com`, `cdninstagram.com`, `i.instagram.com`, `graph.instagram.com`, `api.instagram.com`, `l.instagram.com` |
+| X / Twitter | `x.com`, `twitter.com`, `t.co`, `twimg.com`, `api.x.com`, `api.twitter.com` |
+| ChatGPT | `chatgpt.com`, `chat.openai.com`, `openai.com`, `auth.openai.com`, `platform.openai.com`, `oaistatic.com`, `oaiusercontent.com` |
+| Claude | `claude.ai`, `anthropic.com`, `console.anthropic.com`, `api.anthropic.com`, `anthropic-static.com` |
+| Остальные популярные внешние сервисы | Discord: `discord.com`, `discord.gg`, `discordapp.com`, `discordapp.net`, `discord.media`, `discordstatus.com`; Facebook/Messenger: `facebook.com`, `fb.com`, `fb.me`, `fbcdn.net`, `messenger.com`; LinkedIn: `linkedin.com`, `licdn.com`; Reddit: `reddit.com`, `redd.it`, `redditmedia.com`, `redditstatic.com`; TikTok: `tiktok.com`, `tiktokv.com`, `tiktokcdn.com`; Signal: `signal.org`, `signal.art`, `signal.me`, `whispersystems.org`; Twitch: `twitch.tv`, `ttvnw.net`, `jtvnw.net`; Viber: `viber.com`, `viber.me`; также `soundcloud.com`, `clubhouse.com`, `patreon.com` |
+
+Этот последний переключатель — перечисленный curated-набор, а не полный реестр
+ограниченных ресурсов РФ и не гарантия доступности. Общие домены, например
+`google.com`, общий `googleapis.com` и `challenges.cloudflare.com`, намеренно
+не включены: они обслуживают несвязанные сайты и могли бы без необходимости
+увести их трафик в VPN. ECH, сторонний DoH, IP без доменного имени и изменение
+инфраструктуры сервиса могут не позволить сопоставить трафик с доменным правилом;
+для этого остаётся ручной IPv4/CIDR-список. Два Telegram CIDR являются
+дополнительными опубликованными диапазонами и могут измениться. IPv6 в `-нв` не
+используется и не получает прямого обходного маршрута. При недоступном runtime
+закрывается вся сеть `-нв`: это не позволяет выбранному трафику случайно уйти напрямую.
 
 ## Проверка на устройстве обязательна
 

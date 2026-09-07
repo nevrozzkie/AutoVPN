@@ -44,6 +44,7 @@ function awgAddress(value) {
 		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 30 * 256, 256],
 		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 31 * 256, 256],
 		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 32 * 256, 256],
+		[192 * 256 * 256 * 256 + 168 * 256 * 256 + 33 * 256, 256],
 		[172 * 256 * 256 * 256 + 30 * 256 * 256 + 255 * 256, 8],
 	];
 	for (let i = 0; i < length(forbidden); i++)
@@ -56,13 +57,20 @@ function normalizedPolicy(policy) {
 	let fields = copy(policy);
 	delete fields.ru_bypass;
 	let old = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs']);
+	let oldNegative = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
+		'vpn_domains', 'vpn_cidrs']);
 	let current = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
 		'hysteria_tls_mode', 'awg_available']);
+	let currentNegative = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
+		'hysteria_tls_mode', 'awg_available', 'vpn_domains', 'vpn_cidrs']);
 	let names = sort(keys(fields));
 	let withZapret = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
 		'hysteria_tls_mode', 'awg_available', 'zapret']);
+	let withZapretNegative = sort(['selection', 'wan_device', 'dns_server', 'direct_domains', 'direct_cidrs',
+		'hysteria_tls_mode', 'awg_available', 'zapret', 'vpn_domains', 'vpn_cidrs']);
 	if (join(',', names) != join(',', old) && join(',', names) != join(',', current) &&
-		join(',', names) != join(',', withZapret)) return null;
+		join(',', names) != join(',', withZapret) && join(',', names) != join(',', oldNegative) &&
+		join(',', names) != join(',', currentNegative) && join(',', names) != join(',', withZapretNegative)) return null;
 	let result = copy(policy);
 	/* Old 0.4 bundles used strict Hysteria validation. Do not reinterpret them. */
 	if (result.hysteria_tls_mode == null) result.hysteria_tls_mode = 'strict';
@@ -82,7 +90,7 @@ function validatePolicy(policy) {
 	if (type(normalized.wan_device) != 'string' ||
 		match(normalized.wan_device, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/) == null ||
 		index(['lo', 'avpn0', 'avpn1', 'avpnwg0', 'avpnwg1', 'br-avpn', 'br-avpnz',
-			'br-avpnd', 'br-avpndz', 'br-lan'], normalized.wan_device) >= 0)
+			'br-avpnd', 'br-avpndz', 'br-avpnnv', 'br-lan'], normalized.wan_device) >= 0)
 		return fail('invalid_wan_device');
 	if (!ipv4(normalized.dns_server)) return fail('invalid_dns_server');
 	if (index(['subscription', 'strict'], normalized.hysteria_tls_mode) < 0 ||
@@ -90,10 +98,21 @@ function validatePolicy(policy) {
 	if (type(normalized.direct_domains) != 'array' || length(normalized.direct_domains) > 128 ||
 		type(normalized.direct_cidrs) != 'array' || length(normalized.direct_cidrs) > 128)
 		return fail('invalid_direct_rules');
+	if ((normalized.vpn_domains == null) != (normalized.vpn_cidrs == null) ||
+		(normalized.vpn_domains != null &&
+			(type(normalized.vpn_domains) != 'array' || length(normalized.vpn_domains) > 256 ||
+			 type(normalized.vpn_cidrs) != 'array' || length(normalized.vpn_cidrs) > 256)))
+		return fail('invalid_negative_vpn_rules');
 	for (let i = 0; i < length(normalized.direct_domains); i++)
 		if (!domain(normalized.direct_domains[i])) return fail('invalid_direct_domain');
 	for (let i = 0; i < length(normalized.direct_cidrs); i++)
 		if (!cidr(normalized.direct_cidrs[i])) return fail('invalid_direct_cidr');
+	if (normalized.vpn_domains != null) {
+		for (let i = 0; i < length(normalized.vpn_domains); i++)
+			if (!domain(normalized.vpn_domains[i])) return fail('invalid_negative_vpn_domain');
+		for (let i = 0; i < length(normalized.vpn_cidrs); i++)
+			if (!cidr(normalized.vpn_cidrs[i])) return fail('invalid_negative_vpn_cidr');
+	}
 	return { ok: true };
 }
 
@@ -282,6 +301,11 @@ function render(snapshot, policy, machine, preferredProfile, lane) {
 		{ type: 'tproxy', tag: 'vpn-net', listen: '0.0.0.0', listen_port: transparent.listen_port },
 		{ type: 'socks', tag: 'health', listen: '127.0.0.1', listen_port: healthPort },
 	];
+	/* The negative network shares this lane's selected tunnel, but its default
+	 * route is WAN-direct. Its guard sends only that bridge to this listener. */
+	let negativeVpn = effective.vpn_domains != null && (!managedLane || descriptor.id == 'vpn');
+	if (negativeVpn)
+		push(inbounds, { type: 'tproxy', tag: 'negative-vpn-net', listen: '0.0.0.0', listen_port: 12082 });
 	let probePorts = managedLane ? descriptor.probe_ports
 		: { 'vless-reality': 1089, hysteria2: 1090, amneziawg: 1091 };
 	for (let i = 0; i < length(candidates); i++) {
@@ -294,6 +318,16 @@ function render(snapshot, policy, machine, preferredProfile, lane) {
 	push(rules, { action: 'sniff', timeout: '300ms' });
 	push(rules, { ip_version: 6, action: 'reject' });
 	push(rules, { ip_is_private: true, action: 'reject' });
+	/* These rules precede the direct fallback, and deliberately use the lane's
+	 * already selected profile rather than a new runtime or AWG identity. */
+	if (negativeVpn && length(effective.vpn_domains))
+		push(rules, { inbound: ['negative-vpn-net'], domain_suffix: effective.vpn_domains,
+			action: 'route', outbound: selected });
+	if (negativeVpn && length(effective.vpn_cidrs))
+		push(rules, { inbound: ['negative-vpn-net'], ip_cidr: effective.vpn_cidrs,
+			action: 'route', outbound: selected });
+	if (negativeVpn)
+		push(rules, { inbound: ['negative-vpn-net'], action: 'route', outbound: 'direct' });
 	if (length(effective.direct_domains))
 		push(rules, { domain_suffix: effective.direct_domains, action: 'route', outbound: 'direct' });
 	if (length(effective.direct_cidrs))

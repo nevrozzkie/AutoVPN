@@ -6,16 +6,23 @@ table inet autovpn_vpn {
 		type filter hook forward priority -10; policy accept;
 		iifname "br-avpn" counter drop
 		oifname "br-avpn" counter drop
+		iifname "br-avpnnv" counter drop
+		oifname "br-avpnnv" counter drop
 	}
 	chain input {
 		type filter hook input priority -10; policy accept;
 		iifname "br-avpn" meta nfproto ipv4 udp sport 68 udp dport 67 accept
+		iifname "br-avpnnv" meta nfproto ipv4 udp sport 68 udp dport 67 accept
 		iifname "br-avpn" meta mark 0x00004ed4 accept
+		iifname "br-avpnnv" meta mark 0x00004ed4 accept
 		iifname "br-avpn" counter drop
+		iifname "br-avpnnv" counter drop
 	}
 	chain transparent {
 		type filter hook prerouting priority mangle; policy accept;
 		iifname "br-avpn" ip saddr 192.168.30.0/24 meta l4proto { tcp, udp } th dport 53 tproxy ip to :12080 meta mark set 0x00004ed4 accept
 		iifname "br-avpn" ip saddr 192.168.30.0/24 ip daddr != { 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } meta l4proto { tcp, udp } tproxy ip to :12080 meta mark set 0x00004ed4 accept
+		iifname "br-avpnnv" ip saddr 192.168.33.0/24 meta l4proto { tcp, udp } th dport 53 tproxy ip to :12082 meta mark set 0x00004ed4 accept
+		iifname "br-avpnnv" ip saddr 192.168.33.0/24 ip daddr != { 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } meta l4proto { tcp, udp } tproxy ip to :12082 meta mark set 0x00004ed4 accept
 	}
 }

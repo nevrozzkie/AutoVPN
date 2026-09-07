@@ -118,6 +118,14 @@ test('package install invalidates hash-suffixed LuCI dispatcher caches', () => {
 	assert.match(makefile, /rm -f[^\n]+\n\s*\/etc\/init\.d\/rpcd reload/);
 });
 
+test('package upgrade adds missing negative VPN settings without overwriting existing values', () => {
+	const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
+	assert.match(makefile, /uci -q get autovpn\.runtime_negative[^\n]+\n\s*uci set autovpn\.runtime_negative=runtime/);
+	assert.match(makefile, /negative_telegram negative_youtube negative_instagram negative_x/);
+	assert.match(makefile, /uci -q get "autovpn\.runtime_negative\.\$\$\{option\}"[^\n]+\|\|/);
+	assert.doesNotMatch(makefile, /uci set "autovpn\.runtime_negative\.\$\$\{option\}=1"/);
+});
+
 test('menu-bound ACL grants the authenticated first-run action but no file access', () => {
 	const acl = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/rpcd/acl.d/luci-app-autovpn.json'), 'utf8'));
 	const menu = JSON.parse(fs.readFileSync(path.join(root, 'files/usr/share/luci/menu.d/luci-app-autovpn.json'), 'utf8'));
