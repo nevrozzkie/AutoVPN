@@ -127,10 +127,25 @@ CIDR, которые должны идти через VPN, и набор дом�
 | X / Twitter | `x.com`, `twitter.com`, `t.co`, `twimg.com`, `api.x.com`, `api.twitter.com` |
 | ChatGPT | `chatgpt.com`, `chat.openai.com`, `openai.com`, `auth.openai.com`, `platform.openai.com`, `oaistatic.com`, `oaiusercontent.com` |
 | Claude | `claude.ai`, `anthropic.com`, `console.anthropic.com`, `api.anthropic.com`, `anthropic-static.com` |
-| Остальные популярные внешние сервисы | Discord: `discord.com`, `discord.gg`, `discordapp.com`, `discordapp.net`, `discord.media`, `discordstatus.com`; Facebook/Messenger: `facebook.com`, `fb.com`, `fb.me`, `fbcdn.net`, `messenger.com`; LinkedIn: `linkedin.com`, `licdn.com`; Reddit: `reddit.com`, `redd.it`, `redditmedia.com`, `redditstatic.com`; TikTok: `tiktok.com`, `tiktokv.com`, `tiktokcdn.com`; Signal: `signal.org`, `signal.art`, `signal.me`, `whispersystems.org`; Twitch: `twitch.tv`, `ttvnw.net`, `jtvnw.net`; Viber: `viber.com`, `viber.me`; также `soundcloud.com`, `clubhouse.com`, `patreon.com` |
+| Discord | `discord.com`, `discord.gg`, `discordapp.com`, `discordapp.net`, `discord.media`, `discordstatus.com` |
+| Facebook / Messenger | `facebook.com`, `fb.com`, `fb.me`, `fbcdn.net`, `messenger.com` |
+| LinkedIn | `linkedin.com`, `licdn.com` |
+| Reddit (опционально) | `reddit.com`, `redd.it`, `redditmedia.com`, `redditstatic.com` |
+| TikTok | `tiktok.com`, `tiktokv.com`, `tiktokcdn.com` |
+| SoundCloud | `soundcloud.com` |
+| Clubhouse | `clubhouse.com` |
+| Patreon | `patreon.com` |
+| Signal | `signal.org`, `signal.art`, `signal.me`, `whispersystems.org` |
+| Twitch (опционально) | `twitch.tv`, `ttvnw.net`, `jtvnw.net` |
+| Viber | `viber.com`, `viber.me`, `viber.net` |
+| WhatsApp | `whatsapp.com`, `whatsapp.net`, `wa.me` |
+| Bluesky | `bsky.app`, `bsky.social` |
 
-Этот последний переключатель — перечисленный curated-набор, а не полный реестр
-ограниченных ресурсов РФ и не гарантия доступности. Общие домены, например
+Каждый переключатель независим. Twitch и Reddit не входят в какой-либо
+«заблокированный по умолчанию» набор: общая блокировка сейчас не подтверждена,
+но отдельный opt-in полезен при проблемах конкретного провайдера. Статусы в LuCI
+являются пояснением на момент выпуска пакета, а не живым государственным реестром.
+Общие домены, например
 `google.com`, общий `googleapis.com` и `challenges.cloudflare.com`, намеренно
 не включены: они обслуживают несвязанные сайты и могли бы без необходимости
 увести их трафик в VPN. ECH, сторонний DoH, IP без доменного имени и изменение

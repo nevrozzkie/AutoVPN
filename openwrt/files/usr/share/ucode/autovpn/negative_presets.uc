@@ -27,15 +27,22 @@ const CATALOG = {
 		'claude.ai', 'anthropic.com', 'console.anthropic.com', 'api.anthropic.com',
 		'anthropic-static.com',
 	],
-	/* This deliberately excludes the six individual presets above. */
-	negative_extended_blocked_services: [
-		'discord.com', 'discord.gg', 'discordapp.com', 'discordapp.net', 'discord.media',
-		'discordstatus.com', 'facebook.com', 'fb.com', 'fb.me', 'fbcdn.net', 'messenger.com',
-		'linkedin.com', 'licdn.com', 'reddit.com', 'redd.it', 'redditmedia.com', 'tiktok.com',
-		'redditstatic.com', 'tiktokv.com', 'tiktokcdn.com', 'soundcloud.com', 'clubhouse.com',
-		'patreon.com', 'signal.org', 'signal.art', 'signal.me', 'whispersystems.org',
-		'twitch.tv', 'ttvnw.net', 'jtvnw.net', 'viber.com', 'viber.me',
+	negative_discord: [
+		'discord.com', 'discord.gg', 'discordapp.com', 'discordapp.net',
+		'discord.media', 'discordstatus.com',
 	],
+	negative_facebook: ['facebook.com', 'fb.com', 'fb.me', 'fbcdn.net', 'messenger.com'],
+	negative_linkedin: ['linkedin.com', 'licdn.com'],
+	negative_reddit: ['reddit.com', 'redd.it', 'redditmedia.com', 'redditstatic.com'],
+	negative_tiktok: ['tiktok.com', 'tiktokv.com', 'tiktokcdn.com'],
+	negative_soundcloud: ['soundcloud.com'],
+	negative_clubhouse: ['clubhouse.com'],
+	negative_patreon: ['patreon.com'],
+	negative_signal: ['signal.org', 'signal.art', 'signal.me', 'whispersystems.org'],
+	negative_twitch: ['twitch.tv', 'ttvnw.net', 'jtvnw.net'],
+	negative_viber: ['viber.com', 'viber.me', 'viber.net'],
+	negative_whatsapp: ['whatsapp.com', 'whatsapp.net', 'wa.me'],
+	negative_bluesky: ['bsky.app', 'bsky.social'],
 };
 const CIDRS = {
 	/* Supplemental Telegram ranges published by Telegram; they can change. */
