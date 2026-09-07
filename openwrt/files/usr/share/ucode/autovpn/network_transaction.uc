@@ -9,7 +9,8 @@ function valid(state) {
 		type(state.deadline) != 'int' || type(state.expires_uptime) != 'int' || type(state.ready) != 'bool' ||
 		index(['pending', 'confirmed', 'rolled_back', 'rollback_conflict'], state.phase) < 0 ||
 		type(state.before) != 'object' || type(state.after) != 'object' ||
-		type(state.ssids) != 'array' || type(state.radios) != 'array') return false;
+		type(state.ssids) != 'array' || type(state.radios) != 'array' ||
+		(state.wired_ports != null && type(state.wired_ports) != 'array')) return false;
 	for (let i = 0; i < length(CONFIGS); i++) {
 		let name = CONFIGS[i];
 		if (type(state.before[name]) != 'string' || type(state.after[name]) != 'string' ||
@@ -70,7 +71,8 @@ function begin(settings, io, planner) {
 	let sequence = old == null ? 1 : old.sequence + 1;
 	let state = { version: 1, sequence: sequence, id: io.now() + '-' + sequence,
 		phase: 'pending', ready: false, deadline: io.now() + 180, expires_uptime: io.uptime() + 180,
-		before: before, after: staged.after, ssids: staged.ssids, radios: staged.radios };
+		before: before, after: staged.after, ssids: staged.ssids, radios: staged.radios,
+		wired_ports: staged.wired_ports || [] };
 	if (!valid(state)) return fail('network_stage_invalid');
 	/* Refuse to merge staged edits from another session or overwrite a concurrent commit. */
 	if (!io.clean()) return fail('uncommitted_network_changes');

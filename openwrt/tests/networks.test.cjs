@@ -13,7 +13,8 @@ const clone = value => structuredClone(value);
 const settings = { base_ssid: 'Общага', password: "hello-'$;pass" };
 function configs() {
 	return {
-		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		network: [{ '.name': 'brlan', '.type': 'device', name: 'br-lan', type: 'bridge', ports: ['lan1', 'lan2', 'lan3', 'lan4'] },
+			{ '.name': 'lan', '.type': 'interface', device: 'br-lan', ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
 		wireless: [{ '.name': 'radio0', '.type': 'wifi-device', band: '2g' },
 			{ '.name': 'radio1', '.type': 'wifi-device', band: '5g' },
 			{ '.name': 'default_radio0', '.type': 'wifi-iface', ssid: 'Management', network: 'lan', key: 'untouched' }],
@@ -48,6 +49,8 @@ test('creates personal WPA2 SSIDs on both bands and preserves management section
 	const direct = plan.sections.find(s => s.name === 'avpn_direct_wan');
 	assert.equal(direct.values.dest, 'wan');
 	assert.equal(plan.sections.filter(s => s.section_type === 'forwarding').length, 1);
+	assert.deepEqual(plan.patches[0], { config: 'network', name: 'brlan', option: 'ports', value: ['lan1', 'lan2'] });
+	assert.deepEqual(plan.sections.find(s => s.name === 'avpn_vpn_bridge').values.ports, ['lan3', 'lan4']);
 });
 test('repeat setup updates only owned sections and does not duplicate APs or bridges', () => {
 	const first = planner.plan(settings, configs(), []);
@@ -101,8 +104,10 @@ test('uses enabled radios only, rejects missing radios/WAN instead of changing t
 
 function freshOpenWrt() {
 	return {
-		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
-			ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		network: [{ '.name': 'brlan', '.type': 'device', name: 'br-lan', type: 'bridge',
+			ports: ['lan1', 'lan2', 'lan3', 'lan4'] },
+			{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
+				ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
 		wireless: [
 			{ '.name': 'radio0', '.type': 'wifi-device', type: 'mac80211', band: '2g', channel: '1', htmode: 'HE20', disabled: '1' },
 			{ '.name': 'default_radio0', '.type': 'wifi-iface', device: 'radio0', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
@@ -127,6 +132,7 @@ test('initial primary-LAN plan safely enables both stock-disabled radios without
 		{ config: 'wireless', name: 'radio0', option: 'disabled', value: '0' },
 		{ config: 'wireless', name: 'default_radio1', option: 'disabled', value: '1' },
 		{ config: 'wireless', name: 'radio1', option: 'disabled', value: '0' },
+		{ config: 'network', name: 'brlan', option: 'ports', value: ['lan1', 'lan2'] },
 	]);
 	assert.deepEqual(planned.ssids, [
 		{ ssid: 'OpenWrt', enabled: true, mode: 'direct', primary_lan: true },
@@ -144,6 +150,23 @@ test('initial primary-LAN plan safely enables both stock-disabled radios without
 		{ ...base.wireless[2], disabled: '0' });
 	assert.equal(applied.wireless.find(item => item['.name'] === 'default_radio0').disabled, '1');
 	assert.equal(applied.wireless.find(item => item['.name'] === 'default_radio1').disabled, '1');
+});
+
+test('moves LAN3 and LAN4 to the VPN bridge once and rejects ambiguous wired topology', () => {
+	const first = planner.plan(settings, configs(), []);
+	const migrated = installed(configs(), first);
+	assert.deepEqual(migrated.network.find(s => s.name === 'br-lan').ports, ['lan1', 'lan2']);
+	assert.deepEqual(migrated.network.find(s => s.name === 'br-avpn').ports, ['lan3', 'lan4']);
+	assert.equal(planner.plan(settings, migrated, []).ok, true);
+
+	for (const mutate of [
+		base => { base.network[0].ports = ['lan1', 'lan2', 'lan3']; },
+		base => { base.network.push({ '.name': 'guest', '.type': 'interface', device: 'lan3' }); },
+		base => { base.network.push({ '.name': 'vlans', '.type': 'bridge-vlan', device: 'br-lan', ports: ['lan3:u*'] }); },
+	]) {
+		const base = configs(); mutate(base);
+		assert.equal(planner.plan(settings, base, []).ok, false);
+	}
 });
 
 test('initial setup preserves disabled custom BSSes but refuses activating an unknown BSS with its radio', () => {
@@ -168,7 +191,7 @@ test('initial setup preserves disabled custom BSSes but refuses activating an un
 
 test('primary-LAN bootstrap requires dual-band radios and a complete static LAN-to-WAN policy', () => {
 	for (const mutate of [
-		base => { base.network[0].proto = 'dhcp'; },
+		base => { base.network.find(item => item['.name'] === 'lan').proto = 'dhcp'; },
 		base => { base.firewall = base.firewall.filter(item => item.name !== 'lan'); },
 		base => { base.firewall = base.firewall.filter(item => item.src !== 'lan'); },
 		base => { base.wireless = base.wireless.filter(item => item.device !== 'radio1' && item['.name'] !== 'radio1'); },

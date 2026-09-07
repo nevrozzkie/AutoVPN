@@ -3,6 +3,7 @@
 /* A bounded UCI plan. Never import server data or alter the management LAN. */
 const OWNER = 'ssid-v1';
 const CONFIGS = ['network', 'wireless', 'dhcp', 'firewall'];
+const VPN_WIRED_PORTS = ['lan3', 'lan4'];
 const MODES = [
 	{ id: 'direct', bridge: 'br-avpnd', octet: 29, suffix: '', enabled: true },
 	{ id: 'vpn', bridge: 'br-avpn', octet: 30, suffix: '-в', enabled: true },
@@ -16,6 +17,15 @@ const RESERVED_MODES = [
 ];
 function fail(code) { return { ok: false, code: code }; }
 function list(value) { return type(value) == 'array' ? value : type(value) == 'string' ? split(value, ' ') : []; }
+function sameList(left, right) {
+	if (length(left) != length(right)) return false;
+	for (let i = 0; i < length(left); i++) if (left[i] != right[i]) return false;
+	return true;
+}
+function physicalPortReference(value, port) {
+	return value == port || (type(value) == 'string' &&
+		(index(value, port + '.') == 0 || index(value, port + ':') == 0));
+}
 function validSettings(settings) {
 	if (type(settings) != 'object' || type(settings.base_ssid) != 'string' ||
 		length(settings.base_ssid) == 0 || length(settings.base_ssid) > 27 ||
@@ -91,6 +101,8 @@ function plan(settings, configs, routes) {
 	let radioDevices = [];
 	let safeStock = [];
 	let ownedBridges = [];
+	let ownedVpnPorts = [];
+	let managementBridge = null;
 	let wanZones = 0;
 	let lanZones = 0;
 	let lanWanForwardings = 0;
@@ -106,7 +118,10 @@ function plan(settings, configs, routes) {
 			if (owned) {
 				if (match(section['.name'], /^avpn_[A-Za-z0-9_]+$/) == null) return fail('network_ownership_conflict');
 				push(result.remove, { config: name, name: section['.name'] });
-				if (name == 'network' && section['.type'] == 'device') push(ownedBridges, section.name);
+				if (name == 'network' && section['.type'] == 'device') {
+					push(ownedBridges, section.name);
+					if (section.name == 'br-avpn') ownedVpnPorts = list(section.ports);
+				}
 				continue;
 			}
 			if (match(section['.name'], /^avpn_/) != null) return fail('network_ownership_conflict');
@@ -115,6 +130,21 @@ function plan(settings, configs, routes) {
 				push(radioDevices, { name: section['.name'], band: section.band, disabled: section.disabled == '1' });
 			}
 			if (name == 'network') {
+				if (section['.type'] == 'bridge-vlan' && section.device == 'br-lan')
+					return fail('unsupported_dsa_vlan_topology');
+				if (section['.type'] == 'device' && section.name == 'br-lan') {
+					if (managementBridge != null || section.type != 'bridge') return fail('wired_port_conflict');
+					managementBridge = section;
+				}
+				for (let p = 0; p < length(VPN_WIRED_PORTS); p++) {
+					let port = VPN_WIRED_PORTS[p];
+					if (section['.type'] != 'device' && physicalPortReference(section.device, port))
+						return fail('wired_port_conflict');
+					let ports = list(section.ports);
+					for (let q = 0; q < length(ports); q++)
+						if (physicalPortReference(ports[q], port) && section.name != 'br-lan')
+							return fail('wired_port_conflict');
+				}
 				if (section['.name'] == 'lan' && section['.type'] == 'interface') {
 					lanInterfaces++;
 					let addresses = list(section.ipaddr);
@@ -172,6 +202,18 @@ function plan(settings, configs, routes) {
 		if (!has2g || !has5g) return fail('dual_band_wifi_required');
 	}
 	if (wanZones != 1) return fail('masquerading_wan_zone_required');
+	if (managementBridge == null) return fail('wired_port_conflict');
+	let managementPorts = list(managementBridge.ports);
+	let remainingPorts = [];
+	let foundPorts = [];
+	for (let i = 0; i < length(managementPorts); i++) {
+		if (index(VPN_WIRED_PORTS, managementPorts[i]) >= 0) push(foundPorts, managementPorts[i]);
+		else push(remainingPorts, managementPorts[i]);
+	}
+	let firstMigration = sameList(foundPorts, VPN_WIRED_PORTS) && length(ownedVpnPorts) == 0;
+	let repeatedSetup = length(foundPorts) == 0 && sameList(ownedVpnPorts, VPN_WIRED_PORTS);
+	if ((!firstMigration && !repeatedSetup) || length(remainingPorts) == 0) return fail('wired_port_conflict');
+	push(result.patches, { config: 'network', name: managementBridge['.name'], option: 'ports', value: remainingPorts });
 	if (primaryLan && (lanInterfaces != 1 || !staticLan)) return fail('static_lan_required');
 	if (primaryLan && lanZones != 1) return fail('lan_firewall_zone_required');
 	if (primaryLan && lanWanForwardings != 1) return fail('lan_wan_forwarding_required');
@@ -192,7 +234,9 @@ function plan(settings, configs, routes) {
 		let onPrimaryLan = primaryLan && mode.id == 'direct';
 		push(result.ssids, { ssid: ssid, enabled: mode.enabled, mode: mode.id, primary_lan: onPrimaryLan });
 		if (!onPrimaryLan) {
-			add(result, 'network', name + '_bridge', 'device', { name: mode.bridge, type: 'bridge', bridge_empty: '1', ipv6: '0' });
+			let bridgeValues = { name: mode.bridge, type: 'bridge', bridge_empty: '1', ipv6: '0' };
+			if (mode.id == 'vpn') bridgeValues.ports = VPN_WIRED_PORTS;
+			add(result, 'network', name + '_bridge', 'device', bridgeValues);
 			add(result, 'network', name, 'interface', { device: mode.bridge, proto: 'static',
 				ipaddr: '192.168.' + mode.octet + '.1', netmask: '255.255.255.0', delegate: '0' });
 			add(result, 'dhcp', name, 'dhcp', { interface: name, start: '100', limit: '100', leasetime: '12h',
@@ -218,6 +262,7 @@ function plan(settings, configs, routes) {
 		}
 	}
 	result.radios = radios;
+	result.wired_ports = VPN_WIRED_PORTS;
 	return result;
 }
 
