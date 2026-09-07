@@ -76,7 +76,8 @@ function stage(before, settings, module) {
 			return { ok: false, code: 'network_stage_write_failed' };
 		after[name] = readfile(ROOT + '/stage/' + name, 65537);
 	}
-	return { ok: true, after: after, ssids: planned.ssids, radios: planned.radios };
+	return { ok: true, after: after, ssids: planned.ssids, radios: planned.radios,
+		wired_ports: planned.wired_ports || [] };
 }
 function ready(state) {
 	let wireless = decoded(['/bin/ubus', 'call', 'network.wireless', 'status']);
@@ -99,6 +100,10 @@ function ready(state) {
 		let bridge = { direct: 'br-avpnd', vpn: 'br-avpn', zapret: 'br-avpndz', vpn_zapret: 'br-avpnz' }[mode.mode];
 		if (bridge == null || command(['/sbin/ip', 'link', 'show', 'dev', bridge], 4096) == null) return false;
 	}
+	let vpnBridge = decoded(['/bin/ubus', 'call', 'network.device', 'status', '{"name":"br-avpn"}']);
+	if (type(vpnBridge) != 'object' || type(vpnBridge['bridge-members']) != 'array') return false;
+	for (let i = 0; i < length(state.wired_ports || []); i++)
+		if (index(vpnBridge['bridge-members'], state.wired_ports[i]) < 0) return false;
 	return command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpn'], 4096) != null &&
 		(primaryLan || command(['/sbin/ip', 'link', 'show', 'dev', 'br-avpnd'], 4096) != null);
 }

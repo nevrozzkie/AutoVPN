@@ -17,7 +17,8 @@ const type = value => value == null ? null : Array.isArray(value) ? 'array' : Nu
 const clone = value => structuredClone(value);
 function baseConfigs() {
 	return {
-		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		network: [{ '.name': 'brlan', '.type': 'device', name: 'br-lan', type: 'bridge', ports: ['lan1', 'lan2', 'lan3', 'lan4'] },
+			{ '.name': 'lan', '.type': 'interface', device: 'br-lan', ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
 		wireless: [{ '.name': 'radio0', '.type': 'wifi-device', band: '2g' }, { '.name': 'radio1', '.type': 'wifi-device', band: '5g' }],
 		dhcp: [{ '.name': 'lan', '.type': 'dhcp', interface: 'lan' }],
 		firewall: [{ '.name': 'defaults', '.type': 'defaults' }, { '.name': 'wan', '.type': 'zone', name: 'wan', masq: '1', network: ['wan'] }],
@@ -25,8 +26,9 @@ function baseConfigs() {
 }
 function freshConfigs() {
 	return {
-		network: [{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
-			ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
+		network: [{ '.name': 'brlan', '.type': 'device', name: 'br-lan', type: 'bridge', ports: ['lan1', 'lan2', 'lan3', 'lan4'] },
+			{ '.name': 'lan', '.type': 'interface', device: 'br-lan', proto: 'static',
+				ipaddr: '192.168.1.1', netmask: '255.255.255.0' }],
 		wireless: [
 			{ '.name': 'radio0', '.type': 'wifi-device', type: 'mac80211', band: '2g', channel: '1', htmode: 'HE20', disabled: '1' },
 			{ '.name': 'default_radio0', '.type': 'wifi-iface', device: 'radio0', mode: 'ap', network: 'lan', ssid: 'OpenWrt', encryption: 'none' },
@@ -47,7 +49,8 @@ function fixture(options = {}) {
 	for (const [name, value] of Object.entries(configs)) files.set('/etc/config/' + name, JSON.stringify(value));
 	files.set('/etc/config/autovpn', JSON.stringify([{ '.name': 'wifi', '.type': 'wifi', base_ssid: options.baseSsid || 'Dorm',
 		password: 'test-passphrase', primary_lan: options.primaryLan ? '1' : '0' }]));
-	const env = { files, calls: [], modes: [], changes: {}, now: 100, exit: null, output: null, ready: true, failCommit: false, unreadable: '' };
+	const env = { files, calls: [], modes: [], changes: {}, now: 100, exit: null, output: null,
+		ready: true, wiredReady: true, failCommit: false, unreadable: '' };
 	env.sets = [];
 	env.missingBridges = new Set();
 	let lastError = null;
@@ -88,6 +91,8 @@ function fixture(options = {}) {
 		if (argv[0] === '/bin/busybox' && argv[1] === 'timeout')
 			return { read: () => '', close: () => 127 };
 		const output = argv.includes('/sbin/ip') && argv.includes('-j') ? '[]' :
+			argv.includes('/bin/ubus') && argv.includes('network.device') ?
+				JSON.stringify({ 'bridge-members': env.wiredReady ? ['lan3', 'lan4'] : ['lan3'] }) :
 			argv.includes('/bin/ubus') ? JSON.stringify(Object.fromEntries(['radio0', 'radio1'].map(name => [name, {
 				up: true, interfaces: env.ready ? ['direct', 'vpn', 'zapret', 'vpn_zapret'].map(mode => ({ ifname: 'test', section: 'avpn_' + mode + '_' + name })) : []
 			}]))) : '';
@@ -237,6 +242,14 @@ test('real helper confirms only after both generated APs are present on each rad
 	env.missingBridges.add('br-avpnd');
 	assert.equal(run('network-confirm', [result.transaction_id]).code, 'wifi_not_ready');
 	env.missingBridges.delete('br-avpnd');
+	assert.equal(run('network-confirm', [result.transaction_id]).phase, 'confirmed');
+});
+test('real helper confirms only when LAN3 and LAN4 joined the VPN bridge', () => {
+	const { env, run } = fixture();
+	const result = run('network-setup');
+	env.wiredReady = false;
+	assert.equal(run('network-confirm', [result.transaction_id]).code, 'wifi_not_ready');
+	env.wiredReady = true;
 	assert.equal(run('network-confirm', [result.transaction_id]).phase, 'confirmed');
 });
 test('real helper reloads wireless on timeout rollback as well as initial setup', () => {
