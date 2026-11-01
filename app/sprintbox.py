@@ -50,6 +50,9 @@ class SprintboxClient:
 
     async def list_boxes(self) -> dict[str, dict[str, Any]]:
         data = await self._request("boxes/list")
+        # Empty collections may be encoded as [] by the provider's form API.
+        if data == []:
+            return {}
         if not isinstance(data, dict) or any(not isinstance(v, dict) for v in data.values()):
             raise RuntimeError("SprintBOX returned an invalid box list")
         return data

@@ -65,6 +65,7 @@ from app.protocol_status import (
 from app.readiness import database_is_ready
 from app.vps_provider import (
     provider_name, provider_available, provider_service_id, sprintbox_client, sprintbox_config,
+    ip_rotation_available, first_sprintbox_box,
 )
 from app.sprintbox_review import pending_review, prepare_cleanup
 from app.sprintbox_rotation import run_sprintbox_cleanup
@@ -302,12 +303,13 @@ templates.env.filters["msk"] = format_msk
 templates.env.filters["status_label"] = status_label
 templates.env.filters["step_label"] = step_label
 templates.env.globals["vps_provider"] = provider_name
+templates.env.globals["first_sprintbox_box"] = first_sprintbox_box
 templates.env.globals["provider_label"] = lambda: "SprintBOX" if provider_name() == "sprintbox" else "Aeza"
 
 
 def aeza_ip_rotation_available() -> bool:
     # Kept as a compatibility name for existing templates and callers.
-    return provider_available()
+    return ip_rotation_available()
 
 
 async def fetch_aeza_ipv4_price() -> dict[str, object] | None:
@@ -702,6 +704,7 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
             "safety_hold": request.query_params.get("safety_hold") == "1",
             "aeza_ipv4_price": price,
             "after_purchase_delay_seconds": aeza_ipv4_after_purchase_delay_seconds(),
+            "sprintbox_needs_client": provider_name() == "sprintbox" and not any(client["enabled"] for client in list_clients()),
             "sprintbox": {key: value for key, value in sprintbox_config().items() if key != "key"},
             "format_eur_minor_units": format_eur_minor_units,
         },
@@ -1244,7 +1247,7 @@ def admin_server(request: Request, _: str = Depends(require_admin)) -> HTMLRespo
         {
             "latest_operation": get_latest_server_operation(),
             "active_operation": get_active_vps_operation(),
-            "aeza_available": aeza_ip_rotation_available(),
+            "aeza_available": provider_available(),
             "service_id": provider_service_id(),
             "current_ip": get_setting("current_ip"),
             "target_host": resolve_eu_host(),
@@ -1259,7 +1262,7 @@ def admin_server_status_refresh(
     background_tasks: BackgroundTasks,
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
-    if not aeza_ip_rotation_available():
+    if not provider_available():
         return RedirectResponse(
             "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
         )
@@ -1281,7 +1284,7 @@ def admin_server_reboot_confirm(
     request: Request,
     _: str = Depends(require_admin),
 ) -> Response:
-    if not aeza_ip_rotation_available():
+    if not provider_available():
         return RedirectResponse(
             "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
         )
@@ -1308,7 +1311,7 @@ def admin_server_reboot(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Type REBOOT exactly to confirm server reboot",
         )
-    if not aeza_ip_rotation_available():
+    if not provider_available():
         return RedirectResponse(
             "/admin/server?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER
         )

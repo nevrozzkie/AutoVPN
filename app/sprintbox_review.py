@@ -11,6 +11,8 @@ from app.operation_coordinator import acquire_vps_lease
 
 def _value(db, key: str) -> str:
     row = db.execute("SELECT value FROM settings WHERE key = ?", (f"config.{key}",)).fetchone()
+    if row and key == "sprintbox_box_name":
+        return str(row["value"])
     return str(row["value"] if row and row["value"] else getattr(settings, key, ""))
 
 

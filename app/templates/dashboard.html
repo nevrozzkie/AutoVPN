@@ -122,7 +122,11 @@
 <section class="panel">
   <h2>Проверьте новый IP: {{ sprintbox_review.new_ip }}</h2>
   <p>VPN установлен на <code>{{ sprintbox_review.new_ip_id }}</code>. Проверьте подключение и нужные приложения. Для AmneziaWG проверьте подключение с обновлённым профилем.</p>
-  <p>Сохранённые старые боксы: {% for name in sprintbox_review.retained_boxes %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% else %}нет{% endfor %}. Они продолжают оплачиваться.</p>
+  {% if sprintbox_review.retained_boxes %}
+  <p>Сохранённые старые боксы: {% for name in sprintbox_review.retained_boxes %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. Они продолжают оплачиваться.</p>
+  {% else %}
+  <p>Старых боксов для удаления нет. «Всё ок» завершит настройку.</p>
+  {% endif %}
   <div class="actions">
     <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/accept" class="inline">
       <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Всё ок</button>
@@ -131,7 +135,7 @@
       <button type="submit" {% if active_vps_operation or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}disabled{% endif %}>Попробовать другой IP</button>
     </form>
   </div>
-  <p class="muted">«Всё ок» — попробовать удалить перечисленные старые боксы. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
+  <p class="muted">«Всё ок» — завершить настройку{% if sprintbox_review.retained_boxes %} и попробовать удалить перечисленные старые боксы{% endif %}. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
 </section>
 {% endif %}
 <div class="actions action-bar">
@@ -139,9 +143,9 @@
     <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
   {% if operation_running or active_vps_operation or not aeza_ip_rotation_available or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}
-    <button type="button" disabled>Обновить IP</button>
+    <button type="button" disabled>{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</button>
   {% else %}
-    <a class="button" href="/admin/ip/confirm">Обновить IP</a>
+    <a class="button" href="/admin/ip/confirm">{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</a>
     <a class="button" href="/admin/ip">Ручной режим IP</a>
   {% endif %}
   <a class="action-bar-end" href="/admin/install/script">Скачать скрипт установки</a>
@@ -151,6 +155,8 @@
   <p class="muted">Установка или синхронизация уже выполняется.</p>
 {% elif active_vps_operation %}
   <p class="muted">VPN VPS занят другой операцией.</p>
+{% elif first_sprintbox_box() %}
+  <p class="muted">Укажите в Setup API-доступ SprintBOX, тариф, образ ОС и SSH-ключ, затем нажмите «Создать первый бокс». Текущий IP и имя бокса для первого запуска не нужны.</p>
 {% elif not target_host %}
   <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице Setup.</p>
 {% endif %}

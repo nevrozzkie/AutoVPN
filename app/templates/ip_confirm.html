@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Подтверждение смены IP</h1>
+<h1>{{ 'Создание первого бокса SprintBOX' if first_sprintbox_box() else 'Подтверждение смены IP' }}</h1>
 
 {% if not safe_rotation_enabled %}
   <section class="panel warning">
@@ -37,13 +37,14 @@
 </section>
 
 {% if vps_provider() == 'sprintbox' %}
+{% if sprintbox_needs_client %}<section class="panel warning">Сначала <a href="/admin/clients">создайте или включите хотя бы одного клиента VPN</a>: он нужен для проверки подключения перед публикацией IP.</section>{% endif %}
 <section class="panel">
   <h2>Новый бокс SprintBOX</h2>
-  <p>Текущий бокс: <code>{{ sprintbox.box_name }}</code>. Тариф нового: <code>{{ sprintbox.service or 'не задан' }}</code>, образ ОС: <code>{{ sprintbox.distributive or 'не задан' }}</code>.</p>
+  <p>{% if sprintbox.box_name %}Текущий бокс: <code>{{ sprintbox.box_name }}</code>. {% else %}Первый бокс будет создан автоматически. {% endif %}Тариф нового: <code>{{ sprintbox.service or 'не задан' }}</code>, образ ОС: <code>{{ sprintbox.distributive or 'не задан' }}</code>.</p>
   <p>AutoVPN создаст новый платный бокс, установит VPN с текущими ключами и клиентами, проверит протоколы и опубликует новый IP в подписках.</p>
-  <p>После установки появятся две кнопки: «Всё ок» — попробовать удалить сохранённые старые боксы; «Попробовать другой IP» — создать следующий бокс, не удаляя предыдущие.</p>
+  <p>После установки появятся две кнопки: «Всё ок» — завершить настройку и попробовать удалить сохранённые старые боксы, если они есть; «Попробовать другой IP» — создать следующий бокс, не удаляя предыдущие.</p>
   <p>Если удаление не получится, панель покажет, какие боксы нужно удалить вручную. Перед «Всё ок» проверьте реальное подключение, в том числе AmneziaWG, если он включён.</p>
-  <p><a href="/admin/setup">Проверьте тариф и образ ОС в настройках</a>. На время перехода оба бокса оплачиваются. Повторный импорт профиля Amnezia может потребоваться для нового IP.</p>
+  <p><a href="/admin/setup">Проверьте тариф и образ ОС в настройках</a>. Каждый созданный бокс оплачивается до его удаления. Повторный импорт профиля Amnezia может потребоваться для нового IP.</p>
 </section>
 {% else %}
 <section class="panel">
@@ -69,7 +70,7 @@
 <div class="actions action-bar">
   <a class="button" href="/admin">Назад</a>
   <form method="post" action="/admin/ip/refresh" class="inline">
-    <button type="submit" {% if operation_running or not safe_rotation_enabled or not transactional_apply_enabled or safety_hold %}disabled{% endif %}>Подтвердить и обновить IP</button>
+    <button type="submit" {% if operation_running or not safe_rotation_enabled or not transactional_apply_enabled or safety_hold or sprintbox_needs_client %}disabled{% endif %}>{{ 'Подтвердить и создать первый бокс' if first_sprintbox_box() else 'Подтвердить и обновить IP' }}</button>
   </form>
 </div>
 
