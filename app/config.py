@@ -37,6 +37,7 @@ class Settings:
     sprintbox_box_name: str = os.getenv("SPRINTBOX_BOX_NAME", "")
     sprintbox_service: str = os.getenv("SPRINTBOX_SERVICE", "")
     sprintbox_distributive: str = os.getenv("SPRINTBOX_DISTRIBUTIVE", "")
+    sprintbox_ssh_key_path: str = os.getenv("SPRINTBOX_SSH_KEY_PATH", "")
     aeza_token: str = os.getenv("AEZA_TOKEN", "")
     aeza_service_id: str = os.getenv("AEZA_SERVICE_ID", "")
     aeza_ipv4_payment_method: str = os.getenv("AEZA_IPV4_PAYMENT_METHOD", "balance")

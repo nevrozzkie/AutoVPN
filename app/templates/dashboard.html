@@ -156,7 +156,7 @@
 {% elif active_vps_operation %}
   <p class="muted">VPN VPS занят другой операцией.</p>
 {% elif first_sprintbox_box() %}
-  <p class="muted">Укажите в Setup API-доступ SprintBOX, тариф, образ ОС и SSH-ключ, затем нажмите «Создать первый бокс». Текущий IP и имя бокса для первого запуска не нужны.</p>
+  <p class="muted">Укажите в Setup API-доступ SprintBOX, тариф и образ ОС, затем нажмите «Создать первый бокс». SSH-ключ создаётся автоматически. Текущий IP и имя бокса для первого запуска не нужны.</p>
 {% elif not target_host %}
   <p class="muted">Для установки VPN укажите текущий IP VPN или SSH-хост на странице Setup.</p>
 {% endif %}

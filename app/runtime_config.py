@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.db import get_setting
+from app.ssh_credentials import current_ssh_credentials
 
 
 def config_value(key: str, default: str = "") -> str:
@@ -100,22 +101,36 @@ def aeza_ipv4_after_purchase_delay_seconds() -> int:
 
 
 def eu_ssh_host() -> str:
+    configured = get_setting("config.eu_ssh_host", None)
+    if configured is not None:
+        return configured
     return config_value("eu_ssh_host", "")
 
 
 def eu_ssh_user() -> str:
+    if credentials := current_ssh_credentials():
+        return credentials.user
     return config_value("eu_ssh_user", "root") or "root"
 
 
 def eu_ssh_port() -> int:
+    if credentials := current_ssh_credentials():
+        return credentials.port
     return config_int("eu_ssh_port", 22)
 
 
 def eu_ssh_key_path() -> str:
+    if credentials := current_ssh_credentials():
+        return credentials.key_path
     return config_value("eu_ssh_key_path", "")
 
 
 def eu_ssh_password() -> str:
+    if credentials := current_ssh_credentials():
+        return credentials.password
+    configured = get_setting("config.eu_ssh_password", None)
+    if configured is not None:
+        return configured
     return config_value("eu_ssh_password", "")
 
 

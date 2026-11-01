@@ -6,9 +6,6 @@ import json
 import math
 import uuid
 from dataclasses import replace
-from pathlib import Path
-
-from cryptography.hazmat.primitives import serialization
 
 from app.db import get_db, now_iso, set_setting, update_operation
 from app.eu_install import build_eu_deploy_script, run_remote_command
@@ -17,7 +14,7 @@ from app.ip_change import (
     _sleep, _step, _verify_protocol_health, _wait_for_ssh,
 )
 from app.runtime_config import (
-    eu_ssh_host, eu_ssh_key_path, eu_ssh_password, eu_ssh_port, eu_ssh_user,
+    eu_ssh_host, eu_ssh_password,
     transactional_vpn_apply_enabled, vpn_deploy_timeout_seconds,
 )
 from app.secret_sanitization import sanitize_error
@@ -27,19 +24,8 @@ from app.vpn_state import load_ip_change_snapshot, publish_ip_change
 from app.operation_coordinator import TERMINAL_STATUSES
 from app.vpn_config import CapturedVpnConfig
 from app.sprintbox_review import context, retained_boxes, validate_target
-
-
-def _public_key() -> str:
-    if eu_ssh_user() != "root" or eu_ssh_port() != 22 or eu_ssh_password() or not eu_ssh_key_path():
-        raise IpChangeError("New SprintBOX servers require SSH root:22 with a private key and no SSH password; configure Setup first")
-    raw = Path(eu_ssh_key_path()).expanduser().read_bytes()
-    try:
-        key = serialization.load_ssh_private_key(raw, password=None)
-    except ValueError:
-        key = serialization.load_pem_private_key(raw, password=None)
-    return key.public_key().public_bytes(
-        serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH,
-    ).decode()
+from app.sprintbox_ssh import prepare_sprintbox_ssh
+from app.ssh_credentials import use_ssh_credentials
 
 
 def _check_binding(bound: dict[str, str]) -> None:
@@ -117,7 +103,8 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         first_box = not bound["box_name"]
         if not first_box and (not config.current_ip or eu_ssh_host() not in ("", config.current_ip)):
             raise IpChangeError("SprintBOX rotation requires SSH to use the current VPN IP")
-        pubkey = _public_key()
+        ssh = prepare_sprintbox_ssh()
+        pubkey = ssh.public_key
         retained = {}
         if not first_box:
             await _step(operation_id, "inspect_old_box")
@@ -128,7 +115,8 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         before = await client.list_boxes()
         update_operation(operation_id, old_ip=config.current_ip, old_ip_id=bound["box_name"])
         marker = f"AutoVPN rotation {operation_id} {uuid.uuid4().hex}"
-        operation_context = {"marker": marker, "first_box": first_box, "retained_boxes": retained}
+        operation_context = {"marker": marker, "first_box": first_box, "retained_boxes": retained,
+                             "ssh_key_path": ssh.credentials.key_path}
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         _check_binding(bound)
         _ensure_bound_revision_current(config.revision)
@@ -174,19 +162,21 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
                          purchase_state="CONFIRMED", new_ip_created_at=now_iso())
         _check_binding(bound)
         _ensure_bound_revision_current(config.revision)
-        await _step(operation_id, "wait_ssh")
-        await _wait_for_ssh(new_ip, timing, sleeper)
-        update_operation(operation_id, server_reachable_at=now_iso())
-        await _step(operation_id, "install_new_box", action_state="APPLYING", apply_state="RUNNING")
-        new_config = replace(config, current_ip=new_ip)
-        await _deploy(operation_id, new_ip, new_config)
-        update_operation(operation_id, apply_state="APPLIED", apply_completed_at=now_iso())
+        with use_ssh_credentials(ssh.credentials):
+            await _step(operation_id, "wait_ssh")
+            await _wait_for_ssh(new_ip, timing, sleeper)
+            update_operation(operation_id, server_reachable_at=now_iso())
+            await _step(operation_id, "install_new_box", action_state="APPLYING", apply_state="RUNNING")
+            new_config = replace(config, current_ip=new_ip)
+            await _deploy(operation_id, new_ip, new_config)
+            update_operation(operation_id, apply_state="APPLIED", apply_completed_at=now_iso())
+            _check_binding(bound)
+            _ensure_bound_revision_current(config.revision)
+            await _step(operation_id, "protocol_health")
+            health = await _verify_protocol_health(new_ip, new_config, timing)
         _check_binding(bound)
-        _ensure_bound_revision_current(config.revision)
-        await _step(operation_id, "protocol_health")
-        health = await _verify_protocol_health(new_ip, new_config, timing)
-        _check_binding(bound)
-        revision = publish_ip_change(operation_id, new_ip, health, sprintbox_box_name=new_name)
+        revision = publish_ip_change(operation_id, new_ip, health, sprintbox_box_name=new_name,
+                                     sprintbox_ssh_key_path=ssh.credentials.key_path)
         published = True
         update_operation(operation_id, status="DONE", current_step="awaiting_user_review",
                          action_state="AWAITING_USER_REVIEW", published_revision=revision, error_message="")
