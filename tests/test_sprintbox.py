@@ -43,6 +43,14 @@ def test_api_form_auth_and_async_task_contract(monkeypatch):
     assert parse_qs(requests[1].content.decode()) == {"box_name": ["box-old"]}
 
 
+@pytest.mark.parametrize("empty", [{}, []])
+def test_api_empty_account_box_list(monkeypatch, empty):
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": empty, "error": None}))
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    assert asyncio.run(api.SprintboxClient("account", "key").list_boxes()) == {}
+
+
 @pytest.mark.parametrize("status,body,error", [
     (400, {"data": None, "error": {"code": 41004, "description": "refused secret-key"}}, "41004"),
     (200, {"data": {"name": "box-123"}, "error": None}, "task ID"),
@@ -178,6 +186,125 @@ def test_rotation_publishes_before_deletion_and_waits_for_task(scenario):
     assert get_operation(operation)["action_state"] == "DONE"
     assert "poll:delete-task" in scenario.events
     assert result["old_ip_id"] == "box-old" and result["new_ip_id"] == "box-new"
+
+
+@pytest.mark.parametrize("previous_ip", ["", OLD])
+def test_create_first_box_keeps_same_flow_and_preserves_previous_ip_until_ready(scenario, monkeypatch, previous_ip):
+    from app.vpn_config import capture_vpn_config
+    scenario.boxes.clear()
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("current_ip", previous_ip)
+    set_setting("config.eu_ssh_host", "legacy-ssh.example")
+    before = capture_vpn_config()
+    original = rotation._deploy
+    async def deploy(*args):
+        assert get_setting("current_ip") == previous_ip
+        assert get_setting("config.sprintbox_box_name") == ""
+        await original(*args)
+    monkeypatch.setattr(rotation, "_deploy", deploy)
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+    assert pending_review()["retained_boxes"] == {}
+    assert get_setting("current_ip") == NEW
+    assert get_setting("config.sprintbox_box_name") == "box-new"
+    assert get_setting("config.eu_ssh_host") == ""
+    assert capture_vpn_config().clients == before.clients
+    assert capture_vpn_config().vless == before.vless
+    assert capture_vpn_config().amnezia == before.amnezia
+    assert scenario.events == ["create", "poll:create-task", "ssh", "deploy", "health"]
+    events = list(scenario.events)
+    async def forbidden(*args):
+        pytest.fail("Accepting the first box must not inspect or delete other boxes")
+    monkeypatch.setattr(scenario, "list_boxes", forbidden)
+    monkeypatch.setattr(scenario, "get_box", forbidden)
+    monkeypatch.setattr(scenario, "delete_box", forbidden)
+    accept(operation)
+    assert get_operation(operation)["action_state"] == "DONE"
+    assert scenario.events == events
+
+
+def test_retry_after_first_box_keeps_it_then_cleans_only_that_box(scenario):
+    scenario.boxes = {"unrelated": {"name": "unrelated", "ipv4": ["198.51.100.9"]}}
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("current_ip", "")
+    first = create_operation()
+    run(first)
+    second = prepare_ip_change_operation(review_operation_id=first).operation_id
+    run(second)
+    assert scenario.deleted_names == []
+    assert set(scenario.boxes) == {"unrelated", "box-new", "box-new2"}
+    assert pending_review()["retained_boxes"] == {"box-new": NEW}
+    accept(second)
+    assert scenario.deleted_names == ["box-new"]
+    assert set(scenario.boxes) == {"unrelated", "box-new2"}
+
+
+@pytest.mark.parametrize("failure", ["create-rejected", "create-timeout", "deploy", "health"])
+def test_first_box_failure_keeps_existing_ip_and_never_deletes(scenario, failure):
+    scenario.boxes.clear()
+    set_setting("config.sprintbox_box_name", "")
+    scenario.fail = failure
+    operation = create_operation()
+    run(operation)
+    assert get_setting("current_ip") == OLD
+    assert get_setting("config.sprintbox_box_name") == ""
+    assert "delete" not in scenario.events
+    assert get_operation(operation)["status"] in {"FAILED", "AMBIGUOUS"}
+
+
+def test_first_box_ui_is_enabled_but_server_actions_are_not(scenario, monkeypatch):
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("current_ip", "")
+    set_setting("config.eu_ssh_host", "")
+    set_setting("config.admin_password", "test-password")
+    scheduled = []
+    async def record(operation):
+        scheduled.append(operation)
+    monkeypatch.setattr(main, "_run_operation_background", record)
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        auth = ("admin", "test-password")
+        origin = {"Origin": "http://panel.local"}
+        dashboard = client.get("/admin", auth=auth)
+        assert dashboard.status_code == 200 and 'href="/admin/ip/confirm">Создать первый бокс</a>' in dashboard.text
+        confirmation = client.get("/admin/ip/confirm", auth=auth)
+        assert confirmation.status_code == 200 and "Подтвердить и создать первый бокс" in confirmation.text
+        assert "Первый бокс будет создан автоматически" in confirmation.text
+        assert client.post("/admin/server/status/refresh", auth=auth, headers=origin, follow_redirects=False).headers["location"] == "/admin/server?aeza_required=1"
+        assert client.post("/admin/server/reboot", auth=auth, headers=origin, data={"confirm": "REBOOT"}, follow_redirects=False).headers["location"] == "/admin/server?aeza_required=1"
+        response = client.post("/admin/ip/refresh", auth=auth, headers=origin, follow_redirects=False)
+        assert response.status_code == 303 and len(scheduled) == 1
+        duplicate = client.post("/admin/ip/refresh", auth=auth, headers=origin, follow_redirects=False)
+        assert "already_running=1" in duplicate.headers["location"] and len(scheduled) == 1
+
+
+def test_first_box_without_clients_is_blocked_before_any_api_request(scenario):
+    from app.db import list_clients, set_client_enabled
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("current_ip", "")
+    for client in list_clients():
+        set_client_enabled(client["id"], False)
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["status"] == "FAILED"
+    assert "enabled VPN client" in get_operation(operation)["error_message"]
+    assert scenario.events == []
+    assert get_setting("current_ip") == ""
+
+
+def test_explicit_empty_box_overrides_environment_for_first_creation(scenario, monkeypatch):
+    from dataclasses import replace
+    from app import vps_provider
+    monkeypatch.setattr(vps_provider, "settings", replace(vps_provider.settings, sprintbox_box_name="box-from-env"))
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("current_ip", "")
+    assert vps_provider.first_sprintbox_box()
+    assert vps_provider.provider_service_id() == ""
+    scenario.boxes.clear()
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+    assert pending_review()["retained_boxes"] == {}
 
 
 @pytest.mark.parametrize("failure", ["deploy", "health", "multiple", "task-timeout", "create-timeout"])

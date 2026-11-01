@@ -148,7 +148,7 @@
           <div class="grid">
             <div><label for="sprintbox_login_value">API login</label><input id="sprintbox_login_value" name="sprintbox_login_value" value="{{ sprintbox.login }}" autocomplete="off"></div>
             <div><label for="sprintbox_key_value">API key</label><input id="sprintbox_key_value" name="sprintbox_key_value" type="password" autocomplete="new-password">{% if sprintbox_key_configured %}<span class="muted">Ключ задан. Пустое поле сохраняет его.</span>{% endif %}</div>
-            <div><label for="sprintbox_box_name_value">Текущий бокс</label><input id="sprintbox_box_name_value" name="sprintbox_box_name_value" value="{{ sprintbox.box_name }}" placeholder="box-12345"></div>
+            <div><label for="sprintbox_box_name_value">Текущий бокс, если уже есть</label><input id="sprintbox_box_name_value" name="sprintbox_box_name_value" value="{{ sprintbox.box_name }}" placeholder="оставьте пустым для первого запуска"><span class="muted">Для создания первого бокса имя и текущий IP не нужны. После установки имя заполнится автоматически.</span></div>
             <div><label for="sprintbox_service_value">Код тарифа нового бокса</label><input id="sprintbox_service_value" name="sprintbox_service_value" value="{{ sprintbox.service }}"></div>
             <div><label for="sprintbox_distributive_value">Код образа ОС</label><input id="sprintbox_distributive_value" name="sprintbox_distributive_value" value="{{ sprintbox.distributive }}"></div>
           </div>

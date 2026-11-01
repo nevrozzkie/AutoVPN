@@ -110,19 +110,25 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             raise IpChangeError("SprintBOX rotation requires transactional VPN apply")
         if not any((config.vless.protocol.enabled, config.hysteria.protocol.enabled, config.amnezia.protocol.enabled)):
             raise IpChangeError("Enable at least one VPN protocol before rotating SprintBOX")
-        if not all(bound.get(key) for key in ("login", "box_name", "service", "distributive")) or not credentials["key"]:
-            raise IpChangeError("Configure SprintBOX credentials, current box, service and distributive in Setup")
-        if not config.current_ip or eu_ssh_host() not in ("", config.current_ip):
+        if not config.enabled_clients:
+            raise IpChangeError("Create at least one enabled VPN client before creating a SprintBOX")
+        if not all(bound.get(key) for key in ("login", "service", "distributive")) or not credentials["key"]:
+            raise IpChangeError("Configure SprintBOX credentials, service and distributive in Setup")
+        first_box = not bound["box_name"]
+        if not first_box and (not config.current_ip or eu_ssh_host() not in ("", config.current_ip)):
             raise IpChangeError("SprintBOX rotation requires SSH to use the current VPN IP")
         pubkey = _public_key()
-        await _step(operation_id, "inspect_old_box")
-        old = await client.get_box(bound["box_name"])
-        if config.current_ip not in box_ipv4(old):
-            raise IpChangeError("Configured SprintBOX box does not own current_ip; refusing rotation")
+        retained = {}
+        if not first_box:
+            await _step(operation_id, "inspect_old_box")
+            old = await client.get_box(bound["box_name"])
+            if config.current_ip not in box_ipv4(old):
+                raise IpChangeError("Configured SprintBOX box does not own current_ip; refusing rotation")
+            retained = retained_boxes(bound["box_name"], config.current_ip, bound)
         before = await client.list_boxes()
         update_operation(operation_id, old_ip=config.current_ip, old_ip_id=bound["box_name"])
         marker = f"AutoVPN rotation {operation_id} {uuid.uuid4().hex}"
-        operation_context = {"marker": marker, "retained_boxes": retained_boxes(bound["box_name"], config.current_ip, bound)}
+        operation_context = {"marker": marker, "first_box": first_box, "retained_boxes": retained}
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         _check_binding(bound)
         _ensure_bound_revision_current(config.revision)
