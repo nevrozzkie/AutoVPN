@@ -112,10 +112,13 @@ def prepare_install_operation(target_host: str) -> PreparedInstall:
         )
 
 
-def prepare_ip_change_operation() -> PreparedIpChange:
+def prepare_ip_change_operation(*, review_operation_id: int | None = None) -> PreparedIpChange:
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        if review_operation_id is not None:
+            from app.sprintbox_review import validate_review
+            validate_review(db, review_operation_id)
         unresolved = db.execute(
             """
             SELECT id FROM ip_change_operations
@@ -130,7 +133,7 @@ def prepare_ip_change_operation() -> PreparedIpChange:
         ).fetchone()
         if unresolved:
             raise IpChangeSafetyHoldError(
-                "A previous Aeza IP operation requires manual verification "
+                "A previous IP operation requires manual verification "
                 f"(operation {unresolved['id']})"
             )
         config, payload_json, payload_sha256 = _snapshot_payload(db)
@@ -156,6 +159,11 @@ def prepare_ip_change_operation() -> PreparedIpChange:
         )
         operation_id = int(cursor.lastrowid)
         acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        from app.vps_provider import bind_provider
+        bind_provider(db, operation_id)
+        if review_operation_id is not None:
+            db.execute("UPDATE ip_change_operations SET action_state = 'RETRY_REQUESTED', updated_at = ? WHERE id = ?",
+                       (timestamp, review_operation_id))
         return PreparedIpChange(
             operation_id=operation_id,
             revision=config.revision,
@@ -187,6 +195,8 @@ def publish_ip_change(
     operation_id: int,
     new_ip: str,
     healthcheck_result: str,
+    *,
+    sprintbox_box_name: str | None = None,
 ) -> int:
     timestamp = now_iso()
     with get_db() as db:
@@ -258,6 +268,12 @@ def publish_ip_change(
                 ("last_healthcheck_status", "OK"),
             ),
         )
+        if sprintbox_box_name is not None:
+            db.executemany(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (("config.sprintbox_box_name", sprintbox_box_name), ("config.eu_ssh_host", "")),
+            )
         db.execute(
             """
             UPDATE vpn_state

@@ -63,6 +63,11 @@ from app.protocol_status import (
     refresh_transport_protocol_statuses,
 )
 from app.readiness import database_is_ready
+from app.vps_provider import (
+    provider_name, provider_available, provider_service_id, sprintbox_client, sprintbox_config,
+)
+from app.sprintbox_review import pending_review, prepare_cleanup
+from app.sprintbox_rotation import run_sprintbox_cleanup
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -278,20 +283,35 @@ def status_label(value: object) -> str:
 
 def step_label(value: object) -> str:
     text = str(value or "")
-    return STEP_LABELS.get(text, text)
+    sprintbox_steps = {
+        "inspect_old_box": "проверка старого бокса",
+        "create_new_box": "создание нового бокса",
+        "wait_new_box": "ожидание создания бокса",
+        "identify_new_box": "определение нового IP",
+        "install_new_box": "установка VPN на новый бокс",
+        "delete_old_box": "удаление старого бокса",
+        "wait_old_box_deletion": "ожидание удаления старого бокса",
+        "awaiting_user_review": "ожидание вашей проверки VPN",
+        "cleanup_queued": "ожидание удаления старых боксов",
+    }
+    label = sprintbox_steps.get(text, STEP_LABELS.get(text, text))
+    return label.replace("Aeza", "SprintBOX") if provider_name() == "sprintbox" else label
 
 
 templates.env.filters["msk"] = format_msk
 templates.env.filters["status_label"] = status_label
 templates.env.filters["step_label"] = step_label
+templates.env.globals["vps_provider"] = provider_name
+templates.env.globals["provider_label"] = lambda: "SprintBOX" if provider_name() == "sprintbox" else "Aeza"
 
 
 def aeza_ip_rotation_available() -> bool:
-    return bool(aeza_token() and aeza_service_id())
+    # Kept as a compatibility name for existing templates and callers.
+    return provider_available()
 
 
 async def fetch_aeza_ipv4_price() -> dict[str, object] | None:
-    if not aeza_ip_rotation_available():
+    if provider_name() == "sprintbox" or not aeza_ip_rotation_available():
         return None
     try:
         client = AezaClient(aeza_api_base(), aeza_token())
@@ -457,6 +477,8 @@ def admin_setup_page(
             "aeza_token_configured": bool(aeza_token()),
             "aeza_service_id": aeza_service_id(),
             "aeza_ipv4_domain": aeza_ipv4_domain(),
+            "sprintbox": {key: value for key, value in sprintbox_config().items() if key != "key"},
+            "sprintbox_key_configured": bool(sprintbox_config()["key"]),
             "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
             "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
             "router_api_enabled": router_api_enabled(),
@@ -493,6 +515,12 @@ def setup_submit(
     aeza_token_value: str = Form(""),
     aeza_service_id_value: str = Form(""),
     aeza_ipv4_domain_value: str = Form(""),
+    vps_provider_value: str | None = Form(None),
+    sprintbox_login_value: str = Form(""),
+    sprintbox_key_value: str = Form(""),
+    sprintbox_box_name_value: str = Form(""),
+    sprintbox_service_value: str = Form(""),
+    sprintbox_distributive_value: str = Form(""),
 ) -> RedirectResponse:
     password = admin_password_value.strip()
     password_confirm = admin_password_confirm_value.strip()
@@ -557,7 +585,27 @@ def setup_submit(
         updates["config.eu_ssh_key_path"] = ssh_key_path
     if aeza_token_value.strip():
         updates["config.aeza_token"] = aeza_token_value.strip()
-    set_settings(updates, mark_vpn_config_updated=True)
+    if vps_provider_value is not None:
+        if vps_provider_value not in {"aeza", "sprintbox"}:
+            raise HTTPException(status_code=400, detail="Unknown VPS provider")
+        if get_active_vps_operation():
+            raise HTTPException(status_code=409, detail="Wait for the active VPS operation before changing provider settings")
+        updates["config.vps_provider"] = vps_provider_value
+        for key, value in {
+            "login": sprintbox_login_value, "box_name": sprintbox_box_name_value,
+            "service": sprintbox_service_value, "distributive": sprintbox_distributive_value,
+        }.items():
+            if "\n" in value or "\r" in value or len(value) > 256:
+                raise HTTPException(status_code=400, detail="Invalid SprintBOX setting")
+            updates[f"config.sprintbox_{key}"] = value.strip()
+        if sprintbox_key_value.strip():
+            if "\n" in sprintbox_key_value or "\r" in sprintbox_key_value:
+                raise HTTPException(status_code=400, detail="Invalid SprintBOX key")
+            updates["config.sprintbox_key"] = sprintbox_key_value.strip()
+    try:
+        set_settings(updates, mark_vpn_config_updated=True, require_vps_idle=vps_provider_value is not None)
+    except OperationBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -614,6 +662,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "protocol_status_available": protocol_status_available,
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
+            "sprintbox_review": pending_review() if provider_name() == "sprintbox" else None,
             "latest_install_operation": latest_install_operation,
             "latest_server_operation": latest_server_operation,
             "active_vps_operation": active_vps_operation,
@@ -653,6 +702,7 @@ async def confirm_ip_refresh(request: Request, _: str = Depends(require_admin)) 
             "safety_hold": request.query_params.get("safety_hold") == "1",
             "aeza_ipv4_price": price,
             "after_purchase_delay_seconds": aeza_ipv4_after_purchase_delay_seconds(),
+            "sprintbox": {key: value for key, value in sprintbox_config().items() if key != "key"},
             "format_eur_minor_units": format_eur_minor_units,
         },
     )
@@ -685,6 +735,31 @@ def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/admin/sprintbox/{operation_id}/accept")
+def accept_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
+                     _: str = Depends(require_admin)) -> RedirectResponse:
+    try:
+        prepare_cleanup(operation_id)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(run_sprintbox_cleanup, operation_id)
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/sprintbox/{operation_id}/retry")
+def retry_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
+                    _: str = Depends(require_admin)) -> RedirectResponse:
+    if not safe_aeza_ip_rotation_enabled() or not transactional_vpn_apply_enabled():
+        raise HTTPException(status_code=409, detail="Enable safe rotation and transactional VPN apply first")
+    from app.vpn_state import prepare_ip_change_operation
+    try:
+        prepared = prepare_ip_change_operation(review_operation_id=operation_id)
+    except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(_run_operation_background, prepared.operation_id)
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/admin/ip", response_class=HTMLResponse)
 async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     if not aeza_ip_rotation_available():
@@ -692,6 +767,16 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
     error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
     current_ip = get_setting("current_ip")
+    if provider_name() == "sprintbox":
+        boxes = {}
+        try:
+            boxes = await sprintbox_client().list_boxes()
+        except Exception as exc:
+            config = sprintbox_config()
+            error = sanitize_error(exc, config["key"], config["login"])
+        return templates.TemplateResponse(request, "sprintbox_boxes.html", {
+            "boxes": boxes, "current_box": provider_service_id(), "current_ip": current_ip, "error": error,
+        })
     try:
         client = get_aeza_client()
         ipv4_list = await client.get_ipv4_list(aeza_service_id())
@@ -1160,7 +1245,7 @@ def admin_server(request: Request, _: str = Depends(require_admin)) -> HTMLRespo
             "latest_operation": get_latest_server_operation(),
             "active_operation": get_active_vps_operation(),
             "aeza_available": aeza_ip_rotation_available(),
-            "service_id": aeza_service_id(),
+            "service_id": provider_service_id(),
             "current_ip": get_setting("current_ip"),
             "target_host": resolve_eu_host(),
             "aeza_required": request.query_params.get("aeza_required") == "1",
@@ -1204,7 +1289,7 @@ def admin_server_reboot_confirm(
         request,
         "server_reboot_confirm.html",
         {
-            "service_id": aeza_service_id(),
+            "service_id": provider_service_id(),
             "current_ip": get_setting("current_ip"),
             "latest_operation": get_latest_server_operation(),
             "active_operation": get_active_vps_operation(),

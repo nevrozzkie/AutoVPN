@@ -47,7 +47,7 @@
     {% endif %}
   </section>
   <section class="panel">
-    <div class="label">VPS в Aeza</div>
+    <div class="label">VPS в {{ provider_label() }}</div>
     {% if latest_server_operation %}
       <div class="value">{{ latest_server_operation.status|status_label }}</div>
       <div class="muted">
@@ -55,7 +55,7 @@
         {{ latest_server_operation.updated_at|msk }}
       </div>
       {% if latest_server_operation.provider_status %}
-        <div>Статус Aeza: {{ latest_server_operation.provider_status }}</div>
+        <div>Статус {{ provider_label() }}: {{ latest_server_operation.provider_status }}</div>
       {% endif %}
     {% else %}
       <div class="value">нет проверок</div>
@@ -118,6 +118,22 @@
 {% endif %}
 
 <h2>Действия</h2>
+{% if sprintbox_review %}
+<section class="panel">
+  <h2>Проверьте новый IP: {{ sprintbox_review.new_ip }}</h2>
+  <p>VPN установлен на <code>{{ sprintbox_review.new_ip_id }}</code>. Проверьте подключение и нужные приложения. Для AmneziaWG проверьте подключение с обновлённым профилем.</p>
+  <p>Сохранённые старые боксы: {% for name in sprintbox_review.retained_boxes %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% else %}нет{% endfor %}. Они продолжают оплачиваться.</p>
+  <div class="actions">
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/accept" class="inline">
+      <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Всё ок</button>
+    </form>
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/retry" class="inline">
+      <button type="submit" {% if active_vps_operation or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}disabled{% endif %}>Попробовать другой IP</button>
+    </form>
+  </div>
+  <p class="muted">«Всё ок» — попробовать удалить перечисленные старые боксы. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
+</section>
+{% endif %}
 <div class="actions action-bar">
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
@@ -142,19 +158,23 @@
 {% if operation_running %}
   <p class="muted">Операция смены IP уже выполняется.</p>
 {% elif not aeza_ip_rotation_available %}
-  <p class="muted">Смена IP доступна только для Aeza: настройте AEZA_TOKEN и AEZA_SERVICE_ID.</p>
+  <p class="muted">Для смены IP настройте доступ к {{ provider_label() }} на странице <a href="/admin/setup">Setup</a>.</p>
 {% elif not safe_aeza_ip_rotation_enabled %}
-  <p class="muted">Безопасная ротация Aeza выключена. Включить её можно на странице <a href="/admin/setup">Setup</a>; старый контур не запускается.</p>
+  <p class="muted">Безопасная ротация {{ provider_label() }} выключена. Включить её можно на странице <a href="/admin/setup">Setup</a>; старый контур не запускается.</p>
 {% elif not transactional_vpn_apply_enabled %}
   <p class="muted">Сначала включите транзакционное применение VPN на странице <a href="/admin/setup">Setup</a>; safe rotation не обходит этот gate.</p>
 {% endif %}
 
 <p class="danger">
-  Важно: при обновлении IP Aeza добавляет новый IPv4, за это могут списаться дополнительные деньги.
+  {% if vps_provider() == 'sprintbox' %}
+  Смена IP создаёт новый платный бокс SprintBOX. Старые сохраняются до нажатия «Всё ок». Если удалить их не получится, панель попросит сделать это вручную.
+  {% else %}
+  Важно: при обновлении IP {{ provider_label() }} добавляет новый IPv4, за это могут списаться дополнительные деньги.
   {% if aeza_ipv4_price and aeza_ipv4_price.price is not none %}
-    Сейчас Aeza API показывает цену: {{ format_eur_minor_units(aeza_ipv4_price.price) }}.
+    Сейчас {{ provider_label() }} API показывает цену: {{ format_eur_minor_units(aeza_ipv4_price.price) }}.
   {% elif aeza_ip_rotation_available %}
     Точная цена будет запрошена ещё раз на странице подтверждения.
+  {% endif %}
   {% endif %}
 </p>
 
@@ -169,8 +189,9 @@
 {% endif %}
 
 {% if latest_operation and latest_operation.cleanup_warning %}
-  <h2>Предупреждение cleanup Aeza IP</h2>
+  <h2>Предупреждение удаления старого ресурса</h2>
   <section class="panel warning">{{ latest_operation.cleanup_warning }}</section>
+  {% if vps_provider() == 'sprintbox' %}<p><a href="https://cp.sprintbox.ru/" target="_blank" rel="noopener noreferrer">Открыть SprintBOX и удалить старые боксы вручную</a></p>{% endif %}
 {% endif %}
 
 {% if latest_install_operation and latest_install_operation.error_message %}
