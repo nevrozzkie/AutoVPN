@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from app.aeza import AezaClient
-from app.db import get_db, get_setting, now_iso
+from app.db import get_db, get_setting, now_iso, set_setting
 from app.eu_install import resolve_eu_host, run_remote_command
 from app.health import tcp_check
 from app.operation_coordinator import (
@@ -34,6 +34,7 @@ from app.runtime_config import (
     vless_enabled,
 )
 from app.secret_sanitization import sanitize_error
+from app.vps_provider import provider_name, provider_service_id, sprintbox_client, sprintbox_config
 
 
 SERVICE_STATUS_COMMAND = """for service in xray hysteria-server awg-quick@awg0; do
@@ -87,7 +88,17 @@ def _clean(value: object, limit: int = 4000) -> str:
 
 
 def _safe_error(value: object) -> str:
-    return sanitize_error(value, aeza_token(), eu_ssh_password())
+    return sanitize_error(value, aeza_token(), eu_ssh_password(), sprintbox_config()["key"])
+
+
+def _provider_client(timeout: float):
+    if provider_name() == "sprintbox":
+        return sprintbox_client(timeout)
+    return AezaClient(aeza_api_base(), aeza_token(), timeout=timeout)
+
+
+def _provider_label() -> str:
+    return "SprintBOX" if provider_name() == "sprintbox" else "Aeza"
 
 
 def _json(value: object) -> str:
@@ -320,8 +331,8 @@ async def run_server_status(
             current_step="provider_status",
             started_at=timestamp,
         )
-        client = AezaClient(aeza_api_base(), aeza_token(), timeout=timing.request_timeout)
-        service = await _provider_status(client, aeza_service_id(), timing.request_timeout)
+        client = _provider_client(timing.request_timeout)
+        service = await _provider_status(client, provider_service_id(), timing.request_timeout)
         provider_status = _clean(service.get("provider_status"), 200)
         provider_ip = _clean(service.get("ip"), 200)
         update_server_operation(
@@ -349,7 +360,7 @@ async def run_server_status(
             operation_id,
             status="DONE",
             current_step="done",
-            result_message="Aeza VPS status refreshed",
+            result_message=f"{_provider_label()} VPS status refreshed",
             warning_message=warning,
             completed_at=now_iso(),
         )
@@ -358,7 +369,7 @@ async def run_server_status(
             operation_id,
             status="TIMED_OUT",
             current_step="timed_out",
-            error_message="Aeza VPS status refresh timed out",
+            error_message=f"{_provider_label()} VPS status refresh timed out",
             completed_at=now_iso(),
         )
     except Exception as exc:
@@ -458,10 +469,11 @@ async def run_server_reboot(
         return
 
     ambiguous_action = False
+    reboot_task = None
     warning_messages: list[str] = []
     try:
-        client = AezaClient(aeza_api_base(), aeza_token(), timeout=timing.request_timeout)
-        service_id = aeza_service_id()
+        client = _provider_client(timing.request_timeout)
+        service_id = provider_service_id()
         update_server_operation(
             operation_id,
             status="RUNNING",
@@ -482,15 +494,18 @@ async def run_server_reboot(
         if not mark_reboot_sending(operation_id):
             raise RuntimeError("Reboot action was already started and will not be sent again")
         try:
-            await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 client.reboot_service(service_id),
                 timeout=max(0.01, timing.request_timeout),
             )
+            if provider_name() == "sprintbox":
+                reboot_task = response
+                set_setting(f"server_operation.{operation_id}.sprintbox_task", reboot_task)
             update_server_operation(operation_id, action_state="SENT", current_step="wait_reboot")
         except Exception as exc:
             ambiguous_action = True
             warning_messages.append(
-                f"Aeza reboot request result is ambiguous: {_safe_error(exc)}"
+                f"{_provider_label()} reboot request result is ambiguous: {_safe_error(exc)}"
             )
             update_server_operation(
                 operation_id,
@@ -506,6 +521,15 @@ async def run_server_reboot(
         for attempt in range(attempts):
             heartbeat = "verify_reboot" if not ambiguous_action else "verify_ambiguous_reboot"
             update_server_operation(operation_id, current_step=heartbeat)
+            if reboot_task:
+                task_status = await asyncio.wait_for(client.task_status(reboot_task), timeout=max(.01, timing.request_timeout))
+                if task_status == "error":
+                    raise RuntimeError("SprintBOX reboot task failed; inspect the panel")
+                if task_status != "finished":
+                    provider_waiting = True
+                    if attempt + 1 < attempts:
+                        await sleeper(timing.poll_interval)
+                    continue
             try:
                 current = await _provider_status(client, service_id, timing.request_timeout)
                 current_status = _clean(current.get("provider_status"), 200)
@@ -559,7 +583,7 @@ async def run_server_reboot(
                 await sleeper(timing.poll_interval)
 
         if provider_waiting:
-            message = "Aeza did not report VPS recovery before timeout"
+            message = f"{_provider_label()} did not report VPS recovery before timeout"
             step = "wait_provider"
         elif ssh_waiting:
             message = "SSH did not become reachable before timeout"

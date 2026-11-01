@@ -391,9 +391,14 @@ def set_setting(key: str, value: str) -> None:
             _mark_vpn_config_updated(db)
 
 
-def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = False) -> None:
+def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = False,
+                 require_vps_idle: bool = False) -> None:
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        if require_vps_idle:
+            owner = _active_operation_owner(db)
+            if owner:
+                raise OperationBusyError(owner)
         vpn_changed = mark_vpn_config_updated and any(
             _is_vpn_setting(key) and _setting(db, key) != value
             for key, value in values.items()
@@ -846,6 +851,11 @@ def _clear_server_and_aeza_state(db: sqlite3.Connection) -> None:
         )
         OR key LIKE 'config.eu_%'
         OR key LIKE 'config.aeza_%'
+        OR key LIKE 'config.sprintbox_%'
+        OR key = 'config.vps_provider'
+        OR key LIKE 'ip_change.%.provider'
+        OR key LIKE 'ip_change.%.sprintbox'
+        OR key LIKE 'server_operation.%.sprintbox_task'
         OR key LIKE 'protocol.%'
         """
     )

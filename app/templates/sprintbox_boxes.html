@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Боксы SprintBOX</h1>
+<p>Активный VPN-бокс: <code>{{ current_box }}</code>, IP: <code>{{ current_ip }}</code>.</p>
+{% if error %}<section class="panel danger">{{ error }}</section>{% endif %}
+<div class="actions"><a class="button" href="/admin/ip/confirm">Сменить IP через новый бокс</a><a href="/admin/operations">Журнал</a><a href="https://cp.sprintbox.ru/" target="_blank" rel="noopener noreferrer">Кабинет SprintBOX / ручное удаление</a></div>
+<table><thead><tr><th>Бокс</th><th>IP</th><th>Статус</th><th>VPN</th></tr></thead><tbody>
+{% for name, box in boxes.items() %}<tr><td>{{ name }}</td><td>{{ box.ipv4|join(', ') }}</td><td>{{ box.state_description }}</td><td>{{ 'активный' if name == current_box else '—' }}</td></tr>{% else %}<tr><td colspan="4">Нет данных</td></tr>{% endfor %}
+</tbody></table>
+<p>Старые боксы сохраняются до нажатия «Всё ок» на главной странице. Если удаление не удалось, панель попросит удалить их вручную.</p>
+{% endblock %}

@@ -31,6 +31,12 @@ class Settings:
     admin_password: str = os.getenv("ADMIN_PASSWORD", "")
 
     aeza_api_base: str = os.getenv("AEZA_API_BASE", "https://my.aeza.net")
+    vps_provider: str = os.getenv("VPS_PROVIDER", "aeza")
+    sprintbox_login: str = os.getenv("SPRINTBOX_LOGIN", "")
+    sprintbox_key: str = os.getenv("SPRINTBOX_KEY", "")
+    sprintbox_box_name: str = os.getenv("SPRINTBOX_BOX_NAME", "")
+    sprintbox_service: str = os.getenv("SPRINTBOX_SERVICE", "")
+    sprintbox_distributive: str = os.getenv("SPRINTBOX_DISTRIBUTIVE", "")
     aeza_token: str = os.getenv("AEZA_TOKEN", "")
     aeza_service_id: str = os.getenv("AEZA_SERVICE_ID", "")
     aeza_ipv4_payment_method: str = os.getenv("AEZA_IPV4_PAYMENT_METHOD", "balance")

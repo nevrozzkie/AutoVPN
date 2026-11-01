@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ "Перезагрузка" if operation.kind == "REBOOT" else "Проверка состояния" }} VPS в Aeza</h1>
+<h1>{{ "Перезагрузка" if operation.kind == "REBOOT" else "Проверка состояния" }} VPS в {{ provider_label() }}</h1>
 
 <section class="panel">
   <div><strong>Операция:</strong> #{{ operation.id }}</div>
   <div><strong>Статус:</strong> {{ operation.status|status_label }}</div>
   <div><strong>Шаг:</strong> {{ operation.current_step|step_label }}</div>
   {% if operation.kind == "REBOOT" %}
-    <div><strong>Состояние команды Aeza:</strong> {{ operation.action_state }}</div>
+    <div><strong>Состояние команды {{ provider_label() }}:</strong> {{ operation.action_state }}</div>
   {% endif %}
-  <div><strong>Статус Aeza:</strong> {{ operation.provider_status or "нет данных" }}</div>
-  <div><strong>IP у Aeza:</strong> {{ operation.provider_ip or "нет данных" }}</div>
+  <div><strong>Статус {{ provider_label() }}:</strong> {{ operation.provider_status or "нет данных" }}</div>
+  <div><strong>IP у {{ provider_label() }}:</strong> {{ operation.provider_ip or "нет данных" }}</div>
   <div><strong>SSH:</strong> {{ operation.ssh_status or "нет данных" }}</div>
   <div><strong>Создано:</strong> {{ operation.created_at|msk }}</div>
   <div><strong>Завершено:</strong> {{ operation.completed_at|msk }}</div>

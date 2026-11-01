@@ -362,6 +362,11 @@ async def run_ip_change(
     timing: IpRotationTiming | None = None,
     sleeper: Sleeper = _sleep,
 ) -> None:
+    from app.vps_provider import bound_provider
+    if bound_provider(operation_id)["provider"] == "sprintbox":
+        from app.sprintbox_rotation import run_sprintbox_rotation
+        await run_sprintbox_rotation(operation_id, timing=timing, sleeper=sleeper)
+        return
     timing = timing or IpRotationTiming.configured()
     operation, config = load_ip_change_snapshot(operation_id)
     if operation["status"] in TERMINAL_STATUSES:
