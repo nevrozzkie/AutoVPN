@@ -140,7 +140,6 @@ def scenario(monkeypatch):
     create_client("Existing client")
     fake = FakeSprintbox()
     monkeypatch.setattr(rotation, "SprintboxClient", lambda *a, **kw: fake)
-    monkeypatch.setattr(rotation, "_public_key", lambda: "ssh-ed25519 AAAA")
     async def ssh(*args):
         fake.events.append("ssh")
     async def deploy(operation, host, config):
@@ -455,27 +454,42 @@ def test_wrong_old_box_never_creates_or_deletes(scenario):
     assert get_operation(operation)["status"] == "FAILED"
 
 
-def test_public_key_is_derived_without_sending_private_key(tmp_path, monkeypatch):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    key = Ed25519PrivateKey.generate()
-    path = tmp_path / "private_key"
-    path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()))
-    monkeypatch.setattr(rotation, "eu_ssh_key_path", lambda: str(path))
-    monkeypatch.setattr(rotation, "eu_ssh_user", lambda: "root")
-    monkeypatch.setattr(rotation, "eu_ssh_port", lambda: 22)
-    monkeypatch.setattr(rotation, "eu_ssh_password", lambda: "")
-    public = rotation._public_key()
-    assert public == key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
-    assert "PRIVATE" not in public
-
-
-def test_fresh_box_does_not_use_old_password(monkeypatch):
-    monkeypatch.setattr(rotation, "eu_ssh_user", lambda: "root")
-    monkeypatch.setattr(rotation, "eu_ssh_port", lambda: 22)
-    monkeypatch.setattr(rotation, "eu_ssh_password", lambda: "old-password")
-    with pytest.raises(RuntimeError, match="no SSH password"):
-        rotation._public_key()
+@pytest.mark.parametrize("failure", ["", "deploy", "health"])
+def test_automatic_ssh_does_not_change_old_access_before_success(scenario, monkeypatch, failure):
+    import app.runtime_config as runtime
+    import app.eu_install as eu_install
+    from pathlib import Path
+    from dataclasses import replace
+    monkeypatch.setattr(runtime, "settings", replace(runtime.settings, eu_ssh_password="env-old-password", eu_ssh_host="env-old-host"))
+    set_setting("config.sprintbox_box_name", "")
+    set_setting("config.eu_ssh_password", "old-password")
+    set_setting("config.eu_ssh_key_path", "")
+    set_setting("config.eu_ssh_user", "legacy-user")
+    set_setting("config.eu_ssh_port", "2222")
+    scenario.fail = failure
+    original = rotation._deploy
+    async def deploy(*args):
+        assert get_setting("config.eu_ssh_password") == "old-password"
+        assert get_setting("config.eu_ssh_user") == "legacy-user"
+        assert runtime.eu_ssh_password() == ""
+        assert runtime.eu_ssh_user() == "root" and runtime.eu_ssh_port() == 22
+        assert Path(runtime.eu_ssh_key_path()).is_file()
+        command = await asyncio.to_thread(eu_install.build_ssh_command, NEW)
+        assert "root@" + NEW in command and "2222" not in command
+        assert "PubkeyAuthentication=no" not in command
+        await original(*args)
+    monkeypatch.setattr(rotation, "_deploy", deploy)
+    operation = create_operation()
+    run(operation)
+    if failure:
+        assert runtime.eu_ssh_password() == "old-password"
+        assert runtime.eu_ssh_user() == "legacy-user" and runtime.eu_ssh_port() == 2222
+        assert runtime.eu_ssh_key_path() == ""
+    else:
+        assert runtime.eu_ssh_password() == ""
+        assert runtime.eu_ssh_host() == ""
+        assert runtime.eu_ssh_user() == "root" and runtime.eu_ssh_port() == 22
+        assert Path(runtime.eu_ssh_key_path()).is_file()
 
 
 def test_provider_setup_cannot_change_during_rotation(scenario):

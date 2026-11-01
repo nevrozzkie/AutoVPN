@@ -153,7 +153,7 @@
             <div><label for="sprintbox_distributive_value">Код образа ОС</label><input id="sprintbox_distributive_value" name="sprintbox_distributive_value" value="{{ sprintbox.distributive }}"></div>
           </div>
           <p class="muted">Login и key: <a href="https://cp.sprintbox.ru/customer/api/index" target="_blank" rel="noopener noreferrer">кабинет SprintBOX</a>. Коды тарифа и образа: services/list и distributives/list в <a href="https://api.sprintbox.ru/" target="_blank" rel="noopener noreferrer">API</a>. Уточните локацию выбранного тарифа до создания бокса.</p>
-          <p class="muted">Новый бокс настраивается по SSH root:22. Укажите путь к приватному SSH-ключу выше и оставьте пароль SSH пустым. Соответствующий публичный ключ AutoVPN передаст при создании бокса.</p>
+          <p class="muted">SSH для новых боксов настраивается автоматически. AutoVPN создаст и сохранит ключ на сервере панели, передаст SprintBOX только публичную часть и подключится как root:22. Сохранённый пароль прежнего VPS не мешает: настройки SSH переключатся после успешной проверки нового бокса.</p>
           <h3>Aeza, опционально</h3>
           <div class="grid">
             <div>

@@ -197,6 +197,7 @@ def publish_ip_change(
     healthcheck_result: str,
     *,
     sprintbox_box_name: str | None = None,
+    sprintbox_ssh_key_path: str | None = None,
 ) -> int:
     timestamp = now_iso()
     with get_db() as db:
@@ -274,6 +275,13 @@ def publish_ip_change(
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (("config.sprintbox_box_name", sprintbox_box_name), ("config.eu_ssh_host", "")),
             )
+            if sprintbox_ssh_key_path is not None:
+                db.executemany(
+                    "INSERT INTO settings(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (("config.eu_ssh_user", "root"), ("config.eu_ssh_port", "22"),
+                     ("config.eu_ssh_key_path", sprintbox_ssh_key_path), ("config.eu_ssh_password", "")),
+                )
         db.execute(
             """
             UPDATE vpn_state
