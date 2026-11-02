@@ -51,6 +51,19 @@ def test_api_empty_account_box_list(monkeypatch, empty):
     assert asyncio.run(api.SprintboxClient("account", "key").list_boxes()) == {}
 
 
+@pytest.mark.parametrize("data", [None, [], {}, {"name": "box-123"}, {"id": ""}])
+def test_accepted_create_without_task_has_distinct_error_and_is_not_resent(monkeypatch, data):
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"data": data, "error": None})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(api.SprintboxTaskIdMissing):
+        asyncio.run(api.SprintboxClient("account", "key").create_box("tariff", "ubuntu2204", "public-key", "бокс-12345"))
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("status,body,error", [
     (400, {"data": None, "error": {"code": 41004, "description": "refused secret-key"}}, "41004"),
     (200, {"data": {"name": "box-123"}, "error": None}, "task ID"),
@@ -87,7 +100,7 @@ class FakeSprintbox:
     async def list_boxes(self):
         boxes = dict(self.boxes)
         if self.marker:
-            if self.fail == "multiple":
+            if self.fail in {"multiple", "create-no-task-multiple"}:
                 boxes["box-other"] = {"name": "box-other", "description": self.marker, "ipv4": ["203.0.113.30"]}
         return boxes
 
@@ -102,6 +115,12 @@ class FakeSprintbox:
         name = "box-new" if self.created_count == 1 else f"box-new{self.created_count}"
         ip = NEW if self.created_count == 1 else f"203.0.113.{20 + self.created_count}"
         self.boxes[name] = {"name": name, "description": self.marker, "ipv4": [ip], "state_description": "running"}
+        if self.fail == "create-no-task-unpaid":
+            self.boxes[name].update(ipv4=[], state_description="unpaid")
+        if self.fail == "create-no-task-unmatched":
+            self.boxes[name]["description"] = "some other request"
+        if self.fail.startswith("create-no-task"):
+            raise api.SprintboxTaskIdMissing("SprintBOX did not return an asynchronous task ID")
         return "create-task"
 
     async def task_status(self, task):
@@ -185,6 +204,56 @@ def test_rotation_publishes_before_deletion_and_waits_for_task(scenario):
     assert get_operation(operation)["action_state"] == "DONE"
     assert "poll:delete-task" in scenario.events
     assert result["old_ip_id"] == "box-old" and result["new_ip_id"] == "box-new"
+
+
+def test_box_label_has_five_random_digits_and_avoids_existing_names(scenario, monkeypatch):
+    import re
+    monkeypatch.setattr(rotation.secrets, "randbelow", lambda size: 23_456)
+    scenario.boxes["existing"] = {"name": "existing", "description": "бокс-33456", "ipv4": ["198.51.100.6"]}
+    operation = create_operation()
+    run(operation)
+    assert re.fullmatch(r"бокс-[0-9]{5}", scenario.marker)
+    assert scenario.marker == "бокс-33457"
+    assert "AutoVPN" not in scenario.marker
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+
+
+@pytest.mark.parametrize("first_box", [False, True])
+def test_accepted_create_without_task_identifies_and_checks_own_box(scenario, first_box):
+    if first_box:
+        scenario.boxes.clear()
+        set_setting("config.sprintbox_box_name", "")
+    scenario.fail = "create-no-task"
+    operation = create_operation()
+    run(operation)
+    result = get_operation(operation)
+    assert result["action_state"] == "AWAITING_USER_REVIEW"
+    assert result["purchase_state"] == "CONFIRMED"
+    assert result["new_ip_id"] == "box-new"
+    assert scenario.events.count("create") == 1
+    assert not any(event.startswith("poll:") for event in scenario.events)
+    assert scenario.events[-3:] == ["ssh", "deploy", "health"]
+    assert "delete" not in scenario.events
+    assert get_setting("current_ip") == NEW
+
+
+@pytest.mark.parametrize("failure", ["unpaid", "unmatched", "multiple"])
+def test_accepted_create_without_task_does_not_publish_unready_or_unrelated_box(scenario, failure):
+    scenario.fail = "create-no-task-" + failure
+    operation = create_operation()
+    run(operation)
+    result = get_operation(operation)
+    assert result["status"] == "AMBIGUOUS"
+    assert scenario.events.count("create") == 1
+    assert "ssh" not in scenario.events and "delete" not in scenario.events
+    assert get_setting("current_ip") == OLD
+    if failure == "unpaid":
+        assert result["new_ip_id"] == "box-new"
+        assert "баланс" in result["error_message"] and "box-new" in result["error_message"]
+    with pytest.raises(IpChangeSafetyHoldError):
+        create_operation()
+    run(operation)
+    assert scenario.events.count("create") == 1
 
 
 @pytest.mark.parametrize("previous_ip", ["", OLD])

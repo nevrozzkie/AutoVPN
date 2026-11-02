@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import secrets
 import uuid
 from dataclasses import replace
 
@@ -18,7 +19,7 @@ from app.runtime_config import (
     transactional_vpn_apply_enabled, vpn_deploy_timeout_seconds,
 )
 from app.secret_sanitization import sanitize_error
-from app.sprintbox import SprintboxApiError, SprintboxClient, box_ipv4
+from app.sprintbox import SprintboxApiError, SprintboxClient, SprintboxTaskIdMissing, box_ipv4
 from app.vps_provider import bound_provider, provider_name, sprintbox_config
 from app.vpn_state import load_ip_change_snapshot, publish_ip_change
 from app.operation_coordinator import TERMINAL_STATUSES
@@ -26,6 +27,16 @@ from app.vpn_config import CapturedVpnConfig
 from app.sprintbox_review import context, retained_boxes, validate_target
 from app.sprintbox_ssh import prepare_sprintbox_ssh
 from app.ssh_credentials import use_ssh_credentials
+
+
+def _new_box_label(boxes: dict) -> str:
+    existing = set(boxes) | {str(box.get("description") or "") for box in boxes.values()}
+    start = secrets.randbelow(90_000)
+    for offset in range(90_000):
+        label = f"бокс-{10_000 + (start + offset) % 90_000}"
+        if label not in existing:
+            return label
+    raise IpChangeError("No free five-digit SprintBOX name is available")
 
 
 def _check_binding(bound: dict[str, str]) -> None:
@@ -114,8 +125,9 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             retained = retained_boxes(bound["box_name"], config.current_ip, bound)
         before = await client.list_boxes()
         update_operation(operation_id, old_ip=config.current_ip, old_ip_id=bound["box_name"])
-        marker = f"AutoVPN rotation {operation_id} {uuid.uuid4().hex}"
-        operation_context = {"marker": marker, "first_box": first_box, "retained_boxes": retained,
+        marker = _new_box_label(before)
+        operation_context = {"marker": marker, "request_id": uuid.uuid4().hex,
+                             "first_box": first_box, "retained_boxes": retained,
                              "ssh_key_path": ssh.credentials.key_path}
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         _check_binding(bound)
@@ -132,6 +144,10 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         creation_started = True
         try:
             job = await client.create_box(bound["service"], bound["distributive"], pubkey, marker)
+        except SprintboxTaskIdMissing:
+            # An accepted create can already have produced a box without a task.
+            # Only inspect this request's unique label; never resend box/add.
+            job = None
         except SprintboxApiError:
             creation_started = False  # explicit API rejection; no automatic retry
             update_operation(operation_id, purchase_state="REJECTED")
@@ -139,7 +155,8 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         operation_context["create_task"] = job
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         update_operation(operation_id, purchase_state="SENT")
-        await _wait_task(client, job, operation_id, "wait_new_box", timing, sleeper)
+        if job is not None:
+            await _wait_task(client, job, operation_id, "wait_new_box", timing, sleeper)
         # Correlate by our unique description, never by the first newly appearing server.
         attempts = max(1, math.ceil(timing.ip_appear_timeout / max(.01, timing.ip_appear_interval)))
         for attempt in range(attempts):
@@ -149,14 +166,23 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
                           if name not in before and box.get("name") == name and box.get("description") == marker]
             if len(candidates) > 1:
                 raise IpChangeError("Multiple SprintBOX boxes match this operation; manual verification required")
-            if len(candidates) == 1 and len(box_ipv4(candidates[0][1])) == 1:
+            if len(candidates) == 1:
                 new_name, box = candidates[0]
-                new_ip = box_ipv4(box)[0]
-                if new_ip != config.current_ip and all(new_ip not in box_ipv4(item) for item in before.values()):
-                    break
+                # Retain its identity even if it is unpaid/not yet assigned an IP.
+                update_operation(operation_id, new_ip_id=new_name)
+                if len(box_ipv4(box)) == 1:
+                    new_ip = box_ipv4(box)[0]
+                    if new_ip != config.current_ip and all(new_ip not in box_ipv4(item) for item in before.values()):
+                        break
             if attempt + 1 < attempts:
                 await sleeper(timing.ip_appear_interval)
         else:
+            if new_name:
+                raise IpChangeError(
+                    f"Бокс {new_name} создан, но новый IPv4 не готов. Проверьте статус бокса и баланс "
+                    "в кабинете SprintBOX; при статусе «не оплачен» пополните баланс. "
+                    "Повторный запрос создания не отправлялся"
+                )
             raise IpChangeError("Cannot uniquely identify new SprintBOX IPv4; inspect the panel")
         update_operation(operation_id, new_ip_id=new_name, new_ip=new_ip,
                          purchase_state="CONFIRMED", new_ip_created_at=now_iso())
