@@ -29,7 +29,7 @@
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
         <td>{{ operation.revision if operation.revision is not none else "" }}{% if operation.published_revision is not none %} → {{ operation.published_revision }}{% endif %}</td>
         <td>
-          {{ operation.action_state or "" }}
+          {{ (operation.action_state or "")|status_label }}
           {% if operation.rollback_outcome %}<br><span class="warning">{{ operation.rollback_outcome }}</span>{% endif %}
           {% if operation.cleanup_warning %}<br><span class="warning">{{ operation.cleanup_warning }}</span>{% endif %}
           {% if operation.action_state in ["AMBIGUOUS", "CLEANUP_AMBIGUOUS", "PUBLISHED_AWAITING_AWG_CHECK"] %}

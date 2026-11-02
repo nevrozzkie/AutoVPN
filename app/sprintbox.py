@@ -87,9 +87,11 @@ class SprintboxClient:
         if not isinstance(data, dict) or data.get("id") != task_id:
             raise RuntimeError("SprintBOX returned an invalid task status")
         status = data.get("status")
-        if status not in {"started", "finished", "error"}:
-            raise RuntimeError("SprintBOX returned an unknown task status")
-        return status
+        if not isinstance(status, str) or not status.strip():
+            raise RuntimeError("SprintBOX returned an invalid task status")
+        # The live API can report intermediate states absent from its docs.
+        # They never mean success: keep polling within the caller's deadline.
+        return status if status in {"started", "finished", "error"} else "pending"
 
     async def get_service(self, name: str) -> dict[str, Any]:
         box = await self.get_box(name)

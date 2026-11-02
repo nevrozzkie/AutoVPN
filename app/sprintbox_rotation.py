@@ -154,7 +154,7 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             raise
         operation_context["create_task"] = job
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
-        update_operation(operation_id, purchase_state="SENT")
+        update_operation(operation_id, purchase_state="SENT", action_state="PURCHASE_SENT")
         if job is not None:
             await _wait_task(client, job, operation_id, "wait_new_box", timing, sleeper)
         # Correlate by our unique description, never by the first newly appearing server.
