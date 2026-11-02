@@ -71,6 +71,7 @@ def _xray_config(config: CapturedVpnConfig) -> dict[str, Any]:
                         "show": False,
                         "target": config.vless.target,
                         "serverNames": list(config.vless.server_names),
+                        "minClientVer": "1.0.0",
                         "privateKey": config.vless.private_key,
                         "shortIds": [config.vless.short_id],
                     },
