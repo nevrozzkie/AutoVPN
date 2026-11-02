@@ -1,6 +1,6 @@
 """SprintBOX's documented form API (https://api.sprintbox.ru/).
 
-Mutations return task IDs, not box IDs. Never retry a mutation automatically.
+Documented task IDs are distinct from box IDs. Never retry a mutation automatically.
 """
 from __future__ import annotations
 
@@ -14,6 +14,10 @@ class SprintboxApiError(RuntimeError):
     def __init__(self, code: str, description: str) -> None:
         self.code = code
         super().__init__(f"SprintBOX API {code}: {description}")
+
+
+class SprintboxTaskIdMissing(RuntimeError):
+    """The API accepted a mutation but supplied no usable task ID."""
 
 
 class SprintboxClient:
@@ -66,7 +70,7 @@ class SprintboxClient:
     @staticmethod
     def task_id(data: Any) -> str:
         if not isinstance(data, dict) or not isinstance(data.get("id"), str) or not data["id"]:
-            raise RuntimeError("SprintBOX did not return an asynchronous task ID")
+            raise SprintboxTaskIdMissing("SprintBOX did not return an asynchronous task ID")
         return data["id"]
 
     async def create_box(self, service: str, distributive: str, pubkey: str, description: str) -> str:
