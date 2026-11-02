@@ -67,7 +67,7 @@ from app.vps_provider import (
     provider_name, provider_available, provider_service_id, sprintbox_client, sprintbox_config,
     ip_rotation_available, first_sprintbox_box,
 )
-from app.sprintbox_review import pending_review, prepare_cleanup
+from app.sprintbox_review import pending_review, prepare_cleanup, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait
 from app.sprintbox_rotation import run_sprintbox_cleanup
 from app.runtime_config import (
     admin_password,
@@ -242,6 +242,11 @@ STATUS_LABELS = {
     "AWAITING_USER_REVIEW": "Ожидает вашей проверки",
     "APPLYING": "Установка VPN",
     "RECONCILED": "Проверено вручную",
+    "SSH_UNREACHABLE": "Нужен выбор: SSH недоступен",
+    "SSH_WAIT_QUEUED": "Повторное ожидание SSH",
+    "WAITING_SSH": "Ожидание SSH",
+    "CANCELLED": "Отменено",
+    "RETRY_REQUESTED": "Выбран другой бокс",
 }
 
 
@@ -299,6 +304,8 @@ def step_label(value: object) -> str:
         "wait_old_box_deletion": "ожидание удаления старого бокса",
         "awaiting_user_review": "ожидание вашей проверки VPN",
         "cleanup_queued": "ожидание удаления старых боксов",
+        "ssh_decision": "SSH недоступен — выберите действие",
+        "cancelled": "попытка отменена",
     }
     label = sprintbox_steps.get(text, STEP_LABELS.get(text, text))
     return label.replace("Aeza", "SprintBOX") if provider_name() == "sprintbox" else label
@@ -670,6 +677,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
             "sprintbox_review": pending_review() if provider_name() == "sprintbox" else None,
+            "sprintbox_ssh_decision": pending_ssh_decision(),
             "latest_install_operation": latest_install_operation,
             "latest_server_operation": latest_server_operation,
             "active_vps_operation": active_vps_operation,
@@ -765,6 +773,28 @@ def retry_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
     except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     background_tasks.add_task(_run_operation_background, prepared.operation_id)
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/sprintbox/{operation_id}/ssh/{decision}")
+def decide_sprintbox_ssh(operation_id: int, decision: str, background_tasks: BackgroundTasks,
+                         _: str = Depends(require_admin)) -> RedirectResponse:
+    if decision not in {"wait", "retry", "cancel"}:
+        raise HTTPException(status_code=404)
+    if decision != "cancel" and (not safe_aeza_ip_rotation_enabled() or not transactional_vpn_apply_enabled()):
+        raise HTTPException(status_code=409, detail="Enable safe rotation and transactional VPN apply first")
+    try:
+        if decision == "cancel":
+            cancel_ssh_wait(operation_id)
+        elif decision == "wait":
+            prepare_ssh_wait(operation_id)
+            background_tasks.add_task(_run_operation_background, operation_id)
+        else:
+            from app.vpn_state import prepare_ip_change_operation
+            prepared = prepare_ip_change_operation(ssh_decision_id=operation_id)
+            background_tasks.add_task(_run_operation_background, prepared.operation_id)
+    except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 

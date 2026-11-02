@@ -85,3 +85,63 @@ def prepare_cleanup(operation_id: int) -> None:
             "UPDATE ip_change_operations SET status = 'PENDING', action_state = 'CLEANUP_QUEUED', "
             "current_step = 'cleanup_queued', updated_at = ? WHERE id = ?", (now_iso(), operation_id),
         )
+
+
+def validate_ssh_decision(db, operation_id: int, *, queued: bool = False) -> dict:
+    row = db.execute("SELECT * FROM ip_change_operations WHERE id = ?", (operation_id,)).fetchone()
+    expected = ("PENDING", "SSH_WAIT_QUEUED") if queued else ("DONE", "SSH_UNREACHABLE")
+    if not row or (row["status"], row["action_state"]) != expected:
+        raise ValueError("This SSH decision was already submitted")
+    bound = _bound(db, operation_id)
+    current = db.execute("SELECT value FROM settings WHERE key = 'current_ip'").fetchone()
+    revision = db.execute("SELECT desired_revision FROM vpn_state WHERE singleton = 1").fetchone()
+    if (bound.get("provider") != "sprintbox" or _value(db, "vps_provider") != "sprintbox"
+            or any(bound.get(key) != _value(db, "sprintbox_" + key)
+                   for key in ("login", "box_name", "service", "distributive"))
+            or bound.get("credential_hash") != hashlib.sha256(_value(db, "sprintbox_key").encode()).hexdigest()
+            or row["revision"] != revision["desired_revision"]
+            or row["old_ip"] != (current["value"] if current else "")
+            or row["published_revision"] or row["purchase_state"] != "CONFIRMED"
+            or row["apply_state"] != "NOT_STARTED" or row["make_main_state"] != "NOT_STARTED"
+            or not row["new_ip_id"] or not row["new_ip"]
+            or row["new_ip_id"] == bound.get("box_name")):
+        raise ValueError("VPN configuration/account changed; cancel this SSH decision first")
+    return row
+
+
+def pending_ssh_decision() -> dict | None:
+    with get_db() as db:
+        row = db.execute("SELECT * FROM ip_change_operations WHERE status = 'DONE' "
+                         "AND action_state = 'SSH_UNREACHABLE' ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            try:
+                validate_ssh_decision(db, row["id"])
+                row["stale"] = False
+            except ValueError:
+                row["stale"] = True
+        return row
+
+
+def prepare_ssh_wait(operation_id: int) -> None:
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        validate_ssh_decision(db, operation_id)
+        acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        db.execute("UPDATE ip_change_operations SET status = 'PENDING', action_state = 'SSH_WAIT_QUEUED', "
+                   "current_step = 'wait_ssh', updated_at = ? WHERE id = ?", (now_iso(), operation_id))
+
+
+def cancel_ssh_wait(operation_id: int) -> None:
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT * FROM ip_change_operations WHERE id = ? AND status = 'DONE' "
+                         "AND action_state = 'SSH_UNREACHABLE'", (operation_id,)).fetchone()
+        if not row:
+            raise ValueError("This SSH decision was already submitted")
+        active = _value(db, "sprintbox_box_name")
+        kept = set(context(db, operation_id).get("retained_boxes", {})) | {row["new_ip_id"]}
+        names = ", ".join(sorted(name for name in kept if name and name != active))
+        warning = f"Попытка отменена. Боксы сохранены; при необходимости удалите вручную в SprintBOX: {names}"
+        db.execute("UPDATE ip_change_operations SET action_state = 'CANCELLED', current_step = 'cancelled', "
+                   "error_message = '', cleanup_warning = ?, updated_at = ? WHERE id = ?",
+                   (warning, now_iso(), operation_id))

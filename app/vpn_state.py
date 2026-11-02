@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass, replace
 from typing import Any
@@ -112,10 +113,21 @@ def prepare_install_operation(target_host: str) -> PreparedInstall:
         )
 
 
-def prepare_ip_change_operation(*, review_operation_id: int | None = None) -> PreparedIpChange:
+def prepare_ip_change_operation(*, review_operation_id: int | None = None,
+                                ssh_decision_id: int | None = None) -> PreparedIpChange:
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        if review_operation_id is not None and ssh_decision_id is not None:
+            raise ValueError("Choose one SprintBOX decision")
+        if ssh_decision_id is not None:
+            from app.sprintbox_review import validate_ssh_decision
+            validate_ssh_decision(db, ssh_decision_id)
+        decision = db.execute("SELECT id FROM ip_change_operations WHERE status = 'DONE' "
+                              "AND action_state = 'SSH_UNREACHABLE' AND id != ? LIMIT 1",
+                              (ssh_decision_id or 0,)).fetchone()
+        if decision:
+            raise IpChangeSafetyHoldError("Choose whether to wait, create another box or cancel first")
         if review_operation_id is not None:
             from app.sprintbox_review import validate_review
             validate_review(db, review_operation_id)
@@ -161,6 +173,16 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None) -> Pr
         acquire_vps_lease(db, "IP_CHANGE", operation_id)
         from app.vps_provider import bind_provider
         bind_provider(db, operation_id)
+        if ssh_decision_id is not None:
+            from app.sprintbox_review import context
+            previous = db.execute("SELECT new_ip_id,new_ip FROM ip_change_operations WHERE id = ?",
+                                  (ssh_decision_id,)).fetchone()
+            kept = dict(context(db, ssh_decision_id).get("retained_boxes", {}))
+            kept[previous["new_ip_id"]] = previous["new_ip"]
+            db.execute("INSERT INTO settings(key,value) VALUES (?,?)",
+                       (f"ip_change.{operation_id}.sprintbox", json.dumps({"retained_boxes": kept})))
+            db.execute("UPDATE ip_change_operations SET action_state = 'RETRY_REQUESTED', updated_at = ? WHERE id = ?",
+                       (timestamp, ssh_decision_id))
         if review_operation_id is not None:
             db.execute("UPDATE ip_change_operations SET action_state = 'RETRY_REQUESTED', updated_at = ? WHERE id = ?",
                        (timestamp, review_operation_id))

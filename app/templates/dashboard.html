@@ -10,7 +10,7 @@
   <section class="panel">
     <div class="label">Последняя смена IP</div>
     {% if latest_operation %}
-      <div class="value">{{ latest_operation.status|status_label }}</div>
+      <div class="value">{{ (latest_operation.action_state if latest_operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED'] else latest_operation.status)|status_label }}</div>
       <div class="muted">{{ latest_operation.current_step|step_label }} · {{ latest_operation.updated_at|msk }}</div>
       {% if latest_operation.server_reachable_at %}
         <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at|msk }}</div>
@@ -118,6 +118,27 @@
 {% endif %}
 
 <h2>Действия</h2>
+{% if sprintbox_ssh_decision %}
+<section class="panel">
+  <h2>Бокс создан, но SSH недоступен</h2>
+  <p><code>{{ sprintbox_ssh_decision.new_ip_id }}</code> · {{ sprintbox_ssh_decision.new_ip }}. VPN на нём ещё не устанавливался. Текущий IP не изменён.</p>
+  {% if sprintbox_ssh_decision.stale %}
+  <p class="warning">Настройки VPN или провайдера изменились. Отмените эту попытку перед новой.</p>
+  {% endif %}
+  <div class="actions">
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_ssh_decision.id }}/ssh/wait" class="inline">
+      <button type="submit" {% if sprintbox_ssh_decision.stale or active_vps_operation or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}disabled{% endif %}>Подождать ещё</button>
+    </form>
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_ssh_decision.id }}/ssh/retry" class="inline">
+      <button type="submit" {% if sprintbox_ssh_decision.stale or active_vps_operation or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}disabled{% endif %}>Создать другой бокс</button>
+    </form>
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_ssh_decision.id }}/ssh/cancel" class="inline">
+      <button type="submit">Отмена</button>
+    </form>
+  </div>
+  <p class="muted">«Подождать ещё» проверит тот же бокс. «Создать другой бокс» создаст ещё один платный сервер и сохранит предыдущие. «Отмена» завершит попытку, сохранив боксы для ручного удаления.</p>
+</section>
+{% endif %}
 {% if sprintbox_review %}
 <section class="panel">
   <h2>Проверьте новый IP: {{ sprintbox_review.new_ip }}</h2>
@@ -142,7 +163,7 @@
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
-  {% if operation_running or active_vps_operation or not aeza_ip_rotation_available or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}
+  {% if operation_running or active_vps_operation or sprintbox_ssh_decision or not aeza_ip_rotation_available or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}
     <button type="button" disabled>{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</a>

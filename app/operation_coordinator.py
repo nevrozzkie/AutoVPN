@@ -72,11 +72,22 @@ def _fail_owner(
     elif owner.owner_type == "IP_CHANGE":
         operation = connection.execute(
             """
-            SELECT purchase_state, make_main_state, apply_state
+            SELECT purchase_state, make_main_state, apply_state, action_state, new_ip_id, new_ip
             FROM ip_change_operations WHERE id = ?
             """,
             (owner.owner_id,),
         ).fetchone()
+        if (operation and operation["action_state"] in {"WAITING_SSH", "SSH_WAIT_QUEUED"}
+                and operation["purchase_state"] == "CONFIRMED"
+                and operation["make_main_state"] == "NOT_STARTED"
+                and operation["apply_state"] == "NOT_STARTED"
+                and operation["new_ip_id"] and operation["new_ip"]):
+            connection.execute(
+                "UPDATE ip_change_operations SET status = 'DONE', action_state = 'SSH_UNREACHABLE', "
+                "current_step = 'ssh_decision', error_message = '', updated_at = ? "
+                "WHERE id = ? AND status IN ('PENDING','RUNNING')", (timestamp, owner.owner_id),
+            )
+            return
         external_action_started = bool(
             operation
             and any(

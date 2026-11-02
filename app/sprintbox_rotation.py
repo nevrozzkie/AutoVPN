@@ -7,6 +7,7 @@ import math
 import secrets
 import uuid
 from dataclasses import replace
+from pathlib import Path
 
 from app.db import get_db, now_iso, set_setting, update_operation
 from app.eu_install import build_eu_deploy_script, run_remote_command
@@ -22,10 +23,10 @@ from app.secret_sanitization import sanitize_error
 from app.sprintbox import SprintboxApiError, SprintboxClient, SprintboxTaskIdMissing, box_ipv4
 from app.vps_provider import bound_provider, provider_name, sprintbox_config
 from app.vpn_state import load_ip_change_snapshot, publish_ip_change
-from app.operation_coordinator import TERMINAL_STATUSES
+from app.operation_coordinator import TERMINAL_STATUSES, release_vps_lease
 from app.vpn_config import CapturedVpnConfig
-from app.sprintbox_review import context, retained_boxes, validate_target
-from app.sprintbox_ssh import prepare_sprintbox_ssh
+from app.sprintbox_review import context, retained_boxes, validate_target, validate_ssh_decision
+from app.sprintbox_ssh import SprintboxSsh, prepare_sprintbox_ssh
 from app.ssh_credentials import use_ssh_credentials
 
 
@@ -88,6 +89,9 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
                                  sleeper: Sleeper = _sleep) -> None:
     timing = timing or IpRotationTiming.configured()
     operation, config = load_ip_change_snapshot(operation_id)
+    if operation["status"] == "PENDING" and operation["action_state"] == "SSH_WAIT_QUEUED":
+        await _resume_ssh_wait(operation_id, config, timing, sleeper)
+        return
     if operation["status"] in TERMINAL_STATUSES:
         return
     if any(operation[field] != "NOT_STARTED" for field in ("purchase_state", "make_main_state", "apply_state")):
@@ -97,7 +101,6 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
     bound = bound_provider(operation_id)
     credentials = sprintbox_config()
     client = SprintboxClient(credentials["login"], credentials["key"], timeout=timing.provider_timeout)
-    published = False
     creation_started = False
     new_name = ""
     try:
@@ -116,13 +119,14 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             raise IpChangeError("SprintBOX rotation requires SSH to use the current VPN IP")
         ssh = prepare_sprintbox_ssh()
         pubkey = ssh.public_key
-        retained = {}
+        with get_db() as db:
+            retained = dict(context(db, operation_id).get("retained_boxes", {}))
         if not first_box:
             await _step(operation_id, "inspect_old_box")
             old = await client.get_box(bound["box_name"])
             if config.current_ip not in box_ipv4(old):
                 raise IpChangeError("Configured SprintBOX box does not own current_ip; refusing rotation")
-            retained = retained_boxes(bound["box_name"], config.current_ip, bound)
+            retained.update(retained_boxes(bound["box_name"], config.current_ip, bound))
         before = await client.list_boxes()
         update_operation(operation_id, old_ip=config.current_ip, old_ip_id=bound["box_name"])
         marker = _new_box_label(before)
@@ -186,34 +190,85 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             raise IpChangeError("Cannot uniquely identify new SprintBOX IPv4; inspect the panel")
         update_operation(operation_id, new_ip_id=new_name, new_ip=new_ip,
                          purchase_state="CONFIRMED", new_ip_created_at=now_iso())
-        _check_binding(bound)
-        _ensure_bound_revision_current(config.revision)
-        with use_ssh_credentials(ssh.credentials):
-            await _step(operation_id, "wait_ssh")
-            await _wait_for_ssh(new_ip, timing, sleeper)
-            update_operation(operation_id, server_reachable_at=now_iso())
-            await _step(operation_id, "install_new_box", action_state="APPLYING", apply_state="RUNNING")
-            new_config = replace(config, current_ip=new_ip)
-            await _deploy(operation_id, new_ip, new_config)
-            update_operation(operation_id, apply_state="APPLIED", apply_completed_at=now_iso())
-            _check_binding(bound)
-            _ensure_bound_revision_current(config.revision)
-            await _step(operation_id, "protocol_health")
-            health = await _verify_protocol_health(new_ip, new_config, timing)
-        _check_binding(bound)
-        revision = publish_ip_change(operation_id, new_ip, health, sprintbox_box_name=new_name,
-                                     sprintbox_ssh_key_path=ssh.credentials.key_path)
-        published = True
-        update_operation(operation_id, status="DONE", current_step="awaiting_user_review",
-                         action_state="AWAITING_USER_REVIEW", published_revision=revision, error_message="")
+        await _provision_box(operation_id, config, bound, ssh, new_name, new_ip, timing, sleeper)
     except Exception as exc:
         message = sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password())
         if creation_started:
             message += f"; inspect SprintBOX before retrying (new box: {new_name or 'not identified'}). Old box was not deleted."
-        update_operation(operation_id, status="AMBIGUOUS" if creation_started or published else "FAILED",
-                         action_state="AMBIGUOUS" if creation_started or published else "FAILED",
-                         current_step="manual_verification_required" if creation_started or published else "failed",
+        update_operation(operation_id, status="AMBIGUOUS" if creation_started else "FAILED",
+                         action_state="AMBIGUOUS" if creation_started else "FAILED",
+                         current_step="manual_verification_required" if creation_started else "failed",
                          error_message=message)
+
+
+async def _provision_box(operation_id: int, config: CapturedVpnConfig, bound: dict[str, str],
+                         ssh: SprintboxSsh, name: str, ip: str, timing: IpRotationTiming,
+                         sleeper: Sleeper) -> None:
+    _check_binding(bound)
+    _ensure_bound_revision_current(config.revision)
+    with use_ssh_credentials(ssh.credentials):
+        await _step(operation_id, "wait_ssh", action_state="WAITING_SSH")
+        try:
+            # Offer a decision after roughly a minute, rather than holding a
+            # purchase workflow for the full VPN health-check timeout.
+            await _wait_for_ssh(ip, replace(timing, ssh_timeout=min(timing.ssh_timeout, 45)), sleeper)
+        except IpChangeError:
+            update_operation(operation_id, status="DONE", action_state="SSH_UNREACHABLE",
+                             current_step="ssh_decision", error_message="")
+            return
+        update_operation(operation_id, server_reachable_at=now_iso())
+        await _step(operation_id, "install_new_box", action_state="APPLYING", apply_state="RUNNING")
+        new_config = replace(config, current_ip=ip)
+        await _deploy(operation_id, ip, new_config)
+        update_operation(operation_id, apply_state="APPLIED", apply_completed_at=now_iso())
+        _check_binding(bound)
+        _ensure_bound_revision_current(config.revision)
+        await _step(operation_id, "protocol_health")
+        health = await _verify_protocol_health(ip, new_config, timing)
+    _check_binding(bound)
+    revision = publish_ip_change(operation_id, ip, health, sprintbox_box_name=name,
+                                 sprintbox_ssh_key_path=ssh.credentials.key_path)
+    update_operation(operation_id, status="DONE", current_step="awaiting_user_review",
+                     action_state="AWAITING_USER_REVIEW", published_revision=revision, error_message="")
+
+
+async def _resume_ssh_wait(operation_id: int, config: CapturedVpnConfig,
+                           timing: IpRotationTiming, sleeper: Sleeper) -> None:
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT status,action_state FROM ip_change_operations WHERE id = ?", (operation_id,)).fetchone()
+        if not row or (row["status"], row["action_state"]) != ("PENDING", "SSH_WAIT_QUEUED"):
+            return
+        try:
+            operation = validate_ssh_decision(db, operation_id, queued=True)
+        except ValueError:
+            db.execute("UPDATE ip_change_operations SET status = 'DONE', action_state = 'SSH_UNREACHABLE', "
+                       "current_step = 'ssh_decision', updated_at = ? WHERE id = ?", (now_iso(), operation_id))
+            release_vps_lease(db, "IP_CHANGE", operation_id)
+            return
+        operation_context = context(db, operation_id)
+        db.execute("UPDATE ip_change_operations SET status = 'RUNNING', action_state = 'WAITING_SSH', "
+                   "updated_at = ? WHERE id = ?", (now_iso(), operation_id))
+    credentials = sprintbox_config()
+    try:
+        bound = bound_provider(operation_id)
+        _check_binding(bound)
+        _ensure_bound_revision_current(config.revision)
+        client = SprintboxClient(credentials["login"], credentials["key"], timeout=timing.provider_timeout)
+        name, ip = operation["new_ip_id"], operation["new_ip"]
+        box = await client.get_box(name)
+        if box.get("description") != operation_context.get("marker") or box_ipv4(box) != [ip]:
+            raise IpChangeError("Created box identity changed; refusing to resume")
+        if not Path(operation_context.get("ssh_key_path", "")).is_file():
+            raise IpChangeError("Original SprintBOX SSH key is missing")
+        ssh = prepare_sprintbox_ssh()
+        if ssh.credentials.key_path != operation_context["ssh_key_path"]:
+            raise IpChangeError("SprintBOX SSH key path changed; refusing to resume")
+        await _provision_box(operation_id, config, bound, ssh, name, ip, timing, sleeper)
+    except Exception as exc:
+        update_operation(operation_id, status="AMBIGUOUS", action_state="AMBIGUOUS",
+                         current_step="manual_verification_required",
+                         error_message=sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password()))
 
 
 async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming | None = None,

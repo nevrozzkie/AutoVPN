@@ -14,12 +14,164 @@ from app.db import create_client, create_operation, get_operation, get_setting, 
 from app.ip_change import IpRotationTiming, run_ip_change
 from app.vpn_state import IpChangeSafetyHoldError
 from app.vpn_state import prepare_ip_change_operation
-from app.sprintbox_review import prepare_cleanup, pending_review
+from app.sprintbox_review import prepare_cleanup, pending_review, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait
 
 
 TIMING = IpRotationTiming(.1, 120, .1, .05, .1, .05, .05, .1)
 OLD = "203.0.113.10"
 NEW = "203.0.113.20"
+
+
+def ssh_decision(scenario):
+    scenario.fail = "ssh"
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["action_state"] == "SSH_UNREACHABLE"
+    return operation
+
+
+def test_unreachable_ssh_offers_decision_preserves_ip_and_releases_lease(scenario):
+    operation = ssh_decision(scenario)
+    result = get_operation(operation)
+    assert result["status"] == "DONE" and result["apply_state"] == "NOT_STARTED"
+    assert result["new_ip_id"] == "box-new" and result["new_ip"] == NEW
+    assert pending_ssh_decision()["id"] == operation
+    assert not pending_ssh_decision()["stale"]
+    assert get_setting("current_ip") == OLD and "deploy" not in scenario.events
+    assert "delete" not in scenario.events
+    with rotation.get_db() as db:
+        assert not db.execute("SELECT * FROM operation_leases").fetchall()
+    with pytest.raises(IpChangeSafetyHoldError):
+        create_operation()  # don't bypass the decision or lose retained boxes
+
+
+def test_wait_resumes_same_box_without_another_purchase_and_is_single_use(scenario):
+    operation = ssh_decision(scenario)
+    prepare_ssh_wait(operation)
+    with pytest.raises(ValueError):
+        prepare_ssh_wait(operation)
+    scenario.fail = ""
+    run(operation)
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+    assert scenario.events.count("create") == 1
+    assert get_setting("current_ip") == NEW and "delete" not in scenario.events
+    assert pending_ssh_decision() is None
+
+
+def test_wait_can_offer_same_decision_again_without_creation(scenario):
+    operation = ssh_decision(scenario)
+    prepare_ssh_wait(operation)
+    run(operation)
+    assert pending_ssh_decision()["id"] == operation
+    assert scenario.events.count("create") == 1
+    assert get_setting("current_ip") == OLD
+
+
+@pytest.mark.parametrize("first", [False, True])
+def test_ssh_retry_preserves_failed_box_and_cleans_chain_only_after_accept(scenario, first):
+    if first:
+        scenario.boxes.clear()
+        set_setting("config.sprintbox_box_name", "")
+    failed = ssh_decision(scenario)
+    next_op = prepare_ip_change_operation(ssh_decision_id=failed).operation_id
+    with pytest.raises(ValueError):
+        prepare_ip_change_operation(ssh_decision_id=failed)
+    scenario.fail = ""
+    run(next_op)
+    assert get_operation(failed)["action_state"] == "RETRY_REQUESTED"
+    assert get_operation(next_op)["action_state"] == "AWAITING_USER_REVIEW"
+    kept = {"box-new": NEW}
+    if not first:
+        kept["box-old"] = OLD
+    assert pending_review()["retained_boxes"] == kept
+    assert scenario.events.count("create") == 2 and "delete" not in scenario.events
+    accept(next_op)
+    assert set(scenario.deleted_names) == set(kept)
+    assert set(scenario.boxes) == {"box-new2"}
+
+
+def test_cancel_keeps_current_vpn_and_boxes_and_allows_new_operation(scenario):
+    operation = ssh_decision(scenario)
+    cancel_ssh_wait(operation)
+    result = get_operation(operation)
+    assert result["action_state"] == "CANCELLED" and "box-new" in result["cleanup_warning"]
+    assert get_setting("current_ip") == OLD
+    assert set(scenario.boxes) == {"box-old", "box-new"}
+    assert "delete" not in scenario.events and "deploy" not in scenario.events
+    assert pending_ssh_decision() is None
+    with pytest.raises(ValueError):
+        cancel_ssh_wait(operation)
+    create_operation()
+
+
+def test_multiple_unreachable_boxes_survive_retries_and_are_all_retained(scenario):
+    first = ssh_decision(scenario)
+    second = prepare_ip_change_operation(ssh_decision_id=first).operation_id
+    run(second)
+    third = prepare_ip_change_operation(ssh_decision_id=second).operation_id
+    scenario.fail = ""
+    run(third)
+    assert pending_review()["retained_boxes"] == {"box-old": OLD, "box-new": NEW, "box-new2": "203.0.113.22"}
+    assert not scenario.deleted_names and scenario.events.count("create") == 3
+    accept(third)
+    assert set(scenario.boxes) == {"box-new3"}
+
+
+def test_stale_snapshot_disables_wait_and_retry_but_allows_cancellation(scenario):
+    operation = ssh_decision(scenario)
+    create_client("Config changed")
+    assert pending_ssh_decision()["stale"]
+    with pytest.raises(ValueError):
+        prepare_ssh_wait(operation)
+    with pytest.raises(ValueError):
+        prepare_ip_change_operation(ssh_decision_id=operation)
+    cancel_ssh_wait(operation)
+    assert scenario.events.count("create") == 1
+
+
+def test_resume_revalidates_box_identity_before_installing(scenario):
+    operation = ssh_decision(scenario)
+    prepare_ssh_wait(operation)
+    scenario.boxes["box-new"]["description"] = "different box"
+    run(operation)
+    assert get_operation(operation)["status"] == "AMBIGUOUS"
+    assert "deploy" not in scenario.events and scenario.events.count("create") == 1
+    assert get_setting("current_ip") == OLD
+
+
+@pytest.mark.parametrize("install_started", [False, True])
+def test_restart_returns_safe_ssh_wait_to_decision_but_never_repeats_install(scenario, install_started):
+    from app.operation_coordinator import recover_incomplete_vps_operations
+    operation = ssh_decision(scenario)
+    prepare_ssh_wait(operation)
+    if install_started:
+        update_operation(operation, status="RUNNING", action_state="APPLYING", apply_state="RUNNING")
+    with rotation.get_db() as db:
+        recover_incomplete_vps_operations(db, "Test restart")
+    result = get_operation(operation)
+    assert result["action_state"] == ("AMBIGUOUS" if install_started else "SSH_UNREACHABLE")
+    assert not install_started or result["status"] == "AMBIGUOUS"
+    assert scenario.events.count("create") == 1
+
+
+def test_ssh_decision_ui_and_authenticated_csrf_protected_actions(scenario, monkeypatch):
+    operation = ssh_decision(scenario)
+    set_setting("config.admin_password", "test-password")
+    scheduled = []
+    async def record(op):
+        scheduled.append(op)
+    monkeypatch.setattr(main, "_run_operation_background", record)
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        auth = ("admin", "test-password")
+        page = client.get("/admin", auth=auth)
+        for title in ("Подождать ещё", "Создать другой бокс", "Отмена"):
+            assert title in page.text
+        url = f"/admin/sprintbox/{operation}/ssh/wait"
+        assert client.post(url, follow_redirects=False).status_code == 401
+        assert client.post(url, auth=auth, headers={"Origin": "https://other.example"}).status_code == 403
+        response = client.post(url, auth=auth, headers={"Origin": "http://panel.local"}, follow_redirects=False)
+        assert response.status_code == 303 and scheduled == [operation]
+        assert client.post(url, auth=auth, headers={"Origin": "http://panel.local"}).status_code == 409
 
 
 def test_api_form_auth_and_async_task_contract(monkeypatch):
@@ -184,6 +336,8 @@ def scenario(monkeypatch):
     monkeypatch.setattr(rotation, "SprintboxClient", lambda *a, **kw: fake)
     async def ssh(*args):
         fake.events.append("ssh")
+        if fake.fail == "ssh":
+            raise rotation.IpChangeError("SSH did not become reachable")
     async def deploy(operation, host, config):
         assert config.current_ip != OLD
         assert config.enabled_clients[0].name == "Existing client"
