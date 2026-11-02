@@ -636,10 +636,15 @@ def _ssh_exec(
         try:
             ssh.connect(**connect_kwargs)
             stdin, stdout, stderr = ssh.exec_command(
-                command, get_pty=True, timeout=command_timeout
+                command, get_pty=not bool(stdin_data), timeout=command_timeout
             )
             if stdin_data:
+                # A PTY can truncate a queued script and does not deliver pipe EOF.
+                # Merge output so a verbose installer cannot fill stderr while
+                # we are draining stdout.
+                stdout.channel.set_combine_stderr(True)
                 stdin.write(stdin_data)
+                stdin.flush()
             stdin.channel.shutdown_write()
             output = stdout.read().decode("utf-8", errors="replace")
             error_output = stderr.read().decode("utf-8", errors="replace")

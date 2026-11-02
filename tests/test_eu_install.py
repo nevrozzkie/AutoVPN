@@ -10,6 +10,49 @@ from app.eu_install import (
 )
 
 
+def test_key_authenticated_scripts_use_pipe_eof_and_combined_output(monkeypatch):
+    import io
+    import subprocess
+    init_db()
+    stdout = io.BytesIO()
+    stderr = io.BytesIO()
+    stdin = io.StringIO()
+    events = []
+    class Channel:
+        combined = False
+        def set_combine_stderr(self, enabled):
+            self.combined = enabled
+        def shutdown_write(self):
+            assert self.combined
+            events.append("eof")
+            result = subprocess.run(["bash", "-s"], input=stdin.getvalue().encode(),
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5)
+            self.code = result.returncode
+            stdout.write(result.stdout)
+            stdout.seek(0)
+        def recv_exit_status(self):
+            return self.code
+    channel = Channel()
+    stdin.channel = stdout.channel = channel
+    class Ssh:
+        def connect(self, **kwargs):
+            assert kwargs["key_filename"] == "/test/key"
+        def exec_command(self, command, *, get_pty, timeout):
+            assert command == "bash -s" and not get_pty and timeout == 5
+            return stdin, stdout, stderr
+        def close(self):
+            events.append("closed")
+    monkeypatch.setattr(eu_install, "_build_verified_ssh_client", lambda _: Ssh())
+    monkeypatch.setattr(eu_install, "eu_ssh_password", lambda: "")
+    monkeypatch.setattr(eu_install, "eu_ssh_key_path", lambda: "/test/key")
+    script = "cat >/dev/null <<'CONFIG'\n" + "private-config-value\n" * 1000 + "CONFIG\n"
+    script += "printf 'installer-warning\\n' >&2\nprintf 'end-of-script\\n'\n"
+    code, output = eu_install._ssh_exec("203.0.113.20", "bash -s", script, command_timeout=5)
+    assert code == 0 and output == "installer-warning\nend-of-script\n"
+    assert "private-config-value" not in output
+    assert events == ["eof", "closed"]
+
+
 def test_build_eu_install_script_contains_enabled_client_credentials() -> None:
     init_db()
     set_setting("config.vless_enabled", "1")
