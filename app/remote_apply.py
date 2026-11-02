@@ -560,7 +560,9 @@ def _bootstrap_body(config: CapturedVpnConfig) -> str:
         requirements.append("! command -v awg-quick >/dev/null 2>&1")
     condition = " || ".join(requirements)
     xray = (
-        'bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" -- install'
+        'if ! command -v xray >/dev/null 2>&1; then\n'
+        '    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" -- install --version v26.7.28\n'
+        '  fi'
         if install_xray
         else ":"
     )
