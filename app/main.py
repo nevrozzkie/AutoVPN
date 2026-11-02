@@ -237,6 +237,11 @@ STATUS_LABELS = {
     "PENDING": "Ожидает",
     "TIMED_OUT": "Истёк таймаут",
     "AMBIGUOUS": "Требуется проверка",
+    "PURCHASE_SENDING": "Отправка запроса создания",
+    "PURCHASE_SENT": "Ожидание создания",
+    "AWAITING_USER_REVIEW": "Ожидает вашей проверки",
+    "APPLYING": "Установка VPN",
+    "RECONCILED": "Проверено вручную",
 }
 
 

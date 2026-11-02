@@ -51,6 +51,29 @@ def test_api_empty_account_box_list(monkeypatch, empty):
     assert asyncio.run(api.SprintboxClient("account", "key").list_boxes()) == {}
 
 
+@pytest.mark.parametrize("status,expected", [("queued", "pending"), ("processing", "pending"),
+                                           ("started", "started"), ("finished", "finished"), ("error", "error")])
+def test_api_task_intermediate_states_are_pending_not_success(monkeypatch, status, expected):
+    client = api.SprintboxClient("account", "key")
+    async def request(*args, **kwargs):
+        return {"id": "task-123", "status": status}
+    monkeypatch.setattr(client, "_request", request)
+    assert asyncio.run(client.task_status("task-123")) == expected
+
+
+@pytest.mark.parametrize("data", [{"id": "wrong", "status": "finished"},
+                                  {"id": "task-123", "status": None},
+                                  {"id": "task-123", "status": ""},
+                                  {"id": "task-123", "status": {"finished": True}}])
+def test_api_malformed_task_state_is_rejected(monkeypatch, data):
+    client = api.SprintboxClient("account", "key")
+    async def request(*args, **kwargs):
+        return data
+    monkeypatch.setattr(client, "_request", request)
+    with pytest.raises(RuntimeError, match="invalid task status"):
+        asyncio.run(client.task_status("task-123"))
+
+
 @pytest.mark.parametrize("data", [None, [], {}, {"name": "box-123"}, {"id": ""}])
 def test_accepted_create_without_task_has_distinct_error_and_is_not_resent(monkeypatch, data):
     calls = []
@@ -204,6 +227,37 @@ def test_rotation_publishes_before_deletion_and_waits_for_task(scenario):
     assert get_operation(operation)["action_state"] == "DONE"
     assert "poll:delete-task" in scenario.events
     assert result["old_ip_id"] == "box-old" and result["new_ip_id"] == "box-new"
+
+
+def test_intermediate_task_state_waits_before_installing_existing_box(scenario, monkeypatch):
+    states = iter(["pending", "finished"])
+    async def status(task):
+        assert task == "create-task"
+        scenario.events.append("poll:" + next(states))
+        return scenario.events[-1].split(":", 1)[1]
+    monkeypatch.setattr(scenario, "task_status", status)
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+    assert scenario.events.count("create") == 1
+    assert scenario.events.index("poll:finished") < scenario.events.index("ssh")
+    assert "delete" not in scenario.events
+
+
+def test_permanent_unknown_task_state_times_out_without_publication_or_resend(scenario, monkeypatch):
+    async def status(task):
+        scenario.events.append("poll:pending")
+        return "pending"
+    monkeypatch.setattr(scenario, "task_status", status)
+    operation = create_operation()
+    run(operation)
+    result = get_operation(operation)
+    assert result["status"] == "AMBIGUOUS"
+    assert "timeout" in result["error_message"]
+    assert scenario.events.count("poll:pending") == 2
+    assert scenario.events.count("create") == 1
+    assert "ssh" not in scenario.events and "delete" not in scenario.events
+    assert get_setting("current_ip") == OLD
 
 
 def test_box_label_has_five_random_digits_and_avoids_existing_names(scenario, monkeypatch):
