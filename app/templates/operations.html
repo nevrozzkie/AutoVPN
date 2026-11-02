@@ -23,7 +23,7 @@
     {% for operation in operations %}
       <tr>
         <td>{{ operation.id }}</td>
-        <td>{{ operation.status|status_label }}</td>
+        <td>{{ (operation.action_state if operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED'] else operation.status)|status_label }}</td>
         <td>{{ operation.current_step|step_label }}</td>
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
