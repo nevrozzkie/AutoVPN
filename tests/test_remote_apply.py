@@ -14,6 +14,7 @@ import app.eu_install as eu_install
 from app.db import create_client, init_db, set_setting, update_client_name
 from app.eu_install import build_eu_deploy_script, run_eu_install
 from app.remote_apply import (
+    _xray_config,
     _hysteria_validation_probe,
     render_config_apply_script,
     render_transactional_install_script,
@@ -27,6 +28,23 @@ def _captured_config() -> CapturedVpnConfig:
     set_setting("current_ip", "203.0.113.10")
     create_client("Alice")
     return capture_vpn_config()
+
+
+def test_reality_accepts_versions_reported_by_sing_box_in_both_installers():
+    import json
+    import re
+    from app.eu_install import build_eu_install_script
+    config = _captured_config()
+    legacy = build_eu_install_script(config)
+    legacy_json = json.loads(re.search(r"<<'JSON'\n(.*?)\nJSON", legacy, re.S).group(1))
+    for server in (_xray_config(config), legacy_json):
+        inbound = next(i for i in server["inbounds"] if i.get("streamSettings", {}).get("security") == "reality")
+        reality = inbound["streamSettings"]["realitySettings"]
+        minimum = tuple(int(v) for v in reality["minClientVer"].split("."))
+        assert minimum <= (1, 8, 0)  # sing-box reports its own compatibility version
+        assert reality["privateKey"] == config.vless.private_key
+        assert reality["shortIds"] == [config.vless.short_id]
+        assert reality["serverNames"] == list(config.vless.server_names)
 
 
 def _vless_only(config: CapturedVpnConfig) -> CapturedVpnConfig:

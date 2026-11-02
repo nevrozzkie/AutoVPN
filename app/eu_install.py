@@ -151,6 +151,7 @@ def build_eu_install_script(config: CapturedVpnConfig | None = None) -> str:
                         "show": False,
                         "target": config.vless.target,
                         "serverNames": list(config.vless.server_names),
+                        "minClientVer": "1.0.0",
                         "privateKey": config.vless.private_key,
                         "shortIds": [config.vless.short_id],
                     },
