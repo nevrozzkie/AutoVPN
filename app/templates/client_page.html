@@ -386,6 +386,15 @@
   </head>
   <body>
     <main>
+      {% if anchors %}
+      <section>
+        <h2>Якорные VPN</h2>
+        <p class="muted">Отдельные подключения к сохранённым серверам. Можно попробовать в сети, где основной VPN недоступен.</p>
+        {% for anchor in anchors %}
+        <p><a class="button" href="/anchor/{{ anchor.anchor_id }}/client/{{ client.token }}">{{ anchor.box_name }} · {{ anchor.ip }}</a></p>
+        {% endfor %}
+      </section>
+      {% endif %}
       <div class="page-top">
         <div>
           <h1>{{ client.name }}</h1>

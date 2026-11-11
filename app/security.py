@@ -234,6 +234,8 @@ def is_same_origin_request(request) -> bool:  # type: ignore[no-untyped-def]
 
 def is_public_token_path(path: str) -> bool:
     parts = tuple(part for part in path.split("/") if part)
+    if parts and parts[0] == "anchor":
+        return True
     if len(parts) == 2 and parts[0] in {
         "sub",
         "sing-box",

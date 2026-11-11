@@ -52,7 +52,12 @@ def pending_review() -> dict | None:
         for row in rows:
             try:
                 result = validate_review(db, row["id"])
-                result["retained_boxes"] = context(db, row["id"]).get("retained_boxes", {})
+                ctx = context(db, row["id"])
+                from app.anchors import protected_box
+                login = _bound(db, row["id"])["login"]
+                result["retained_boxes"] = {name: ip for name, ip in ctx.get("retained_boxes", {}).items()
+                                            if not protected_box(db, login, name, ip)}
+                result["anchorable_boxes"] = ctx.get("retained_snapshots", {})
                 return result
             except ValueError:
                 continue
@@ -76,11 +81,14 @@ def retained_boxes(old_name: str, old_ip: str, bound: dict) -> dict[str, str]:
     return retained
 
 
-def prepare_cleanup(operation_id: int) -> None:
+def prepare_cleanup(operation_id: int, *, keep_boxes: list[str] | None = None) -> None:
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         validate_review(db, operation_id)
         acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        if keep_boxes:
+            from app.anchors import retain_as_anchors
+            retain_as_anchors(db, operation_id, keep_boxes)
         db.execute(
             "UPDATE ip_change_operations SET status = 'PENDING', action_state = 'CLEANUP_QUEUED', "
             "current_step = 'cleanup_queued', updated_at = ? WHERE id = ?", (now_iso(), operation_id),

@@ -120,7 +120,8 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         ssh = prepare_sprintbox_ssh()
         pubkey = ssh.public_key
         with get_db() as db:
-            retained = dict(context(db, operation_id).get("retained_boxes", {}))
+            initial_context = context(db, operation_id)
+            retained = dict(initial_context.get("retained_boxes", {}))
         if not first_box:
             await _step(operation_id, "inspect_old_box")
             old = await client.get_box(bound["box_name"])
@@ -132,6 +133,7 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
         marker = _new_box_label(before)
         operation_context = {"marker": marker, "request_id": uuid.uuid4().hex,
                              "first_box": first_box, "retained_boxes": retained,
+                             "retained_snapshots": initial_context.get("retained_snapshots", {}),
                              "ssh_key_path": ssh.credentials.key_path}
         set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         _check_binding(bound)
@@ -298,6 +300,10 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
             try:
                 with get_db() as db:
                     validate_target(db, operation_id)
+                    from app.anchors import protected_box
+                    if protected_box(db, credentials["login"], name, expected_ip):
+                        results[name] = {"state": "ANCHOR"}
+                        continue
                 if name == active["new_ip_id"]:
                     raise IpChangeError("Refusing to delete the active VPN box")
                 await _step(operation_id, "delete_old_box")
@@ -326,7 +332,7 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
                 results[name] = {**results.get(name, {}), "state": "AMBIGUOUS" if uncertain else "MANUAL", "error": message}
                 warnings.append(f"{name}: {message}")
             finally:
-                if results.get(name, {}).get("state") in {"DELETED", "ABSENT"}:
+                if results.get(name, {}).get("state") in {"DELETED", "ABSENT", "ANCHOR"}:
                     retained.pop(name, None)
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         warning = "Удалите или проверьте старые боксы вручную в кабинете SprintBOX: " + "; ".join(warnings) if warnings else ""

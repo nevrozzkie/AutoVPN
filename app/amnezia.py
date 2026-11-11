@@ -44,16 +44,20 @@ def generate_preshared_key() -> str:
 
 
 def generate_obfuscation_settings() -> dict[str, int]:
+    headers = set()
+    while len(headers) < 4:
+        headers.add(secrets.randbelow(4294967291) + 5)
+    s1 = secrets.randbelow(100) + 30
+    s2 = secrets.randbelow(100) + 30
+    while s1 + 148 == s2 + 92:
+        s2 = secrets.randbelow(100) + 30
     return {
         "jc": secrets.randbelow(5) + 3,
         "jmin": secrets.randbelow(40) + 20,
-        "jmax": secrets.randbelow(600) + 700,
-        "s1": secrets.randbelow(100) + 30,
-        "s2": secrets.randbelow(100) + 30,
-        "h1": secrets.randbits(32),
-        "h2": secrets.randbits(32),
-        "h3": secrets.randbits(32),
-        "h4": secrets.randbits(32),
+        "jmax": secrets.randbelow(501) + 700,
+        "s1": s1,
+        "s2": s2,
+        **{f"h{i}": value for i, value in enumerate(headers, 1)},
     }
 
 

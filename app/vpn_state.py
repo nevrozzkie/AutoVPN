@@ -173,14 +173,37 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
         acquire_vps_lease(db, "IP_CHANGE", operation_id)
         from app.vps_provider import bind_provider
         bind_provider(db, operation_id)
+        from app.sprintbox_review import _bound, context
+        bound = _bound(db, operation_id)
+        if bound.get("provider") == "sprintbox":
+            from app.anchors import applied_endpoint
+            snapshots = {}
+            # Carry only this account's chain. Never infer an old server's config
+            # from today's desired settings after publication has moved forward.
+            previous = db.execute("SELECT id FROM ip_change_operations WHERE new_ip_id=? AND new_ip=? "
+                                  "AND published_revision IS NOT NULL ORDER BY id DESC",
+                                  (bound.get("box_name", ""), config.current_ip)).fetchall()
+            for candidate in previous:
+                prior_bound = _bound(db, candidate["id"])
+                if all(prior_bound.get(key) == bound.get(key) for key in ("provider", "login", "credential_hash")):
+                    snapshots.update(context(db, candidate["id"]).get("retained_snapshots", {}))
+                    break
+            old_revision = applied_endpoint(db, config.current_ip)
+            if old_revision is not None and bound.get("box_name"):
+                snapshots[bound["box_name"]] = old_revision
+            db.execute("INSERT INTO settings(key,value) VALUES (?,?)",
+                       (f"ip_change.{operation_id}.sprintbox", json.dumps({"retained_snapshots": snapshots})))
         if ssh_decision_id is not None:
             from app.sprintbox_review import context
             previous = db.execute("SELECT new_ip_id,new_ip FROM ip_change_operations WHERE id = ?",
                                   (ssh_decision_id,)).fetchone()
             kept = dict(context(db, ssh_decision_id).get("retained_boxes", {}))
             kept[previous["new_ip_id"]] = previous["new_ip"]
-            db.execute("INSERT INTO settings(key,value) VALUES (?,?)",
-                       (f"ip_change.{operation_id}.sprintbox", json.dumps({"retained_boxes": kept})))
+            ctx = context(db, operation_id)
+            ctx["retained_boxes"] = kept
+            ctx["retained_snapshots"].update(context(db, ssh_decision_id).get("retained_snapshots", {}))
+            db.execute("UPDATE settings SET value=? WHERE key=?",
+                       (json.dumps(ctx), f"ip_change.{operation_id}.sprintbox"))
             db.execute("UPDATE ip_change_operations SET action_state = 'RETRY_REQUESTED', updated_at = ? WHERE id = ?",
                        (timestamp, ssh_decision_id))
         if review_operation_id is not None:

@@ -443,6 +443,20 @@ def _apply_router_amnezia_peers(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_vpn_anchors(connection: sqlite3.Connection) -> None:
+    connection.execute("""
+        CREATE TABLE vpn_anchors (
+            anchor_id TEXT PRIMARY KEY,
+            account_login TEXT NOT NULL,
+            box_name TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            payload_json TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(account_login, box_name, ip)
+        )
+    """)
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -525,6 +539,12 @@ MIGRATIONS = (
             "unique public key and address; key generation and backfill stay in init"
         ),
         apply=_apply_router_amnezia_peers,
+    ),
+    Migration(
+        version=10,
+        name="vpn_anchors",
+        signature="persist independent immutable SprintBOX endpoint snapshots and cleanup protection",
+        apply=_apply_vpn_anchors,
     ),
 )
 

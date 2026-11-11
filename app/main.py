@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -69,6 +70,8 @@ from app.vps_provider import (
 )
 from app.sprintbox_review import pending_review, prepare_cleanup, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait
 from app.sprintbox_rotation import run_sprintbox_cleanup
+from app.anchors import list_anchors, anchor_client
+from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
     admin_password,
     admin_username,
@@ -753,13 +756,51 @@ def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin
 
 @app.post("/admin/sprintbox/{operation_id}/accept")
 def accept_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
+                     keep_boxes: list[str] = Form([]),
                      _: str = Depends(require_admin)) -> RedirectResponse:
     try:
-        prepare_cleanup(operation_id)
+        prepare_cleanup(operation_id, keep_boxes=keep_boxes)
     except (ValueError, OperationBusyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     background_tasks.add_task(run_sprintbox_cleanup, operation_id)
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/anchors", response_class=HTMLResponse)
+def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(request, "anchors.html", {
+        "anchors": list_anchors(),
+    }, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.get("/admin/tuning", response_class=HTMLResponse)
+def admin_tuning(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return _tuning_page(request)
+
+
+def _tuning_page(request: Request, *, error: str = "", submitted_protocol: str = "",
+                 submitted: dict | None = None, code: int = 200) -> HTMLResponse:
+    config = capture_vpn_config()
+    profiles = {name: profile_values(config, name) for name in PROTOCOLS}
+    if submitted_protocol in profiles and submitted is not None:
+        profiles[submitted_protocol].update({key: submitted[key] for key in profiles[submitted_protocol] if key in submitted})
+    return templates.TemplateResponse(request, "tuning.html", {
+        "profiles": profiles, "fingerprints": FINGERPRINTS, "error": error,
+        "vpn_state": get_vpn_state(), "busy": get_active_vps_operation() is not None,
+    }, status_code=code, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.post("/admin/tuning/{protocol}", response_class=HTMLResponse)
+async def save_tuning(request: Request, protocol: str, _: str = Depends(require_admin)):
+    form = await request.form()
+    submitted = {key: str(value).strip() for key, value in form.items()}
+    try:
+        update_tuning(protocol, submitted.get("action", "save"), submitted)
+    except ValueError as exc:
+        return _tuning_page(request, error=str(exc), submitted_protocol=protocol, submitted=submitted, code=400)
+    except OperationBusyError:
+        return _tuning_page(request, error="Дождитесь завершения текущей операции с VPS", code=409)
+    return RedirectResponse("/admin/tuning?saved=1", status_code=303)
 
 
 @app.post("/admin/sprintbox/{operation_id}/retry")
@@ -1547,8 +1588,47 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             if config.amnezia.protocol.enabled
             else "",
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
+            "anchors": list_anchors(token),
         },
     )
+
+
+@app.get("/anchor/{anchor_id}/{kind}/{token}")
+def anchor_resource(request: Request, anchor_id: str, kind: str, token: str):
+    if kind not in {"client", "sub", "sing-box", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
+        raise HTTPException(status_code=404)
+    bound = anchor_client(anchor_id, token)
+    if bound is None:
+        raise HTTPException(status_code=404)
+    anchor, config, client = bound
+    client = replace(client, name=f"{client.name} · Якорь {anchor['ip']}")
+    subscription_enabled = config.vless.protocol.enabled or config.hysteria.protocol.enabled
+    if kind in {"amnezia", "amnezia-key", "amnezia.qr"} and not config.amnezia.protocol.enabled:
+        raise HTTPException(status_code=404)
+    if kind in {"sub", "sing-box", "subscription.qr"} and not subscription_enabled:
+        raise HTTPException(status_code=404)
+    prefix = f"{str(request.base_url).rstrip('/')}/anchor/{anchor_id}"
+    if kind == "client":
+        return templates.TemplateResponse(request, "anchor_client.html", {
+            "anchor": anchor, "client": client, "amnezia_enabled": config.amnezia.protocol.enabled,
+            "prefix": prefix, "subscription_enabled": subscription_enabled,
+            "amnezia_key": render_amnezia_vpn_key(config, client) if config.amnezia.protocol.enabled else "",
+        })
+    if kind == "sub":
+        return PlainTextResponse(render_subscription(config, client.as_dict()))
+    if kind == "sing-box":
+        return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
+    if kind == "amnezia":
+        return PlainTextResponse(render_amnezia_client_config(config, client), headers={
+            "Content-Disposition": f"attachment; filename=anchor-amnezia-{client.id}.conf",
+        })
+    if kind == "amnezia-key":
+        return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")
+    import qrcode
+    payload = f"{prefix}/sub/{token}" if kind == "subscription.qr" else render_amnezia_vpn_key(config, client)
+    buffer = BytesIO()
+    qrcode.make(payload).save(buffer, format="PNG")
+    return Response(buffer.getvalue(), media_type="image/png")
 
 
 @app.post("/client/{token}/protocols/refresh")

@@ -150,13 +150,19 @@
   {% endif %}
   <div class="actions">
     <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/accept" class="inline">
+      {% for name, ip in sprintbox_review.retained_boxes.items() %}
+      <p><label><input type="checkbox" name="keep_boxes" value="{{ name }}">
+        Сохранить {{ name }} · {{ ip }} как якорный VPN</label>
+        {% if name not in sprintbox_review.anchorable_boxes %}<span class="muted">Нет снимка применённого VPN: бокс будет сохранён без выдачи конфигов. Используйте прежние профили, если VPN установлен.</span>{% endif %}
+      </p>
+      {% endfor %}
       <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Всё ок</button>
     </form>
     <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/retry" class="inline">
       <button type="submit" {% if active_vps_operation or not safe_aeza_ip_rotation_enabled or not transactional_vpn_apply_enabled %}disabled{% endif %}>Попробовать другой IP</button>
     </form>
   </div>
-  <p class="muted">«Всё ок» — завершить настройку{% if sprintbox_review.retained_boxes %} и попробовать удалить перечисленные старые боксы{% endif %}. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
+  <p class="muted">«Всё ок» — завершить настройку{% if sprintbox_review.retained_boxes %}, сохранить отмеченные боксы как якорные и попробовать удалить остальные старые боксы{% endif %}. Якорные VPN продолжают оплачиваться и доступны в отдельном разделе. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
 </section>
 {% endif %}
 <div class="actions action-bar">

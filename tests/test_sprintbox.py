@@ -368,6 +368,153 @@ def accept(operation):
     asyncio.run(rotation.run_sprintbox_cleanup(operation, timing=TIMING, sleeper=no_sleep))
 
 
+def _record_old_install():
+    from app.vpn_state import prepare_install_operation, complete_install_operation
+    prepared = prepare_install_operation(OLD)
+    complete_install_operation(prepared.operation_id, "test install")
+    return prepared.revision
+
+
+def test_keep_anchor_uses_old_applied_profile_instead_of_desired_and_survives_next_cleanup(scenario):
+    from app.anchors import list_anchors, anchor_client
+    from app.tuning import update_tuning
+    from app.vpn_config import capture_vpn_config
+    original = capture_vpn_config()
+    _record_old_install()
+    update_tuning("vless", "random", {})  # Not yet deployed on the old box.
+    operation = create_operation()
+    run(operation)
+    assert "box-old" in pending_review()["anchorable_boxes"]
+    prepare_cleanup(operation, keep_boxes=["box-old"])
+    asyncio.run(rotation.run_sprintbox_cleanup(operation, timing=TIMING))
+    assert scenario.deleted_names == []
+    assert set(scenario.boxes) == {"box-old", "box-new"}
+    anchor = list_anchors()[0]
+    assert anchor["ready"] and anchor["ip"] == OLD
+    _, frozen, _ = anchor_client(anchor["anchor_id"], original.clients[0].token)
+    assert frozen == original
+    update_tuning("hysteria", "random", {})
+    assert anchor_client(anchor["anchor_id"], original.clients[0].token)[1] == original
+    # A later rotation cleans only the previous primary, preserving the anchor.
+    later = create_operation()
+    run(later)
+    accept(later)
+    assert scenario.deleted_names == ["box-new"]
+    assert "box-old" in scenario.boxes
+    init_db()  # Restart does not remove the frozen profile/protection.
+    assert anchor_client(anchor["anchor_id"], original.clients[0].token)[1] == original
+
+
+def test_selective_anchor_across_retry_chain_cleans_unselected_boxes(scenario):
+    from app.anchors import list_anchors
+    _record_old_install()
+    first = create_operation()
+    run(first)
+    second = prepare_ip_change_operation(review_operation_id=first).operation_id
+    run(second)
+    assert set(pending_review()["anchorable_boxes"]) == {"box-old", "box-new"}
+    prepare_cleanup(second, keep_boxes=["box-old"])
+    asyncio.run(rotation.run_sprintbox_cleanup(second, timing=TIMING))
+    assert scenario.deleted_names == ["box-new"]
+    assert list_anchors()[0]["box_name"] == "box-old"
+    assert set(scenario.boxes) == {"box-old", "box-new2"}
+
+
+def test_unknown_old_profile_can_be_kept_without_inventing_configs(scenario):
+    from app.anchors import list_anchors
+    operation = create_operation()
+    run(operation)
+    prepare_cleanup(operation, keep_boxes=["box-old"])
+    asyncio.run(rotation.run_sprintbox_cleanup(operation, timing=TIMING))
+    assert scenario.deleted_names == []
+    anchor = list_anchors()[0]
+    assert not anchor["ready"] and anchor["clients"] == []
+
+
+def test_forged_keep_selection_rolls_back_anchor_and_cleanup_lease(scenario):
+    from app.anchors import list_anchors
+    operation = create_operation()
+    run(operation)
+    for selection in (["box-other"], ["box-new"], ["box-old", "box-other"]):
+        with pytest.raises(ValueError):
+            prepare_cleanup(operation, keep_boxes=selection)
+        assert list_anchors() == []
+        assert pending_review()["id"] == operation
+        with rotation.get_db() as db:
+            assert not db.execute("SELECT * FROM operation_leases").fetchall()
+
+
+def test_cleanup_protects_anchor_even_if_old_context_still_contains_it(scenario):
+    import json
+    from app.anchors import save_anchor
+    revision = _record_old_install()
+    operation = create_operation()
+    run(operation)
+    # Simulate protection from another decision; stale cleanup context still lists this box.
+    with rotation.get_db() as db:
+        save_anchor(db, "account-login", "box-old", OLD, revision)
+    prepare_cleanup(operation)
+    asyncio.run(rotation.run_sprintbox_cleanup(operation, timing=TIMING))
+    assert "delete" not in scenario.events
+    assert json.loads(get_setting(f"ip_change.{operation}.sprintbox"))["cleanup_results"]["box-old"]["state"] == "ANCHOR"
+
+
+def test_anchor_routes_keep_frozen_endpoints_and_deny_other_or_revoked_clients(scenario):
+    from app.anchors import list_anchors
+    from app.db import set_client_enabled
+    from app.vpn_config import capture_vpn_config
+    # Include every protocol to check .conf, key, and both subscription formats.
+    set_setting("config.hysteria_enabled", "1")
+    set_setting("config.amnezia_enabled", "1")
+    original = capture_vpn_config()
+    _record_old_install()
+    operation = create_operation()
+    run(operation)
+    prepare_cleanup(operation, keep_boxes=["box-old"])
+    asyncio.run(rotation.run_sprintbox_cleanup(operation, timing=TIMING))
+    anchor = list_anchors()[0]
+    token = original.clients[0].token
+    later_client = create_client("Not installed on anchor")
+    base = f"/anchor/{anchor['anchor_id']}"
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        for kind in ("client", "sub", "sing-box", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"):
+            response = client.get(f"{base}/{kind}/{token}")
+            assert response.status_code == 200, response.text[:200]
+            assert response.headers["cache-control"] == "private, no-store"
+            assert response.headers["referrer-policy"] == "no-referrer"
+            assert client.get(f"{base}/{kind}/{later_client['token']}").status_code == 404
+        assert f"@{OLD}:" in client.get(f"{base}/sub/{token}").text
+        assert f"@{NEW}:" not in client.get(f"{base}/sub/{token}").text
+        outbounds = client.get(f"{base}/sing-box/{token}").json()["outbounds"]
+        assert outbounds[1]["server"] == OLD and outbounds[2]["server"] == OLD
+        assert f"Endpoint = {OLD}:" in client.get(f"{base}/amnezia/{token}").text
+        assert anchor["anchor_id"] in client.get(f"/client/{token}").text
+        assert original.vless.private_key not in client.get(f"{base}/client/{token}").text
+        assert client.get("/admin/anchors").status_code == 401
+        set_client_enabled(original.clients[0].id, False)
+        assert client.get(f"{base}/sub/{token}").status_code == 404
+
+
+def test_accept_checkbox_http_saves_anchor_and_prevents_duplicate_decision(scenario):
+    from app.anchors import list_anchors
+    _record_old_install()
+    operation = create_operation()
+    run(operation)
+    set_setting("config.admin_password", "test-password")
+    auth = ("admin", "test-password")
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        page = client.get("/admin", auth=auth)
+        assert 'name="keep_boxes" value="box-old"' in page.text
+        response = client.post(f"/admin/sprintbox/{operation}/accept", auth=auth,
+                               data={"keep_boxes": ["box-old"]}, headers={"Origin": "http://panel.local"},
+                               follow_redirects=False)
+        assert response.status_code == 303 and len(list_anchors()) == 1
+        assert "delete" not in scenario.events
+        assert client.get("/admin/anchors", auth=auth).status_code == 200
+        assert client.post(f"/admin/sprintbox/{operation}/accept", auth=auth,
+                           headers={"Origin": "http://panel.local"}).status_code == 409
+
+
 def test_rotation_publishes_before_deletion_and_waits_for_task(scenario):
     operation = create_operation()
     run(operation)

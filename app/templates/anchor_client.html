@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Якорный VPN · {{ client.name }}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { max-width: 780px; margin: 24px auto; padding: 0 20px; font: 16px/1.5 system-ui, sans-serif; }
+    section { border: 1px solid #758392; border-radius: 8px; padding: 18px; margin: 18px 0; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 10px; font: inherit; }
+    textarea { min-height: 120px; }
+    a, button { overflow-wrap: anywhere; }
+    button, .button { display: inline-block; padding: 9px 13px; margin: 8px 8px 8px 0; border: 0; border-radius: 6px; background: #0f766e; color: white; text-decoration: none; cursor: pointer; }
+    img { width: 220px; height: 220px; margin-top: 12px; }
+    details { margin-top: 12px; }
+  </style>
+</head>
+<body>
+<h1>Якорный VPN</h1>
+<p>{{ client.name }} · {{ anchor.box_name }} · <strong>{{ anchor.ip }}</strong></p>
+<p>Это отдельное подключение к сохранённому серверу. Его IP и параметры не меняются вместе с основным VPN. Доступность проверьте подключением в своей сети.</p>
+<p><a href="/client/{{ client.token }}">Основной VPN и другие якоря</a></p>
+{% if subscription_enabled %}
+<section>
+  <h2>VLESS / Hysteria2</h2>
+  <label for="subscription">Отдельная подписка якорного VPN</label>
+  <input id="subscription" readonly value="{{ prefix }}/sub/{{ client.token }}" onclick="this.select()">
+  <a class="button" href="{{ prefix }}/sub/{{ client.token }}">Открыть подписку</a>
+  <a class="button" href="{{ prefix }}/sing-box/{{ client.token }}">sing-box JSON</a>
+  <details><summary>QR подписки</summary><img src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки якорного VPN"></details>
+</section>
+{% endif %}
+{% if amnezia_enabled %}
+<section>
+  <h2>AmneziaWG</h2>
+  <a class="button" href="{{ prefix }}/amnezia/{{ client.token }}">Скачать .conf</a>
+  <p><label for="amnezia-key">Ключ импорта AmneziaVPN</label></p>
+  <textarea id="amnezia-key" readonly onclick="this.select()">{{ amnezia_key }}</textarea>
+  <details><summary>QR AmneziaVPN</summary><img src="{{ prefix }}/amnezia.qr/{{ client.token }}" alt="QR AmneziaVPN якорного VPN"></details>
+</section>
+{% endif %}
+</body>
+</html>
