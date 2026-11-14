@@ -1002,3 +1002,71 @@ def test_setup_saves_sprintbox_parameters_and_preserves_blank_api_key(scenario):
                               headers={"Origin": "http://panel.local"}, follow_redirects=False)
         assert blocked.status_code == 409
         assert get_setting("config.sprintbox_service") == "new-tariff"
+
+
+def host_key_failure(scenario, monkeypatch):
+    async def mismatch(*args):
+        raise RuntimeError(f"Host key verification failed for root@{NEW}:22: "
+                           "the server presented a different SSH host key than the one previously pinned")
+    monkeypatch.setattr(rotation, "_deploy", mismatch)
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)["apply_state"] == "RUNNING"
+    return operation
+
+
+def test_host_key_retry_resumes_existing_box_and_requires_authenticated_confirmation(scenario, monkeypatch):
+    from app.sprintbox_review import pending_host_key_retry
+    from app import eu_install
+    original_deploy = rotation._deploy
+    operation = host_key_failure(scenario, monkeypatch)
+    assert pending_host_key_retry()["new_ip"] == NEW
+    forgotten = []
+    monkeypatch.setattr(eu_install, "forget_ssh_known_host", forgotten.append)
+    set_setting("config.admin_password", "test-password")
+    scheduled = []
+    async def record(op):
+        scheduled.append(op)
+    monkeypatch.setattr(main, "_run_operation_background", record)
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        auth = ("admin", "test-password")
+        assert "Пропустить ошибку SSH-ключа и продолжить" in client.get("/admin", auth=auth).text
+        url = f"/admin/sprintbox/{operation}/ssh/host-key"
+        assert client.post(url, follow_redirects=False).status_code == 401
+        assert client.post(url, auth=auth, headers={"Origin": "https://other.example"}).status_code == 403
+        assert forgotten == []
+        assert client.post(url, auth=auth, headers={"Origin": "http://panel.local"}, follow_redirects=False).status_code == 303
+        assert forgotten == [NEW] and scheduled == [operation]
+        assert client.post(url, auth=auth, headers={"Origin": "http://panel.local"}).status_code == 409
+    monkeypatch.setattr(rotation, "_deploy", original_deploy)
+    run(operation)
+    assert get_operation(operation)["action_state"] == "AWAITING_USER_REVIEW"
+    assert get_setting("current_ip") == NEW
+    assert scenario.events.count("create") == 1 and "delete" not in scenario.events
+
+
+@pytest.mark.parametrize("invalid", ["revision", "account", "published", "health", "host", "busy"])
+def test_host_key_retry_rejects_stale_or_unrelated_failure(scenario, monkeypatch, invalid):
+    from app.sprintbox_review import prepare_host_key_retry
+    from app import eu_install
+    operation = host_key_failure(scenario, monkeypatch)
+    if invalid == "revision":
+        from app.db import set_settings
+        set_settings({"config.vless_port": "8443"}, mark_vpn_config_updated=True)
+    elif invalid == "account":
+        set_setting("config.sprintbox_login", "other")
+    elif invalid == "published":
+        update_operation(operation, published_revision=get_operation(operation)["revision"])
+    elif invalid == "health":
+        update_operation(operation, apply_state="APPLIED")
+    elif invalid == "host":
+        update_operation(operation, new_ip="203.0.113.99")
+    elif invalid == "busy":
+        from app.operation_coordinator import acquire_vps_lease
+        with rotation.get_db() as db:
+            acquire_vps_lease(db, "INSTALL", 999)
+    forgotten = []
+    monkeypatch.setattr(eu_install, "forget_ssh_known_host", forgotten.append)
+    with pytest.raises((ValueError, main.OperationBusyError)):
+        prepare_host_key_retry(operation)
+    assert forgotten == []

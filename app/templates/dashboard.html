@@ -221,6 +221,16 @@
   {% endif %}
 {% endif %}
 
+{% if sprintbox_host_key_retry %}
+  <section class="panel warning">
+    <p>SSH-ключ нового бокса {{ sprintbox_host_key_retry.new_ip_id }} ({{ sprintbox_host_key_retry.new_ip }}) изменился. Если это ваш новый или переустановленный VPS, сбросьте старый ключ и продолжите настройку этого же бокса.</p>
+    <form method="post" action="/admin/sprintbox/{{ sprintbox_host_key_retry.id }}/ssh/host-key" class="actions" data-confirm-message="Довериться новому SSH-ключу {{ sprintbox_host_key_retry.new_ip }} и продолжить? Подтвердите, что это ваш VPS: изменение ключа также может означать подмену сервера.">
+      <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Пропустить ошибку SSH-ключа и продолжить</button>
+    </form>
+    <p class="muted">Новый бокс не покупается. Старые боксы сохраняются до подтверждения «Всё ок».</p>
+  </section>
+{% endif %}
+
 {% if latest_operation and latest_operation.cleanup_warning %}
   <h2>Предупреждение удаления старого ресурса</h2>
   <section class="panel warning">{{ latest_operation.cleanup_warning }}</section>

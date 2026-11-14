@@ -68,7 +68,10 @@ from app.vps_provider import (
     provider_name, provider_available, provider_service_id, sprintbox_client, sprintbox_config,
     ip_rotation_available, first_sprintbox_box,
 )
-from app.sprintbox_review import pending_review, prepare_cleanup, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait
+from app.sprintbox_review import (
+    pending_review, prepare_cleanup, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait,
+    pending_host_key_retry, prepare_host_key_retry,
+)
 from app.sprintbox_rotation import run_sprintbox_cleanup
 from app.anchors import list_anchors, anchor_client
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
@@ -681,6 +684,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "latest_operation": get_latest_operation(),
             "sprintbox_review": pending_review() if provider_name() == "sprintbox" else None,
             "sprintbox_ssh_decision": pending_ssh_decision(),
+            "sprintbox_host_key_retry": pending_host_key_retry(),
             "latest_install_operation": latest_install_operation,
             "latest_server_operation": latest_server_operation,
             "active_vps_operation": active_vps_operation,
@@ -820,13 +824,16 @@ def retry_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
 @app.post("/admin/sprintbox/{operation_id}/ssh/{decision}")
 def decide_sprintbox_ssh(operation_id: int, decision: str, background_tasks: BackgroundTasks,
                          _: str = Depends(require_admin)) -> RedirectResponse:
-    if decision not in {"wait", "retry", "cancel"}:
+    if decision not in {"wait", "retry", "cancel", "host-key"}:
         raise HTTPException(status_code=404)
     if decision != "cancel" and (not safe_aeza_ip_rotation_enabled() or not transactional_vpn_apply_enabled()):
         raise HTTPException(status_code=409, detail="Enable safe rotation and transactional VPN apply first")
     try:
         if decision == "cancel":
             cancel_ssh_wait(operation_id)
+        elif decision == "host-key":
+            prepare_host_key_retry(operation_id)
+            background_tasks.add_task(_run_operation_background, operation_id)
         elif decision == "wait":
             prepare_ssh_wait(operation_id)
             background_tasks.add_task(_run_operation_background, operation_id)

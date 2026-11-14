@@ -95,11 +95,19 @@ def prepare_cleanup(operation_id: int, *, keep_boxes: list[str] | None = None) -
         )
 
 
-def validate_ssh_decision(db, operation_id: int, *, queued: bool = False) -> dict:
+def validate_ssh_decision(db, operation_id: int, *, queued: bool = False, host_key: bool = False) -> dict:
     row = db.execute("SELECT * FROM ip_change_operations WHERE id = ?", (operation_id,)).fetchone()
     expected = ("PENDING", "SSH_WAIT_QUEUED") if queued else ("DONE", "SSH_UNREACHABLE")
+    if host_key:
+        expected = ("AMBIGUOUS", "AMBIGUOUS")
     if not row or (row["status"], row["action_state"]) != expected:
         raise ValueError("This SSH decision was already submitted")
+    if host_key and not (
+        f"Host key verification failed for root@{row['new_ip']}:22: "
+        in (row["error_message"] or "")
+        and "the server presented a different SSH host key than the one previously pinned" in row["error_message"]
+    ):
+        raise ValueError("This operation has no recoverable SSH host key mismatch")
     bound = _bound(db, operation_id)
     current = db.execute("SELECT value FROM settings WHERE key = 'current_ip'").fetchone()
     revision = db.execute("SELECT desired_revision FROM vpn_state WHERE singleton = 1").fetchone()
@@ -110,7 +118,8 @@ def validate_ssh_decision(db, operation_id: int, *, queued: bool = False) -> dic
             or row["revision"] != revision["desired_revision"]
             or row["old_ip"] != (current["value"] if current else "")
             or row["published_revision"] or row["purchase_state"] != "CONFIRMED"
-            or row["apply_state"] != "NOT_STARTED" or row["make_main_state"] != "NOT_STARTED"
+            or row["apply_state"] not in ({"NOT_STARTED", "RUNNING"} if host_key else {"NOT_STARTED"})
+            or row["make_main_state"] != "NOT_STARTED"
             or not row["new_ip_id"] or not row["new_ip"]
             or row["new_ip_id"] == bound.get("box_name")):
         raise ValueError("VPN configuration/account changed; cancel this SSH decision first")
@@ -153,3 +162,33 @@ def cancel_ssh_wait(operation_id: int) -> None:
         db.execute("UPDATE ip_change_operations SET action_state = 'CANCELLED', current_step = 'cancelled', "
                    "error_message = '', cleanup_warning = ?, updated_at = ? WHERE id = ?",
                    (warning, now_iso(), operation_id))
+
+
+def pending_host_key_retry() -> dict | None:
+    with get_db() as db:
+        row = db.execute("SELECT id FROM ip_change_operations ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            try:
+                return validate_ssh_decision(db, row["id"], host_key=True)
+            except ValueError:
+                pass
+    return None
+
+
+def prepare_host_key_retry(operation_id: int) -> None:
+    from app.eu_install import forget_ssh_known_host
+    from app.ssh_credentials import SshCredentials, use_ssh_credentials
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = validate_ssh_decision(db, operation_id, host_key=True)
+        latest = db.execute("SELECT id FROM ip_change_operations ORDER BY id DESC LIMIT 1").fetchone()
+        if latest["id"] != operation_id:
+            raise ValueError("A newer IP change operation exists")
+        acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        # Host verification failed before any remote command could execute.
+        # Keep strict verification: the next connection pins the replacement key.
+        with use_ssh_credentials(SshCredentials("root", 22, "")):
+            forget_ssh_known_host(row["new_ip"])
+        db.execute("UPDATE ip_change_operations SET status = 'PENDING', action_state = 'SSH_WAIT_QUEUED', "
+                   "apply_state = 'NOT_STARTED', current_step = 'wait_ssh', error_message = '', updated_at = ? "
+                   "WHERE id = ?", (now_iso(), operation_id))
