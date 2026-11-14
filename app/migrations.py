@@ -457,6 +457,20 @@ def _apply_vpn_anchors(connection: sqlite3.Connection) -> None:
     """)
 
 
+def _apply_sprintbox_accounts(connection: sqlite3.Connection) -> None:
+    connection.execute("""CREATE TABLE sprintbox_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL, login TEXT NOT NULL UNIQUE, api_key TEXT NOT NULL,
+        service TEXT NOT NULL, distributive TEXT NOT NULL, created_at TEXT NOT NULL
+    )""")
+    connection.execute("""CREATE TABLE sprintbox_boxes (
+        account_id INTEGER NOT NULL REFERENCES sprintbox_accounts(id),
+        box_name TEXT NOT NULL, ip TEXT NOT NULL,
+        PRIMARY KEY(account_id,box_name)
+    )""")
+    connection.execute('ALTER TABLE vpn_anchors ADD COLUMN account_id INTEGER REFERENCES sprintbox_accounts(id)')
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -545,6 +559,12 @@ MIGRATIONS = (
         name="vpn_anchors",
         signature="persist independent immutable SprintBOX endpoint snapshots and cleanup protection",
         apply=_apply_vpn_anchors,
+    ),
+    Migration(
+        version=11,
+        name="sprintbox_accounts",
+        signature="store multiple SprintBOX accounts and box ownership; link preserved anchors to owner",
+        apply=_apply_sprintbox_accounts,
     ),
 )
 

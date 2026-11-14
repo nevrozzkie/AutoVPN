@@ -25,7 +25,7 @@ def applied_endpoint(db, ip: str) -> int | None:
     return None
 
 
-def save_anchor(db, login: str, name: str, ip: str, revision: int | None) -> str:
+def save_anchor(db, login: str, name: str, ip: str, revision: int | None, account_id: str | int | None = None) -> str:
     current = db.execute("SELECT value FROM settings WHERE key = 'current_ip'").fetchone()
     if current and current["value"] == ip:
         raise ValueError("Сначала смените основной IP, затем сохраните прежний бокс как якорный")
@@ -34,16 +34,18 @@ def save_anchor(db, login: str, name: str, ip: str, revision: int | None) -> str
     if revision is not None and (not row or captured_vpn_config_from_json(row["payload_json"]).current_ip != ip):
         raise ValueError("Для этого бокса нет подтверждённой применённой конфигурации")
     anchor_id = secrets.token_urlsafe(16)
-    db.execute("INSERT INTO vpn_anchors(anchor_id,account_login,box_name,ip,payload_json,created_at) "
-               "VALUES (?,?,?,?,?,?) ON CONFLICT(account_login,box_name,ip) DO NOTHING",
-               (anchor_id, login, name, ip, row["payload_json"] if row else None, now_iso()))
+    db.execute("INSERT INTO vpn_anchors(anchor_id,account_login,box_name,ip,payload_json,created_at,account_id) "
+               "VALUES (?,?,?,?,?,?,?) ON CONFLICT(account_login,box_name,ip) DO NOTHING",
+               (anchor_id, login, name, ip, row["payload_json"] if row else None, now_iso(), account_id))
     return db.execute("SELECT anchor_id FROM vpn_anchors WHERE account_login=? AND box_name=? AND ip=?",
                       (login, name, ip)).fetchone()["anchor_id"]
 
 
 def list_anchors(token: str | None = None) -> list[dict]:
     with get_db() as db:
-        rows = db.execute("SELECT * FROM vpn_anchors ORDER BY created_at DESC, anchor_id").fetchall()
+        rows = db.execute("SELECT a.*, accounts.label AS account_label FROM vpn_anchors a "
+                          "LEFT JOIN sprintbox_accounts accounts ON accounts.id=a.account_id "
+                          "ORDER BY a.created_at DESC, a.anchor_id").fetchall()
         live_clients = {row["token"]: row["id"] for row in db.execute(
             "SELECT id,token FROM clients WHERE enabled=1 AND deleted_at IS NULL"
         ).fetchall()}
@@ -82,12 +84,15 @@ def retain_as_anchors(db, operation_id: int, selected: list[str]) -> None:
     ctx = context(db, operation_id)
     retained = ctx.get("retained_boxes", {})
     revisions = ctx.get("retained_snapshots", {})
-    login = _bound(db, operation_id)["login"]
+    from app.sprintbox_accounts import box_owner, config_for
+    fallback = config_for(db, _bound(db, operation_id).get("account_id", ""))
     for name in set(selected):
         if name not in retained:
             raise ValueError("Бокс не принадлежит этой операции")
         revision = revisions.get(name)
-        save_anchor(db, login, name, retained[name], int(revision) if revision is not None else None)
+        owner, box_name = box_owner(db, name, fallback)
+        save_anchor(db, owner["login"], box_name, retained[name], int(revision) if revision is not None else None,
+                    owner.get("account_id"))
         retained.pop(name)
     db.execute("UPDATE settings SET value=? WHERE key=?",
                (json.dumps(ctx), f"ip_change.{operation_id}.sprintbox"))

@@ -177,6 +177,7 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
         bound = _bound(db, operation_id)
         if bound.get("provider") == "sprintbox":
             from app.anchors import applied_endpoint
+            from app.sprintbox_accounts import box_ref
             snapshots = {}
             # Carry only this account's chain. Never infer an old server's config
             # from today's desired settings after publication has moved forward.
@@ -185,12 +186,14 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
                                   (bound.get("box_name", ""), config.current_ip)).fetchall()
             for candidate in previous:
                 prior_bound = _bound(db, candidate["id"])
-                if all(prior_bound.get(key) == bound.get(key) for key in ("provider", "login", "credential_hash")):
+                same_account = (prior_bound.get('account_id') == bound.get('old_account_id')) if bound.get('account_id') else all(
+                    prior_bound.get(key) == bound.get(key) for key in ('provider', 'login', 'credential_hash'))
+                if same_account:
                     snapshots.update(context(db, candidate["id"]).get("retained_snapshots", {}))
                     break
             old_revision = applied_endpoint(db, config.current_ip)
             if old_revision is not None and bound.get("box_name"):
-                snapshots[bound["box_name"]] = old_revision
+                snapshots[box_ref(bound.get("old_account_id", ""), bound["box_name"])] = old_revision
             db.execute("INSERT INTO settings(key,value) VALUES (?,?)",
                        (f"ip_change.{operation_id}.sprintbox", json.dumps({"retained_snapshots": snapshots})))
         if ssh_decision_id is not None:
@@ -198,7 +201,9 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
             previous = db.execute("SELECT new_ip_id,new_ip FROM ip_change_operations WHERE id = ?",
                                   (ssh_decision_id,)).fetchone()
             kept = dict(context(db, ssh_decision_id).get("retained_boxes", {}))
-            kept[previous["new_ip_id"]] = previous["new_ip"]
+            from app.sprintbox_accounts import box_ref
+            previous_bound = _bound(db, ssh_decision_id)
+            kept[box_ref(previous_bound.get("account_id", ""), previous["new_ip_id"])] = previous["new_ip"]
             ctx = context(db, operation_id)
             ctx["retained_boxes"] = kept
             ctx["retained_snapshots"].update(context(db, ssh_decision_id).get("retained_snapshots", {}))
@@ -315,6 +320,13 @@ def publish_ip_change(
             ),
         )
         if sprintbox_box_name is not None:
+            from app.sprintbox_accounts import CURRENT, put, record_box
+            # Read the bound owner in this publication transaction.
+            binding = json.loads(db.execute('SELECT value FROM settings WHERE key=?',
+                                           (f'ip_change.{operation_id}.provider',)).fetchone()['value'])
+            if binding.get('account_id'):
+                put(db, CURRENT, binding['account_id'])
+                record_box(db, binding['account_id'], sprintbox_box_name, new_ip)
             db.executemany(
                 "INSERT INTO settings(key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",

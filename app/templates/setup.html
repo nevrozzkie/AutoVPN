@@ -146,12 +146,17 @@
           </select>
           <h3>SprintBOX</h3>
           <div class="grid">
-            <div><label for="sprintbox_login_value">API login</label><input id="sprintbox_login_value" name="sprintbox_login_value" value="{{ sprintbox.login }}" autocomplete="off"></div>
+            {% if sprintbox_accounts_managed %}
+          <p>Аккаунт для новых боксов: <strong>{{ sprintbox.label }}</strong>. Тариф: <code>{{ sprintbox.service or 'не задан' }}</code>.</p>
+          <p><a class="button" href="/admin/sprintbox/accounts">Управлять аккаунтами SprintBOX</a></p>
+          {% else %}
+          <div><label for="sprintbox_login_value">API login</label><input id="sprintbox_login_value" name="sprintbox_login_value" value="{{ sprintbox.login }}" autocomplete="off"></div>
             <div><label for="sprintbox_key_value">API key</label><input id="sprintbox_key_value" name="sprintbox_key_value" type="password" autocomplete="new-password">{% if sprintbox_key_configured %}<span class="muted">Ключ задан. Пустое поле сохраняет его.</span>{% endif %}</div>
             <div><label for="sprintbox_box_name_value">Текущий бокс, если уже есть</label><input id="sprintbox_box_name_value" name="sprintbox_box_name_value" value="{{ sprintbox.box_name }}" placeholder="оставьте пустым для первого запуска"><span class="muted">Для создания первого бокса имя и текущий IP не нужны. После установки имя заполнится автоматически.</span></div>
             <div><label for="sprintbox_service_value">Код тарифа нового бокса</label><input id="sprintbox_service_value" name="sprintbox_service_value" value="{{ sprintbox.service }}"></div>
             <div><label for="sprintbox_distributive_value">Код образа ОС</label><input id="sprintbox_distributive_value" name="sprintbox_distributive_value" value="{{ sprintbox.distributive }}"></div>
           </div>
+          {% endif %}
           <p class="muted">Login и key: <a href="https://cp.sprintbox.ru/customer/api/index" target="_blank" rel="noopener noreferrer">кабинет SprintBOX</a>. Коды тарифа и образа: services/list и distributives/list в <a href="https://api.sprintbox.ru/" target="_blank" rel="noopener noreferrer">API</a>. Уточните локацию выбранного тарифа до создания бокса.</p>
           <p class="muted">SSH для новых боксов настраивается автоматически. AutoVPN создаст и сохранит ключ на сервере панели, передаст SprintBOX только публичную часть и подключится как root:22. Сохранённый пароль прежнего VPS не мешает: настройки SSH переключатся после успешной проверки нового бокса.</p>
           <h3>Aeza, опционально</h3>

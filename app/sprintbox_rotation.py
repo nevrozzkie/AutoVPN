@@ -28,6 +28,7 @@ from app.vpn_config import CapturedVpnConfig
 from app.sprintbox_review import context, retained_boxes, validate_target, validate_ssh_decision
 from app.sprintbox_ssh import SprintboxSsh, prepare_sprintbox_ssh
 from app.ssh_credentials import use_ssh_credentials
+from app.sprintbox_accounts import (bound_credentials, box_owner, box_ref, record_box, current_id)
 
 
 def _new_box_label(boxes: dict) -> str:
@@ -42,6 +43,13 @@ def _new_box_label(boxes: dict) -> str:
 
 def _check_binding(bound: dict[str, str]) -> None:
     current = sprintbox_config()
+    if bound.get('account_id'):
+        with get_db() as db:
+            old = bound_credentials(db, bound, old=True)
+            if (current.get('account_id') != bound['account_id'] or current_id(db) != bound['old_account_id']
+                    or (bound.get('old_login') and old['login'] != bound['old_login'])
+                    or (bound.get('old_credential_hash') and hashlib.sha256(old['key'].encode()).hexdigest() != bound['old_credential_hash'])):
+                raise IpChangeError('SprintBOX account ownership changed; prepare a new operation')
     if provider_name() != "sprintbox" or any(
         current[key] != bound[key] for key in ("login", "box_name", "service", "distributive")
     ) or hashlib.sha256(current["key"].encode()).hexdigest() != bound["credential_hash"]:
@@ -124,7 +132,10 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             retained = dict(initial_context.get("retained_boxes", {}))
         if not first_box:
             await _step(operation_id, "inspect_old_box")
-            old = await client.get_box(bound["box_name"])
+            with get_db() as db:
+                old_credentials = bound_credentials(db, bound, old=True)
+            old_client = SprintboxClient(old_credentials['login'], old_credentials['key'], timeout=timing.provider_timeout)
+            old = await old_client.get_box(bound["box_name"])
             if config.current_ip not in box_ipv4(old):
                 raise IpChangeError("Configured SprintBOX box does not own current_ip; refusing rotation")
             retained.update(retained_boxes(bound["box_name"], config.current_ip, bound))
@@ -192,6 +203,8 @@ async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming 
             raise IpChangeError("Cannot uniquely identify new SprintBOX IPv4; inspect the panel")
         update_operation(operation_id, new_ip_id=new_name, new_ip=new_ip,
                          purchase_state="CONFIRMED", new_ip_created_at=now_iso())
+        with get_db() as db:
+            record_box(db, bound.get('account_id', ''), new_name, new_ip)
         await _provision_box(operation_id, config, bound, ssh, new_name, new_ip, timing, sleeper)
     except Exception as exc:
         message = sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password())
@@ -276,8 +289,9 @@ async def _resume_ssh_wait(operation_id: int, config: CapturedVpnConfig,
 async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming | None = None,
                                sleeper: Sleeper = _sleep) -> None:
     timing = timing or IpRotationTiming.configured()
-    credentials = sprintbox_config()
-    client = SprintboxClient(credentials["login"], credentials["key"], timeout=timing.provider_timeout)
+    bound = bound_provider(operation_id)
+    with get_db() as db:
+        credentials = bound_credentials(db, bound)
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         claimed = db.execute(
@@ -295,45 +309,50 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
             active = validate_target(db, operation_id)
         retained = operation_context.get("retained_boxes", {})
         results = operation_context.setdefault("cleanup_results", {})
-        for name, expected_ip in dict(retained).items():
+        for ref, expected_ip in dict(retained).items():
             sending = False
+            owner_credentials = credentials
+            name = ref
             try:
                 with get_db() as db:
                     validate_target(db, operation_id)
+                    owner_credentials, name = box_owner(db, ref, credentials)
                     from app.anchors import protected_box
-                    if protected_box(db, credentials["login"], name, expected_ip):
-                        results[name] = {"state": "ANCHOR"}
+                    if protected_box(db, owner_credentials["login"], name, expected_ip):
+                        results[ref] = {"state": "ANCHOR"}
                         continue
-                if name == active["new_ip_id"]:
+                if (name == active['new_ip_id'] and
+                        owner_credentials.get('account_id') == bound.get('account_id')):
                     raise IpChangeError("Refusing to delete the active VPN box")
+                client = SprintboxClient(owner_credentials['login'], owner_credentials['key'], timeout=timing.provider_timeout)
                 await _step(operation_id, "delete_old_box")
                 if name not in await client.list_boxes():
-                    results[name] = {"state": "ABSENT"}
+                    results[ref] = {"state": "ABSENT"}
                     continue
                 box = await client.get_box(name)
                 if expected_ip not in box_ipv4(box):
                     raise IpChangeError("Box IP changed; inspect it manually")
-                if name in results:
+                if ref in results:
                     raise IpChangeError("Deletion was already attempted; inspect it manually")
-                results[name] = {"state": "SENDING"}
+                results[ref] = {"state": "SENDING"}
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
                 sending = True
                 job = await client.delete_box(name)
-                results[name] = {"state": "SENT", "task": job}
+                results[ref] = {"state": "SENT", "task": job}
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
                 await _wait_task(client, job, operation_id, "wait_old_box_deletion", timing, sleeper)
                 if name in await client.list_boxes():
                     raise IpChangeError("Delete task finished but box still exists")
-                results[name]["state"] = "DELETED"
+                results[ref]["state"] = "DELETED"
             except Exception as exc:
                 uncertain = sending and not isinstance(exc, SprintboxApiError)
                 ambiguous = ambiguous or uncertain
-                message = sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password())
-                results[name] = {**results.get(name, {}), "state": "AMBIGUOUS" if uncertain else "MANUAL", "error": message}
+                message = sanitize_error(exc, owner_credentials["key"], owner_credentials["login"], eu_ssh_password())
+                results[ref] = {**results.get(ref, {}), "state": "AMBIGUOUS" if uncertain else "MANUAL", "error": message}
                 warnings.append(f"{name}: {message}")
             finally:
-                if results.get(name, {}).get("state") in {"DELETED", "ABSENT", "ANCHOR"}:
-                    retained.pop(name, None)
+                if results.get(ref, {}).get("state") in {"DELETED", "ABSENT", "ANCHOR"}:
+                    retained.pop(ref, None)
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
         warning = "Удалите или проверьте старые боксы вручную в кабинете SprintBOX: " + "; ".join(warnings) if warnings else ""
         update_operation(operation_id, status="DONE", current_step="done", error_message="",

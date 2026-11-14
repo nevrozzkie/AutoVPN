@@ -7,6 +7,7 @@ import json
 from app.config import settings
 from app.db import get_db, now_iso
 from app.operation_coordinator import acquire_vps_lease
+from app.sprintbox_accounts import (config_for, current_id, selected_id, box_ref, box_owner)
 
 
 def _value(db, key: str) -> str:
@@ -30,11 +31,13 @@ def validate_target(db, operation_id: int) -> dict:
     row = db.execute("SELECT * FROM ip_change_operations WHERE id = ?", (operation_id,)).fetchone()
     bound = _bound(db, operation_id)
     current = db.execute("SELECT value FROM settings WHERE key = 'current_ip'").fetchone()
-    if (not row or bound.get("provider") != "sprintbox" or _value(db, "vps_provider") != "sprintbox"
+    cfg = config_for(db, bound.get('account_id', ''))
+    owner_matches = not bound.get('account_id') or current_id(db) == bound['account_id']
+    if (not owner_matches or not row or bound.get("provider") != "sprintbox" or _value(db, "vps_provider") != "sprintbox"
             or not row["published_revision"] or not current or row["new_ip"] != current["value"]
             or row["new_ip_id"] != _value(db, "sprintbox_box_name")
-            or bound.get("login") != _value(db, "sprintbox_login")
-            or bound.get("credential_hash") != hashlib.sha256(_value(db, "sprintbox_key").encode()).hexdigest()):
+            or bound.get("login") != cfg["login"]
+            or bound.get("credential_hash") != hashlib.sha256(cfg["key"].encode()).hexdigest()):
         raise ValueError("This SprintBOX decision no longer matches the active VPN server/account")
     return row
 
@@ -54,9 +57,14 @@ def pending_review() -> dict | None:
                 result = validate_review(db, row["id"])
                 ctx = context(db, row["id"])
                 from app.anchors import protected_box
-                login = _bound(db, row["id"])["login"]
-                result["retained_boxes"] = {name: ip for name, ip in ctx.get("retained_boxes", {}).items()
-                                            if not protected_box(db, login, name, ip)}
+                fallback = config_for(db, _bound(db, row['id']).get('account_id', ''))
+                result['retained_boxes'] = {}
+                result['retained_labels'] = {}
+                for ref, ip in ctx.get('retained_boxes', {}).items():
+                    owner, name = box_owner(db, ref, fallback)
+                    if not protected_box(db, owner['login'], name, ip):
+                        result['retained_boxes'][ref] = ip
+                        result['retained_labels'][ref] = f"{owner.get('label', owner['login'])} · {name}"
                 result["anchorable_boxes"] = ctx.get("retained_snapshots", {})
                 return result
             except ValueError:
@@ -74,10 +82,12 @@ def retained_boxes(old_name: str, old_ip: str, bound: dict) -> dict[str, str]:
         retained = {}
         for row in rows:
             previous = _bound(db, row["id"])
-            if all(previous.get(key) == bound.get(key) for key in ("provider", "login", "credential_hash")):
+            matches = (previous.get('account_id') == bound.get('old_account_id')) if bound.get('account_id') else all(
+                previous.get(key) == bound.get(key) for key in ('provider', 'login', 'credential_hash'))
+            if matches:
                 retained = dict(context(db, row["id"]).get("retained_boxes", {}))
                 break
-    retained[old_name] = old_ip
+    retained[box_ref(bound.get("old_account_id", ""), old_name)] = old_ip
     return retained
 
 
@@ -111,10 +121,15 @@ def validate_ssh_decision(db, operation_id: int, *, queued: bool = False, host_k
     bound = _bound(db, operation_id)
     current = db.execute("SELECT value FROM settings WHERE key = 'current_ip'").fetchone()
     revision = db.execute("SELECT desired_revision FROM vpn_state WHERE singleton = 1").fetchone()
-    if (bound.get("provider") != "sprintbox" or _value(db, "vps_provider") != "sprintbox"
-            or any(bound.get(key) != _value(db, "sprintbox_" + key)
+    cfg = config_for(db, bound.get('account_id', ''))
+    cfg['box_name'] = _value(db, 'sprintbox_box_name')
+    cfg['login'] = cfg.get('login', '')
+    owner_matches = not bound.get('account_id') or (
+        selected_id(db) == bound['account_id'] and current_id(db) == bound['old_account_id'])
+    if (not owner_matches or bound.get("provider") != "sprintbox" or _value(db, "vps_provider") != "sprintbox"
+            or any(bound.get(key) != cfg[key]
                    for key in ("login", "box_name", "service", "distributive"))
-            or bound.get("credential_hash") != hashlib.sha256(_value(db, "sprintbox_key").encode()).hexdigest()
+            or bound.get("credential_hash") != hashlib.sha256(cfg["key"].encode()).hexdigest()
             or row["revision"] != revision["desired_revision"]
             or row["old_ip"] != (current["value"] if current else "")
             or row["published_revision"] or row["purchase_state"] != "CONFIRMED"
@@ -155,8 +170,10 @@ def cancel_ssh_wait(operation_id: int) -> None:
                          "AND action_state = 'SSH_UNREACHABLE'", (operation_id,)).fetchone()
         if not row:
             raise ValueError("This SSH decision was already submitted")
-        active = _value(db, "sprintbox_box_name")
-        kept = set(context(db, operation_id).get("retained_boxes", {})) | {row["new_ip_id"]}
+        active = box_ref(current_id(db), _value(db, "sprintbox_box_name"))
+        binding = _bound(db, operation_id)
+        new_ref = box_ref(binding.get("account_id", ""), row["new_ip_id"])
+        kept = set(context(db, operation_id).get("retained_boxes", {})) | {new_ref}
         names = ", ".join(sorted(name for name in kept if name and name != active))
         warning = f"Попытка отменена. Боксы сохранены; при необходимости удалите вручную в SprintBOX: {names}"
         db.execute("UPDATE ip_change_operations SET action_state = 'CANCELLED', current_step = 'cancelled', "

@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from app.config import settings
-from app.db import get_setting
+from app.db import get_setting, get_db
 from app.runtime_config import config_value
 from app.sprintbox import SprintboxClient
 
@@ -14,18 +14,18 @@ def provider_name() -> str:
     return config_value("vps_provider", "aeza")
 
 
-def sprintbox_config() -> dict[str, str]:
-    config = {key: config_value(f"sprintbox_{key}") for key in ("login", "key", "box_name", "service", "distributive")}
-    # Explicitly clearing the box selects first-time creation, even with an env fallback.
-    configured = get_setting("config.sprintbox_box_name", None)
-    if configured is not None:
-        config["box_name"] = configured
-    return config
+def sprintbox_config(*, current: bool = False) -> dict[str, str]:
+    from app.sprintbox_accounts import config_for, current_id, selected_id, legacy_value
+    with get_db() as db:
+        owner = (current_id(db) if current else selected_id(db)) or selected_id(db)
+        config = config_for(db, owner)
+        config['box_name'] = legacy_value(db, 'box_name')
+        return config
 
 
 def provider_available() -> bool:
     if provider_name() == "sprintbox":
-        config = sprintbox_config()
+        config = sprintbox_config(current=True)
         return bool(config["login"] and config["key"] and config["box_name"])
     return provider_name() == "aeza" and bool(config_value("aeza_token") and config_value("aeza_service_id"))
 
@@ -42,11 +42,11 @@ def first_sprintbox_box() -> bool:
 
 
 def provider_service_id() -> str:
-    return sprintbox_config()["box_name"] if provider_name() == "sprintbox" else config_value("aeza_service_id")
+    return sprintbox_config(current=True)["box_name"] if provider_name() == "sprintbox" else config_value("aeza_service_id")
 
 
 def sprintbox_client(timeout: float = 30.0) -> SprintboxClient:
-    config = sprintbox_config()
+    config = sprintbox_config(current=True)
     return SprintboxClient(config["login"], config["key"], timeout=timeout)
 
 
@@ -63,8 +63,17 @@ def bind_provider(db: Any, operation_id: int) -> None:
         raise ValueError("Unknown VPS provider; configure Setup before rotating IP")
     data = {"provider": provider}
     if provider == "sprintbox":
-        data.update({key: value(f"sprintbox_{key}") for key in ("login", "box_name", "service", "distributive")})
-        data["credential_hash"] = hashlib.sha256(value("sprintbox_key").encode()).hexdigest()
+        from app.sprintbox_accounts import config_for, selected_id, current_id, legacy_value
+        owner = selected_id(db)
+        config = config_for(db, owner)
+        data.update({key: config[key] for key in ('login', 'service', 'distributive')})
+        data['box_name'] = legacy_value(db, 'box_name')
+        data['credential_hash'] = hashlib.sha256(config['key'].encode()).hexdigest()
+        if owner:
+            old_owner = current_id(db) or owner
+            old = config_for(db, old_owner)
+            data.update(account_id=owner, old_account_id=old_owner, old_login=old['login'],
+                        old_credential_hash=hashlib.sha256(old['key'].encode()).hexdigest())
     db.execute("INSERT INTO settings(key, value) VALUES (?, ?)", (
         f"ip_change.{operation_id}.provider", json.dumps(data),
     ))

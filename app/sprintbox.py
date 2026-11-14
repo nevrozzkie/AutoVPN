@@ -44,7 +44,7 @@ class SprintboxClient:
             raise RuntimeError("SprintBOX returned an invalid response")
         error = payload.get("error")
         if isinstance(error, dict) and error:
-            description = str(error.get("description") or "Request rejected")
+            description = str(error.get("description") or error.get("message") or "Request rejected")
             for secret in (self.key, self.login):
                 description = description.replace(secret, "[REDACTED]")
             raise SprintboxApiError(str(error.get("code", "unknown")), description[:500])

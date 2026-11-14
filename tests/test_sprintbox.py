@@ -504,9 +504,9 @@ def test_accept_checkbox_http_saves_anchor_and_prevents_duplicate_decision(scena
     auth = ("admin", "test-password")
     with TestClient(main.app, base_url="http://panel.local") as client:
         page = client.get("/admin", auth=auth)
-        assert 'name="keep_boxes" value="box-old"' in page.text
+        assert 'name="keep_boxes" value="1:box-old"' in page.text
         response = client.post(f"/admin/sprintbox/{operation}/accept", auth=auth,
-                               data={"keep_boxes": ["box-old"]}, headers={"Origin": "http://panel.local"},
+                               data={"keep_boxes": ["1:box-old"]}, headers={"Origin": "http://panel.local"},
                                follow_redirects=False)
         assert response.status_code == 303 and len(list_anchors()) == 1
         assert "delete" not in scenario.events
@@ -977,31 +977,23 @@ def test_sprintbox_ui_has_no_aeza_price_request_or_key_leak(scenario, monkeypatc
         main.app.dependency_overrides.clear()
 
 
-def test_setup_saves_sprintbox_parameters_and_preserves_blank_api_key(scenario):
-    set_setting("config.admin_password", "test-password")
-    form = {
-        "vps_provider_value": "sprintbox", "sprintbox_login_value": "account-login",
-        "sprintbox_key_value": "", "sprintbox_box_name_value": "box-old",
-        "sprintbox_service_value": "new-tariff", "sprintbox_distributive_value": "ubuntu2404",
-        "current_ip": OLD, "eu_ssh_user_value": "root", "eu_ssh_port_value": "22",
-        "eu_ssh_key_path_value": "/tmp/panel-key", "vless_port_value": "443",
-        "hysteria_port_value": "8443", "amnezia_port_value": "51820", "vless_enabled_value": "on",
-    }
-    with TestClient(main.app, base_url="http://panel.local") as client:
-        response = client.post("/admin/setup", data=form, auth=("admin", "test-password"),
-                               headers={"Origin": "http://panel.local"}, follow_redirects=False)
+def test_setup_links_to_imported_account_and_account_edit_preserves_blank_api_key(scenario):
+    from app.sprintbox_accounts import list_accounts
+    set_setting('config.admin_password', 'test-password')
+    with TestClient(main.app, base_url='http://panel.local') as client:
+        auth = ('admin', 'test-password')
+        page = client.get('/admin/setup', auth=auth)
+        assert page.status_code == 200 and '/admin/sprintbox/accounts' in page.text
+        assert 'secret-key' not in page.text
+        owner = list_accounts()[0]['id']
+        form = {'label': 'Existing account', 'service': 'new-tariff', 'distributive': 'ubuntu2404', 'api_key': ''}
+        url = f'/admin/sprintbox/accounts/{owner}/save'
+        response = client.post(url, data=form, auth=auth, headers={'Origin': 'http://panel.local'}, follow_redirects=False)
         assert response.status_code == 303
-        assert get_setting("config.sprintbox_service") == "new-tariff"
-        assert get_setting("config.sprintbox_key") == "secret-key"
-        page = client.get("/admin/setup", auth=("admin", "test-password"))
-        assert page.status_code == 200 and "new-tariff" in page.text
-        assert "secret-key" not in page.text
+        assert main.sprintbox_config()['service'] == 'new-tariff'
+        assert main.sprintbox_config()['key'] == 'secret-key'
         create_operation()
-        form["sprintbox_service_value"] = "different-tariff"
-        blocked = client.post("/admin/setup", data=form, auth=("admin", "test-password"),
-                              headers={"Origin": "http://panel.local"}, follow_redirects=False)
-        assert blocked.status_code == 409
-        assert get_setting("config.sprintbox_service") == "new-tariff"
+        assert client.post(url, data=form, auth=auth, headers={'Origin': 'http://panel.local'}).status_code == 409
 
 
 def host_key_failure(scenario, monkeypatch):

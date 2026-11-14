@@ -88,7 +88,7 @@ def _clean(value: object, limit: int = 4000) -> str:
 
 
 def _safe_error(value: object) -> str:
-    return sanitize_error(value, aeza_token(), eu_ssh_password(), sprintbox_config()["key"])
+    return sanitize_error(value, aeza_token(), eu_ssh_password(), sprintbox_config(current=True)["key"])
 
 
 def _provider_client(timeout: float):

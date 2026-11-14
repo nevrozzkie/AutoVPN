@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Аккаунты SprintBOX</h1>
+<p>Выберите аккаунт для новых боксов. Текущий VPN и якорные серверы сохраняют своих владельцев. Переключение аккаунта ничего не покупает и не меняет подключение VPN.</p>
+{% if error %}<section class="panel danger">{{ error }}</section>{% endif %}
+{% if busy %}<p class="warning">Дождитесь завершения операции с VPS перед изменением аккаунтов.</p>{% endif %}
+{% for account in accounts %}
+<section class="panel setup-page">
+  <h2>{{ account.label }}</h2>
+  <p>Логин: <code>{{ account.login }}</code>. API-ключ сохранён.</p>
+  {% if account.selected %}<p class="ok">Выбран для новых боксов</p>{% endif %}
+  {% if account.current %}<p>Владелец текущего VPN</p>{% endif %}
+  <div class="actions">
+    <a class="button" href="/admin/sprintbox/accounts?check={{ account.id }}">Проверить доступ и тарифы</a>
+    {% if not account.selected %}<form method="post" action="/admin/sprintbox/accounts/{{ account.id }}/select"><button type="submit" {% if busy or not account.service or not account.distributive %}disabled{% endif %}>Использовать для новых боксов</button></form>{% endif %}
+  </div>
+  {% set result = checked if checked and checked.id == account.id else none %}
+  {% if result %}
+  <p class="ok">Доступ подтверждён. Боксов на аккаунте: {{ result.boxes_count }}.</p>
+  {% if not result.service_available %}<p class="warning">Сохранённый тариф {{ account.service or 'не задан' }} недоступен для создания боксов. Выберите тариф из списка и сохраните.</p>{% endif %}
+  {% endif %}
+  <form method="post" action="/admin/sprintbox/accounts/{{ account.id }}/save">
+    <label for="label-{{ account.id }}">Название</label><input id="label-{{ account.id }}" name="label" value="{{ account.label }}" required maxlength="100">
+    <label for="key-{{ account.id }}">Новый API-ключ</label><input type="password" id="key-{{ account.id }}" name="api_key" autocomplete="new-password" placeholder="Оставьте пустым, чтобы сохранить ключ">
+    <label for="service-{{ account.id }}">Тариф для новых боксов</label>
+    {% if result %}
+    <select id="service-{{ account.id }}" name="service">
+      {% if not result.service_available %}<option value="{{ account.service }}" selected>{{ account.service or 'Выберите тариф' }} — недоступен</option>{% endif %}
+      {% for service in result.services %}<option value="{{ service.name }}" {% if service.name == account.service %}selected{% endif %}>{{ service.description }} · {{ service.name }}{% if service.fee is not none %} · {{ service.fee }} ₽/мес.{% endif %}</option>{% endfor %}
+    </select>
+    {% else %}<input id="service-{{ account.id }}" name="service" value="{{ account.service }}" placeholder="Проверьте доступ, чтобы выбрать тариф из списка">{% endif %}
+    <label for="os-{{ account.id }}">Образ ОС</label>
+    {% if result and result.distributives %}
+    <select id="os-{{ account.id }}" name="distributive">
+      <option value="{{ account.distributive }}">{{ account.distributive or 'Выберите образ' }}</option>
+      {% for image in result.distributives %}<option value="{{ image.name }}" {% if image.name == account.distributive %}selected{% endif %}>{{ image.description }} · {{ image.name }}</option>{% endfor %}
+    </select>
+    {% else %}<input id="os-{{ account.id }}" name="distributive" value="{{ account.distributive }}">{% endif %}
+    <div class="actions"><button type="submit" {% if busy %}disabled{% endif %}>Сохранить настройки аккаунта</button></div>
+  </form>
+</section>
+{% else %}<p>Добавьте аккаунт SprintBOX для создания боксов.</p>{% endfor %}
+<section class="panel setup-page">
+  <h2>Добавить аккаунт</h2>
+  <form method="post" action="/admin/sprintbox/accounts">
+    <label for="new-label">Название</label><input id="new-label" name="label" required maxlength="100" placeholder="Например, новый аккаунт с промо">
+    <label for="new-login">Логин SprintBOX</label><input id="new-login" name="login" required autocomplete="off">
+    <label for="new-key">API-ключ</label><input id="new-key" name="api_key" type="password" required autocomplete="new-password">
+    <input type="hidden" name="distributive" value="ubuntu2204">
+    <p>После добавления проверьте доступ, выберите доступный тариф и сохраните настройки. Затем выберите аккаунт для новых боксов.</p>
+    <div class="actions"><button type="submit" {% if busy %}disabled{% endif %}>Добавить аккаунт</button></div>
+  </form>
+  <p><a href="https://cp.sprintbox.ru/customer/api/index" target="_blank" rel="noopener noreferrer">Получить логин и API-ключ в SprintBOX</a></p>
+</section>
+{% endblock %}

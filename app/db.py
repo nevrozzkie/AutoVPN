@@ -106,6 +106,8 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             ("last_healthcheck_status", "UNKNOWN"),
         )
+        from app.sprintbox_accounts import ensure_legacy_account
+        ensure_legacy_account(db)
         vpn_changed = any(
             (
                 _ensure_amnezia_settings(db),

@@ -10,6 +10,7 @@
 {% for anchor in anchors %}
 <section class="panel">
   <h2>{{ anchor.box_name }} · {{ anchor.ip }}</h2>
+  <p>Аккаунт: {{ anchor.account_label or anchor.account_login }}.</p>
   <p class="muted">Сохранён {{ anchor.created_at|msk }}. Защищён от автоматической очистки.</p>
   {% if not anchor.ready %}
   <p>Бокс сохранён без конфигов: нет подтверждённого снимка VPN. Используйте прежний профиль подключения, если VPN на нём установлен.</p>

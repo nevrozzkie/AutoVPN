@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -30,6 +31,7 @@ from app.db import (
     fail_incomplete_install_operations,
     get_client_by_id,
     get_client_by_token,
+    get_db,
     get_latest_install_operation,
     get_latest_operation,
     get_operation,
@@ -73,6 +75,12 @@ from app.sprintbox_review import (
     pending_host_key_retry, prepare_host_key_retry,
 )
 from app.sprintbox_rotation import run_sprintbox_cleanup
+from app.sprintbox_accounts import (
+    list_accounts, save_account, select_account, ensure_legacy_account, account as sprintbox_account,
+    current_id as sprintbox_current_account_id,
+)
+from app.sprintbox import SprintboxClient
+
 from app.anchors import list_anchors, anchor_client
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
@@ -499,6 +507,7 @@ def admin_setup_page(
             "aeza_ipv4_domain": aeza_ipv4_domain(),
             "sprintbox": {key: value for key, value in sprintbox_config().items() if key != "key"},
             "sprintbox_key_configured": bool(sprintbox_config()["key"]),
+            "sprintbox_accounts_managed": bool(list_accounts()),
             "transactional_vpn_apply_enabled": transactional_vpn_apply_enabled(),
             "safe_aeza_ip_rotation_enabled": safe_aeza_ip_rotation_enabled(),
             "router_api_enabled": router_api_enabled(),
@@ -611,19 +620,27 @@ def setup_submit(
         if get_active_vps_operation():
             raise HTTPException(status_code=409, detail="Wait for the active VPS operation before changing provider settings")
         updates["config.vps_provider"] = vps_provider_value
-        for key, value in {
-            "login": sprintbox_login_value, "box_name": sprintbox_box_name_value,
-            "service": sprintbox_service_value, "distributive": sprintbox_distributive_value,
-        }.items():
-            if "\n" in value or "\r" in value or len(value) > 256:
-                raise HTTPException(status_code=400, detail="Invalid SprintBOX setting")
-            updates[f"config.sprintbox_{key}"] = value.strip()
-        if sprintbox_key_value.strip():
-            if "\n" in sprintbox_key_value or "\r" in sprintbox_key_value:
-                raise HTTPException(status_code=400, detail="Invalid SprintBOX key")
-            updates["config.sprintbox_key"] = sprintbox_key_value.strip()
+        if list_accounts():
+            if any((sprintbox_login_value, sprintbox_key_value, sprintbox_box_name_value,
+                    sprintbox_service_value, sprintbox_distributive_value)):
+                raise HTTPException(status_code=400, detail="Настройте аккаунты на странице /admin/sprintbox/accounts")
+        else:
+            for key, value in {
+                "login": sprintbox_login_value, "box_name": sprintbox_box_name_value,
+                "service": sprintbox_service_value, "distributive": sprintbox_distributive_value,
+            }.items():
+                if "\n" in value or "\r" in value or len(value) > 256:
+                    raise HTTPException(status_code=400, detail="Invalid SprintBOX setting")
+                updates[f"config.sprintbox_{key}"] = value.strip()
+            if sprintbox_key_value.strip():
+                if "\n" in sprintbox_key_value or "\r" in sprintbox_key_value:
+                    raise HTTPException(status_code=400, detail="Invalid SprintBOX key")
+                updates["config.sprintbox_key"] = sprintbox_key_value.strip()
     try:
         set_settings(updates, mark_vpn_config_updated=True, require_vps_idle=vps_provider_value is not None)
+        with get_db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            ensure_legacy_account(db)
     except OperationBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -770,6 +787,75 @@ def accept_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _sprintbox_accounts_page(request: Request, *, error: str = "", checked: dict | None = None,
+                             status_code: int = 200) -> HTMLResponse:
+    return templates.TemplateResponse(request, "sprintbox_accounts.html", {
+        "accounts": list_accounts(), "error": error, "checked": checked,
+        "busy": get_active_vps_operation() is not None,
+    }, status_code=status_code, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/admin/sprintbox/accounts", response_class=HTMLResponse)
+async def admin_sprintbox_accounts(request: Request, check: int | None = None,
+                                   _: str = Depends(require_admin)) -> HTMLResponse:
+    checked = None
+    error = ""
+    if check is not None:
+        with get_db() as db:
+            try:
+                cfg = sprintbox_account(db, check)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from None
+        try:
+            client = SprintboxClient(cfg['login'], cfg['key'])
+            boxes, services, distributives = await asyncio.gather(
+                client.list_boxes(), client._request('services/list'), client._request('distributives/list'))
+            if not isinstance(services, dict) or not isinstance(distributives, dict):
+                raise ValueError('SprintBOX вернул некорректный список тарифов или образов')
+            def options(items):
+                return [{'name': name, 'description': str(value.get('description', name)), 'fee': value.get('fee')}
+                        for name, value in items.items() if isinstance(value, dict)]
+            checked = {'id': check, 'boxes_count': len(boxes), 'services': options(services),
+                       'distributives': options(distributives), 'service_available': cfg['service'] in services}
+        except Exception as exc:
+            error = sanitize_error(exc, cfg['key'], cfg['login'])
+    return _sprintbox_accounts_page(request, error=error, checked=checked)
+
+
+@app.post("/admin/sprintbox/accounts")
+def admin_add_sprintbox_account(request: Request, label: str = Form(...), login: str = Form(...),
+                                api_key: str = Form(...), service: str = Form(""),
+                                distributive: str = Form("ubuntu2204"), _: str = Depends(require_admin)):
+    try:
+        owner = save_account(label=label, login=login, key=api_key, service=service, distributive=distributive)
+    except (ValueError, OperationBusyError) as exc:
+        return _sprintbox_accounts_page(request, error=str(exc), status_code=409 if isinstance(exc, OperationBusyError) else 400)
+    return RedirectResponse(f"/admin/sprintbox/accounts?check={owner}", status_code=303)
+
+
+@app.post("/admin/sprintbox/accounts/{account_id}/save")
+def admin_save_sprintbox_account(request: Request, account_id: int, label: str = Form(...),
+                                 api_key: str = Form(""), service: str = Form(""),
+                                 distributive: str = Form(""), _: str = Depends(require_admin)):
+    try:
+        with get_db() as db:
+            cfg = sprintbox_account(db, account_id)
+        save_account(account_id=account_id, label=label, login=cfg['login'], key=api_key,
+                     service=service, distributive=distributive)
+    except (ValueError, OperationBusyError) as exc:
+        return _sprintbox_accounts_page(request, error=str(exc), status_code=409 if isinstance(exc, OperationBusyError) else 400)
+    return RedirectResponse('/admin/sprintbox/accounts', status_code=303)
+
+
+@app.post("/admin/sprintbox/accounts/{account_id}/select")
+def admin_select_sprintbox_account(request: Request, account_id: int, _: str = Depends(require_admin)):
+    try:
+        select_account(account_id)
+    except (ValueError, OperationBusyError) as exc:
+        return _sprintbox_accounts_page(request, error=str(exc), status_code=409)
+    return RedirectResponse('/admin/sprintbox/accounts', status_code=303)
+
+
 @app.get("/admin/anchors", response_class=HTMLResponse)
 def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     return templates.TemplateResponse(request, "anchors.html", {
@@ -854,15 +940,29 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
     ipv4_list: list[dict] = []
     current_ip = get_setting("current_ip")
     if provider_name() == "sprintbox":
-        boxes = {}
-        try:
-            boxes = await sprintbox_client().list_boxes()
-        except Exception as exc:
-            config = sprintbox_config()
-            error = sanitize_error(exc, config["key"], config["login"])
-        return templates.TemplateResponse(request, "sprintbox_boxes.html", {
-            "boxes": boxes, "current_box": provider_service_id(), "current_ip": current_ip, "error": error,
-        })
+        inventories = []
+        accounts = list_accounts()
+        configs = []
+        if accounts:
+            with get_db() as db:
+                active_owner = sprintbox_current_account_id(db)
+                configs = [sprintbox_account(db, item['id']) for item in accounts]
+        else:
+            active_owner = ''
+            configs = [sprintbox_config(current=True)]
+        for cfg in configs:
+            inventory = {'label': cfg.get('label', cfg['login']), 'boxes': {}, 'error': '',
+                         'current': cfg.get('account_id', '') == active_owner}
+            try:
+                raw = await SprintboxClient(cfg['login'], cfg['key']).list_boxes()
+                inventory['boxes'] = {name: {key: box.get(key, []) if key == 'ipv4' else box.get(key, '')
+                                            for key in ('ipv4', 'state_description')} for name, box in raw.items()}
+            except Exception as exc:
+                inventory['error'] = sanitize_error(exc, cfg['key'], cfg['login'])
+            inventories.append(inventory)
+        return templates.TemplateResponse(request, 'sprintbox_boxes.html', {
+            'inventories': inventories, 'current_box': provider_service_id(), 'current_ip': current_ip, 'error': error,
+        }, headers={'Cache-Control': 'private, no-store'})
     try:
         client = get_aeza_client()
         ipv4_list = await client.get_ipv4_list(aeza_service_id())

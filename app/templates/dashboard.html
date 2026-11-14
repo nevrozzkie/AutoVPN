@@ -144,7 +144,7 @@
   <h2>Проверьте новый IP: {{ sprintbox_review.new_ip }}</h2>
   <p>VPN установлен на <code>{{ sprintbox_review.new_ip_id }}</code>. Проверьте подключение и нужные приложения. Для AmneziaWG проверьте подключение с обновлённым профилем.</p>
   {% if sprintbox_review.retained_boxes %}
-  <p>Сохранённые старые боксы: {% for name in sprintbox_review.retained_boxes %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. Они продолжают оплачиваться.</p>
+  <p>Сохранённые старые боксы: {% for name in sprintbox_review.retained_boxes %}<code>{{ sprintbox_review.retained_labels.get(name, name) }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. Они продолжают оплачиваться.</p>
   {% else %}
   <p>Старых боксов для удаления нет. «Всё ок» завершит настройку.</p>
   {% endif %}
@@ -152,7 +152,7 @@
     <form method="post" action="/admin/sprintbox/{{ sprintbox_review.id }}/accept" class="inline">
       {% for name, ip in sprintbox_review.retained_boxes.items() %}
       <p><label><input type="checkbox" name="keep_boxes" value="{{ name }}">
-        Сохранить {{ name }} · {{ ip }} как якорный VPN</label>
+        Сохранить {{ sprintbox_review.retained_labels.get(name, name) }} · {{ ip }} как якорный VPN</label>
         {% if name not in sprintbox_review.anchorable_boxes %}<span class="muted">Нет снимка применённого VPN: бокс будет сохранён без выдачи конфигов. Используйте прежние профили, если VPN установлен.</span>{% endif %}
       </p>
       {% endfor %}
