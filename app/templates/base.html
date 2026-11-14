@@ -298,6 +298,7 @@
         <a href="/admin">Панель</a>
         <a href="/admin/clients">Клиенты</a>
         <a href="/admin/routers">Роутеры</a>
+        {% if vps_provider() == 'sprintbox' %}<a href="/admin/ip">Боксы</a>{% endif %}
         <a href="/admin/sprintbox/accounts">Аккаунты SprintBOX</a>
         <a href="/admin/anchors">Якорные VPN</a>
         <a href="/admin/tuning">Настройки протоколов</a>

@@ -7,9 +7,10 @@
 {% for inventory in inventories %}
 <h2>{{ inventory.label }}</h2>
 {% if inventory.error %}<section class="panel danger">{{ inventory.error }}</section>{% endif %}
-<table><thead><tr><th>Бокс</th><th>IP</th><th>Статус</th><th>VPN</th></tr></thead><tbody>
-{% for name, box in inventory.boxes.items() %}<tr><td>{{ name }}</td><td>{{ box.ipv4|join(', ') }}</td><td>{{ box.state_description }}</td><td>{{ 'активный' if name == current_box and inventory.current else '—' }}</td></tr>{% else %}<tr><td colspan="4">Нет данных</td></tr>{% endfor %}
+<table><thead><tr><th>Бокс</th><th>IP</th><th>Статус</th><th>VPN</th><th>Действия</th></tr></thead><tbody>
+{% for name, box in inventory.boxes.items() %}<tr><td>{{ name }}</td><td>{{ box.ipv4|join(', ') }}</td><td>{{ box.state_description }}</td><td>{{ 'активный' if name == current_box and inventory.current else '—' }}</td><td>{% if name == current_box and inventory.current %}Сначала смените основной VPN{% elif inventory.account_id %}<a href="/admin/sprintbox/accounts/{{ inventory.account_id }}/boxes/{{ name|urlencode }}/delete/confirm">Удалить</a>{% endif %}</td></tr>{% else %}<tr><td colspan="5">Нет данных</td></tr>{% endfor %}
 </tbody></table>
 {% endfor %}
 <p>Старые боксы сохраняются до нажатия «Всё ок» на главной странице. Если удаление не удалось, панель попросит удалить их вручную.</p>
+{% if deletions %}<h2>Последние удаления</h2>{% for operation in deletions %}<p><a href="/admin/sprintbox/deletions/{{ operation.id }}">{{ operation.account_label }} · {{ operation.box_name }}</a>: {{ operation.status|status_label }}</p>{% endfor %}{% endif %}
 {% endblock %}

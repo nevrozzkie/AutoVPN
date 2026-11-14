@@ -53,7 +53,10 @@ def list_anchors(token: str | None = None) -> list[dict]:
         for row in rows:
             payload = row.pop("payload_json")
             config = captured_vpn_config_from_json(payload) if payload else None
-            row["ready"] = config is not None
+            row["can_promote"] = config is not None and bool(row.get("account_id"))
+            row["ready"] = config is not None and not row.get("maintenance_operation_id")
+            if not row["ready"]:
+                config = None
             clients = [client for client in config.enabled_clients
                        if live_clients.get(client.token) == client.id and (token is None or token == client.token)] if config else []
             if token is not None and not clients:
@@ -69,7 +72,7 @@ def anchor_client(anchor_id: str, token: str):
         live = db.execute("SELECT id FROM clients WHERE token=? AND enabled=1 AND deleted_at IS NULL",
                           (token,)).fetchone()
         row = db.execute("SELECT * FROM vpn_anchors WHERE anchor_id=?", (anchor_id,)).fetchone()
-    if not live or not row or not row["payload_json"]:
+    if not live or not row or not row["payload_json"] or row.get("maintenance_operation_id"):
         return None
     config = captured_vpn_config_from_json(row.pop("payload_json"))
     client = config.client_by_token(token)

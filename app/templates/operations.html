@@ -55,6 +55,9 @@
   </tbody>
 </table>
 
+<h2>Удаление боксов SprintBOX</h2>
+{% for operation in deletions %}<p><a href="/admin/sprintbox/deletions/{{ operation.id }}">#{{ operation.id }} · {{ operation.account_label }} · {{ operation.box_name }}</a>: {{ operation.status|status_label }}{% if operation.error_message %} — {{ operation.error_message }}{% endif %}</p>{% else %}<p class="muted">Удалений пока нет</p>{% endfor %}
+
 <h2>VPN VPS</h2>
 <table>
   <thead>

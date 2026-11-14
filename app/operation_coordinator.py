@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -70,6 +71,16 @@ def _fail_owner(
             (reason, timestamp, owner.owner_id),
         )
     elif owner.owner_type == "IP_CHANGE":
+        binding = connection.execute('SELECT value FROM settings WHERE key=?',
+                                     (f'ip_change.{owner.owner_id}.provider',)).fetchone()
+        if binding and json.loads(binding['value']).get('kind') == 'ANCHOR_PROMOTE':
+            row = connection.execute('SELECT published_revision FROM ip_change_operations WHERE id=?', (owner.owner_id,)).fetchone()
+            published = row and row['published_revision'] is not None
+            connection.execute("UPDATE ip_change_operations SET status=?, action_state=?, current_step=?, error_message=?, updated_at=? "
+                               "WHERE id=? AND status IN ('PENDING','RUNNING')",
+                               ('DONE' if published else 'FAILED', 'DONE' if published else 'FAILED',
+                                'done' if published else 'failed', '' if published else reason, timestamp, owner.owner_id))
+            return
         operation = connection.execute(
             """
             SELECT purchase_state, make_main_state, apply_state, action_state, new_ip_id, new_ip
@@ -110,6 +121,12 @@ def _fail_owner(
                 owner.owner_id,
             ),
         )
+    elif owner.owner_type == 'BOX_DELETE':
+        row = connection.execute('SELECT action_state FROM sprintbox_deletions WHERE id=?', (owner.owner_id,)).fetchone()
+        if row:
+            status = 'FAILED' if row['action_state'] == 'NOT_STARTED' else 'AMBIGUOUS'
+            connection.execute("UPDATE sprintbox_deletions SET status=?, error_message=?, updated_at=? "
+                               "WHERE id=? AND status IN ('PENDING','RUNNING')", (status, reason, timestamp, owner.owner_id))
     elif owner.owner_type == "SERVER":
         operation = connection.execute(
             "SELECT kind, action_state FROM server_operations WHERE id = ?",
@@ -226,4 +243,7 @@ def recover_incomplete_vps_operations(
         "SELECT id FROM server_operations WHERE status IN ('PENDING', 'RUNNING')"
     ).fetchall():
         _fail_owner(connection, LeaseOwner("SERVER", int(row["id"])), bounded, timestamp)
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sprintbox_deletions'").fetchone():
+        for row in connection.execute("SELECT id FROM sprintbox_deletions WHERE status IN ('PENDING','RUNNING')").fetchall():
+            _fail_owner(connection, LeaseOwner('BOX_DELETE', int(row['id'])), bounded, timestamp)
     connection.execute("DELETE FROM operation_leases WHERE resource = ?", (VPN_VPS_RESOURCE,))

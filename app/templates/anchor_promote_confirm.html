@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Сделать якорный VPN основным</h1>
+<section class="panel">
+<p>Аккаунт: <strong>{{ account_label }}</strong>. Бокс: <code>{{ target.box_name }}</code>. IP: <code>{{ target.ip }}</code>.</p>
+<p>Панель применит к нему текущие настройки и состав клиентов, проверит VPN и затем переключит основные подписки на этот IP. Покупка нового сервера не выполняется.</p>
+<p>Прежний основной VPN {{ current_ip }} сохранится как якорный. Ни один бокс не удаляется.</p>
+<p>Отдельные ссылки выбранного якоря будут заменены основными ссылками клиентов. Пока идёт настройка, выдача прежних профилей этого якоря приостанавливается.</p>
+</section>
+{% if ssh_decision %}<p class="warning">Сначала завершите или отмените ожидание SSH на <a href="/admin">главной странице</a>. Созданный бокс можно также удалить в разделе «Боксы».</p>{% endif %}
+<form method="post" action="/admin/anchors/{{ target.anchor_id }}/promote" class="panel setup-page">
+<label for="confirm-ip">Для подтверждения введите {{ target.ip }}</label><input id="confirm-ip" name="confirm_ip" required autocomplete="off">
+<div class="actions"><button type="submit" {% if busy or ssh_decision %}disabled{% endif %}>Применить настройки и сделать основным</button><a href="/admin/anchors">Отмена</a></div>
+</form>
+{% if busy %}<p class="warning">Дождитесь завершения текущей операции с VPS.</p>{% endif %}
+{% endblock %}

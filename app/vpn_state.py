@@ -114,11 +114,12 @@ def prepare_install_operation(target_host: str) -> PreparedInstall:
 
 
 def prepare_ip_change_operation(*, review_operation_id: int | None = None,
-                                ssh_decision_id: int | None = None) -> PreparedIpChange:
+                                ssh_decision_id: int | None = None,
+                                anchor_id: str | None = None) -> PreparedIpChange:
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
-        if review_operation_id is not None and ssh_decision_id is not None:
+        if sum(value is not None for value in (review_operation_id, ssh_decision_id, anchor_id)) > 1:
             raise ValueError("Choose one SprintBOX decision")
         if ssh_decision_id is not None:
             from app.sprintbox_review import validate_ssh_decision
@@ -175,10 +176,14 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
         bind_provider(db, operation_id)
         from app.sprintbox_review import _bound, context
         bound = _bound(db, operation_id)
+        if anchor_id is not None:
+            from app.sprintbox_controls import bind_anchor_promotion
+            bound = bind_anchor_promotion(db, operation_id, anchor_id, bound, config)
         if bound.get("provider") == "sprintbox":
             from app.anchors import applied_endpoint
             from app.sprintbox_accounts import box_ref
             snapshots = {}
+            retained = {}
             # Carry only this account's chain. Never infer an old server's config
             # from today's desired settings after publication has moved forward.
             previous = db.execute("SELECT id FROM ip_change_operations WHERE new_ip_id=? AND new_ip=? "
@@ -190,12 +195,18 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
                     prior_bound.get(key) == bound.get(key) for key in ('provider', 'login', 'credential_hash'))
                 if same_account:
                     snapshots.update(context(db, candidate["id"]).get("retained_snapshots", {}))
+                    retained.update(context(db, candidate["id"]).get("retained_boxes", {}))
                     break
             old_revision = applied_endpoint(db, config.current_ip)
             if old_revision is not None and bound.get("box_name"):
                 snapshots[box_ref(bound.get("old_account_id", ""), bound["box_name"])] = old_revision
+            operation_context = {'retained_snapshots': snapshots}
+            if anchor_id is not None:
+                if bound.get('box_name') and config.current_ip:
+                    retained[box_ref(bound['old_account_id'], bound['box_name'])] = config.current_ip
+                operation_context['retained_boxes'] = retained
             db.execute("INSERT INTO settings(key,value) VALUES (?,?)",
-                       (f"ip_change.{operation_id}.sprintbox", json.dumps({"retained_snapshots": snapshots})))
+                       (f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context)))
         if ssh_decision_id is not None:
             from app.sprintbox_review import context
             previous = db.execute("SELECT new_ip_id,new_ip FROM ip_change_operations WHERE id = ?",
@@ -324,6 +335,9 @@ def publish_ip_change(
             # Read the bound owner in this publication transaction.
             binding = json.loads(db.execute('SELECT value FROM settings WHERE key=?',
                                            (f'ip_change.{operation_id}.provider',)).fetchone()['value'])
+            if binding.get('kind') == 'ANCHOR_PROMOTE':
+                from app.sprintbox_controls import finish_anchor_promotion
+                finish_anchor_promotion(db, operation_id, binding, bound_config.current_ip, new_ip)
             if binding.get('account_id'):
                 put(db, CURRENT, binding['account_id'])
                 record_box(db, binding['account_id'], sprintbox_box_name, new_ip)

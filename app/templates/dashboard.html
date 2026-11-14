@@ -173,7 +173,7 @@
     <button type="button" disabled>{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</button>
   {% else %}
     <a class="button" href="/admin/ip/confirm">{{ 'Создать первый бокс' if first_sprintbox_box() else 'Обновить IP' }}</a>
-    <a class="button" href="/admin/ip">Ручной режим IP</a>
+    <a class="button" href="/admin/ip">{{ 'Боксы SprintBOX' if vps_provider() == 'sprintbox' else 'Ручной режим IP' }}</a>
   {% endif %}
   <a class="action-bar-end" href="/admin/install/script">Скачать скрипт установки</a>
 </div>

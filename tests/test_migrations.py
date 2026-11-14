@@ -163,8 +163,9 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "vpn_anchors",
         "sprintbox_accounts",
         "sprintbox_boxes",
+        "sprintbox_deletions",
     }
-    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    assert [row["version"] for row in migration_rows] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     assert [row["name"] for row in migration_rows] == [
         "legacy_schema",
         "desired_applied_snapshots",
@@ -177,6 +178,7 @@ def test_fresh_database_has_current_schema_without_empty_backup(database_path: P
         "router_amnezia_peers",
         "vpn_anchors",
         "sprintbox_accounts",
+        "sprintbox_box_controls",
     ]
     assert [row["checksum"] for row in migration_rows] == [
         migration.checksum for migration in migrations.MIGRATIONS

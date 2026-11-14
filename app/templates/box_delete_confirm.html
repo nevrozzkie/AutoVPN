@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Удаление бокса SprintBOX</h1>
+<section class="panel">
+<p>Аккаунт: <strong>{{ operation.account_label }}</strong>.</p>
+<p>Бокс: <code>{{ operation.box_name }}</code>. IP: <code>{{ operation.ips|join(', ') or 'не назначен' }}</code>.</p>
+<p>Статус: {{ operation.status|status_label }}. Операция #{{ operation.id }}.</p>
+</section>
+{% if operation.error_message %}<section class="panel danger">{{ operation.error_message }}</section>{% endif %}
+{% if operation.status == 'CONFIRM' %}
+<section class="panel danger">Бокс и данные на нём будут удалены безвозвратно.{% if operation.is_anchor %} Это якорный VPN: его сохранённые профили тоже будут удалены после подтверждения удаления у провайдера.{% endif %}</section>
+<form method="post" action="/admin/sprintbox/deletions/{{ operation.id }}/confirm" class="panel setup-page">
+<label for="confirm-name">Для подтверждения введите {{ operation.box_name }}</label><input id="confirm-name" name="confirm_name" required autocomplete="off">
+{% if operation.is_anchor %}<label class="check-label"><input type="checkbox" name="delete_anchor" required> Подтверждаю удаление якорного VPN и его профилей</label>{% endif %}
+<div class="actions"><button class="danger-button" type="submit" {% if busy %}disabled{% endif %}>Удалить бокс безвозвратно</button><a href="/admin/ip">Отмена</a></div>
+</form>
+{% elif operation.status == 'DONE' %}<section class="panel ok">Отсутствие бокса подтверждено через API SprintBOX. Сохранённые записи и профили удалены из панели.</section>
+{% elif operation.status == 'AMBIGUOUS' %}
+<p>Запрос повторно не отправляется. Проверьте результат через API.</p>
+<form method="post" action="/admin/sprintbox/deletions/{{ operation.id }}/recheck"><button type="submit" {% if busy %}disabled{% endif %}>Проверить результат удаления</button></form>
+{% elif operation.status == 'FAILED' %}<p>Удаление не подтверждено.</p>
+{% endif %}
+{% if operation.status in ['FAILED', 'AMBIGUOUS'] %}<p><a href="/admin/sprintbox/accounts/{{ operation.account_id }}/boxes/{{ operation.box_name|urlencode }}/delete/confirm">Подготовить новую попытку удаления</a> — потребуется заново проверить и подтвердить бокс.</p>{% endif %}
+<p><a href="/admin/ip">К списку боксов</a> · <a href="/admin/operations">Журнал операций</a></p>
+{% endblock %}

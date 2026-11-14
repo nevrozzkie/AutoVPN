@@ -363,6 +363,10 @@ async def run_ip_change(
     sleeper: Sleeper = _sleep,
 ) -> None:
     from app.vps_provider import bound_provider
+    if bound_provider(operation_id).get('kind') == 'ANCHOR_PROMOTE':
+        from app.sprintbox_controls import run_anchor_promotion
+        await run_anchor_promotion(operation_id, timing=timing)
+        return
     if bound_provider(operation_id)["provider"] == "sprintbox":
         from app.sprintbox_rotation import run_sprintbox_rotation
         await run_sprintbox_rotation(operation_id, timing=timing, sleeper=sleeper)

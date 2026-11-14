@@ -82,6 +82,7 @@ from app.sprintbox_accounts import (
 from app.sprintbox import SprintboxClient
 
 from app.anchors import list_anchors, anchor_client
+from app.sprintbox_controls import (anchor_target, prepare_deletion, confirm_deletion, deletion, run_deletion, recheck_deletion)
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
     admin_password,
@@ -236,6 +237,8 @@ def _ensure_unique_enabled_protocol_ports(protocol_settings: dict[str, tuple[boo
 
 
 STATUS_LABELS = {
+    "CONFIRM":"Ожидает подтверждения",
+    "SUPERSEDED":"Основной сервер изменён",
     "OK": "Сетевой probe прошёл",
     "VERIFIED": "OK",
     "SERVICE_ACTIVE": "Сервис активен",
@@ -265,6 +268,9 @@ STATUS_LABELS = {
 
 
 STEP_LABELS = {
+    "anchor_queued":"переключение на якорь ожидает запуска",
+    "inspect_anchor":"проверка якорного бокса",
+    "configure_anchor":"применение текущих настроек к якорю",
     "get_ipv4_list": "получение списка IPv4",
     "find_current_main_ip": "поиск текущего главного IP",
     "create_new_ipv4": "покупка нового IPv4",
@@ -859,8 +865,94 @@ def admin_select_sprintbox_account(request: Request, account_id: int, _: str = D
 @app.get("/admin/anchors", response_class=HTMLResponse)
 def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     return templates.TemplateResponse(request, "anchors.html", {
-        "anchors": list_anchors(),
+        "anchors": list_anchors(), "busy":get_active_vps_operation() is not None,
     }, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.get("/admin/anchors/{anchor_id}/promote/confirm", response_class=HTMLResponse)
+def confirm_anchor_promotion(request: Request, anchor_id: str, _: str = Depends(require_admin)):
+    try:
+        with get_db() as db:
+            target = anchor_target(db, anchor_id)
+            owner = sprintbox_account(db, target['account_id'])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return templates.TemplateResponse(request, 'anchor_promote_confirm.html', {
+        'target': {k:target[k] for k in ('anchor_id','box_name','ip')},
+        'account_label': owner['label'], 'current_ip': get_setting('current_ip'),
+        'busy': get_active_vps_operation() is not None, 'ssh_decision':pending_ssh_decision(),
+    }, headers={'Cache-Control':'private, no-store'})
+
+
+@app.post("/admin/anchors/{anchor_id}/promote")
+def promote_anchor(anchor_id: str, background_tasks: BackgroundTasks, confirm_ip: str = Form(''),
+                   _: str = Depends(require_admin)):
+    from app.vpn_state import prepare_ip_change_operation
+    try:
+        with get_db() as db:
+            target = anchor_target(db, anchor_id)
+        if confirm_ip.strip() != target['ip']:
+            raise ValueError('Введите IP якоря для подтверждения переключения')
+        prepared = prepare_ip_change_operation(anchor_id=anchor_id)
+    except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(_run_operation_background, prepared.operation_id)
+    return RedirectResponse('/admin', status_code=303)
+
+
+def list_deletions() -> list[dict]:
+    with get_db() as db:
+        return db.execute("SELECT d.id,d.box_name,d.status,d.error_message,a.label AS account_label "
+                          "FROM sprintbox_deletions d JOIN sprintbox_accounts a ON a.id=d.account_id "
+                          "WHERE d.status!='CONFIRM' ORDER BY d.id DESC LIMIT 30").fetchall()
+
+
+@app.get('/admin/sprintbox/accounts/{account_id}/boxes/{box_name}/delete/confirm')
+async def confirm_box_deletion(account_id: int, box_name: str, _: str = Depends(require_admin)):
+    try:
+        operation_id = await prepare_deletion(account_id, box_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except Exception as exc:
+        with get_db() as db: cfg=sprintbox_account(db,account_id)
+        raise HTTPException(status_code=502, detail=sanitize_error(exc,cfg['login'],cfg['key'])) from None
+    return RedirectResponse(f'/admin/sprintbox/deletions/{operation_id}', status_code=303)
+
+
+@app.get('/admin/sprintbox/deletions/{operation_id}', response_class=HTMLResponse)
+def show_box_deletion(request: Request, operation_id: int, _: str = Depends(require_admin)):
+    try:
+        operation=deletion(operation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return templates.TemplateResponse(request,'box_delete_confirm.html', {
+        'operation':operation, 'auto_refresh':operation['status'] in {'PENDING','RUNNING'},
+        'busy':get_active_vps_operation() is not None,
+    }, headers={'Cache-Control':'private, no-store'})
+
+
+@app.post('/admin/sprintbox/deletions/{operation_id}/confirm')
+def delete_box(operation_id: int, background_tasks: BackgroundTasks, confirm_name: str = Form(''),
+               delete_anchor: str = Form(''), _: str = Depends(require_admin)):
+    try:
+        confirm_deletion(operation_id,confirm_name,delete_anchor=='on')
+    except (ValueError,OperationBusyError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from None
+    background_tasks.add_task(run_deletion,operation_id)
+    return RedirectResponse(f'/admin/sprintbox/deletions/{operation_id}',status_code=303)
+
+
+@app.post('/admin/sprintbox/deletions/{operation_id}/recheck')
+async def recheck_box_deletion(operation_id: int, _: str = Depends(require_admin)):
+    try:
+        await recheck_deletion(operation_id)
+    except (ValueError,OperationBusyError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from None
+    except Exception as exc:
+        row=deletion(operation_id)
+        with get_db() as db: cfg=sprintbox_account(db,row['account_id'])
+        raise HTTPException(status_code=502,detail=sanitize_error(exc,cfg['login'],cfg['key'])) from None
+    return RedirectResponse(f'/admin/sprintbox/deletions/{operation_id}',status_code=303)
 
 
 @app.get("/admin/tuning", response_class=HTMLResponse)
@@ -934,7 +1026,7 @@ def decide_sprintbox_ssh(operation_id: int, decision: str, background_tasks: Bac
 
 @app.get("/admin/ip", response_class=HTMLResponse)
 async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
-    if not aeza_ip_rotation_available():
+    if provider_name() != "sprintbox" and not aeza_ip_rotation_available():
         return RedirectResponse("/admin?aeza_required=1", status_code=status.HTTP_303_SEE_OTHER)
     error = request.query_params.get("error", "")
     ipv4_list: list[dict] = []
@@ -952,7 +1044,7 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             configs = [sprintbox_config(current=True)]
         for cfg in configs:
             inventory = {'label': cfg.get('label', cfg['login']), 'boxes': {}, 'error': '',
-                         'current': cfg.get('account_id', '') == active_owner}
+                         'current': cfg.get('account_id', '') == active_owner, 'account_id':cfg.get('account_id')}
             try:
                 raw = await SprintboxClient(cfg['login'], cfg['key']).list_boxes()
                 inventory['boxes'] = {name: {key: box.get(key, []) if key == 'ipv4' else box.get(key, '')
@@ -962,6 +1054,7 @@ async def admin_ip_manager(request: Request, _: str = Depends(require_admin)) ->
             inventories.append(inventory)
         return templates.TemplateResponse(request, 'sprintbox_boxes.html', {
             'inventories': inventories, 'current_box': provider_service_id(), 'current_ip': current_ip, 'error': error,
+            'busy':get_active_vps_operation() is not None, 'deletions':list_deletions(),
         }, headers={'Cache-Control': 'private, no-store'})
     try:
         client = get_aeza_client()
@@ -1417,6 +1510,7 @@ def admin_operations(request: Request, _: str = Depends(require_admin)) -> HTMLR
             "operations": list_operations(),
             "install_operations": list_install_operations(),
             "server_operations": list_server_operations(),
+            "deletions": list_deletions(),
             "auto_refresh": operation_running or install_running or server_running,
         },
     )

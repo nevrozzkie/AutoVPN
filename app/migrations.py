@@ -471,6 +471,19 @@ def _apply_sprintbox_accounts(connection: sqlite3.Connection) -> None:
     connection.execute('ALTER TABLE vpn_anchors ADD COLUMN account_id INTEGER REFERENCES sprintbox_accounts(id)')
 
 
+def _apply_sprintbox_box_controls(connection: sqlite3.Connection) -> None:
+    connection.execute('ALTER TABLE vpn_anchors ADD COLUMN maintenance_operation_id INTEGER')
+    connection.execute("""CREATE TABLE sprintbox_deletions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL REFERENCES sprintbox_accounts(id),
+        box_name TEXT NOT NULL, ips_json TEXT NOT NULL, credential_hash TEXT NOT NULL,
+        anchor_ids_json TEXT NOT NULL, allow_anchor INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL, action_state TEXT NOT NULL DEFAULT 'NOT_STARTED',
+        task_id TEXT, error_message TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -565,6 +578,12 @@ MIGRATIONS = (
         name="sprintbox_accounts",
         signature="store multiple SprintBOX accounts and box ownership; link preserved anchors to owner",
         apply=_apply_sprintbox_accounts,
+    ),
+    Migration(
+        version=12,
+        name="sprintbox_box_controls",
+        signature="durable manually confirmed box deletions and anchor maintenance quarantine during promotion",
+        apply=_apply_sprintbox_box_controls,
     ),
 )
 
