@@ -188,7 +188,7 @@ def test_api_form_auth_and_async_task_contract(monkeypatch):
     assert asyncio.run(client.create_box("tariff", "ubuntu2404", "ssh-ed25519 AAAA", "marker")) == "task-123"
     assert parse_qs(requests[0].content.decode()) == {
         "service": ["tariff"], "distributive": ["ubuntu2404"], "arch": ["x64"],
-        "pubkey": ["ssh-ed25519 AAAA"], "box_desc": ["marker"],
+        "pubkey": ["ssh-ed25519 AAAA"], "box_desc": ["marker"], "scheduled": ["false"],
     }
     assert asyncio.run(client.delete_box("box-old")) == "task-123"
     assert requests[1].url.path == "/sprintbox/box/delete"

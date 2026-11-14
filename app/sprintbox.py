@@ -76,7 +76,7 @@ class SprintboxClient:
     async def create_box(self, service: str, distributive: str, pubkey: str, description: str) -> str:
         return self.task_id(await self._request(
             "box/add", service=service, distributive=distributive, arch="x64",
-            pubkey=pubkey, box_desc=description,
+            pubkey=pubkey, box_desc=description, scheduled="false",
         ))
 
     async def delete_box(self, name: str) -> str:
