@@ -246,8 +246,11 @@ def is_public_token_path(path: str) -> bool:
         return True
     if len(parts) < 2 or parts[0] != "client":
         return False
+    if parts[2:] == ("ip-change",) or (len(parts) == 5 and parts[2] == "ip-change"):
+        return True
     return parts[2:] in {
         (),
+        ("manifest.webmanifest",),
         ("subscription.qr",),
         ("amnezia.qr",),
         ("protocols", "refresh"),

@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' }
+
+def signingFile = file(providers.environmentVariable('AUTOVPN_SIGNING_PROPERTIES')
+        .getOrElse('../../data/android-signing/signing.properties'))
+def releaseKeys = new Properties()
+if (signingFile.exists()) signingFile.withInputStream { releaseKeys.load(it) }
+
+android {
+    namespace 'org.autovpn.tv'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'org.autovpn.tv'
+        minSdk 26
+        targetSdk 35
+        versionCode 2
+        versionName '0.2.0'
+    }
+    signingConfigs {
+        if (!releaseKeys.isEmpty()) {
+            release {
+                storeFile file(releaseKeys['storeFile'])
+                storePassword releaseKeys['storePassword']
+                keyAlias releaseKeys['keyAlias']
+                keyPassword releaseKeys['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (!releaseKeys.isEmpty()) signingConfig signingConfigs.release
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies { testImplementation 'junit:junit:4.13.2' }

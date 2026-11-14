@@ -2,7 +2,16 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0d1117">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="AutoVPN">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/client/{{ client.token }}/manifest.webmanifest">
+    <link rel="icon" type="image/png" href="/static/pwa/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/pwa/icon-180.png">
+    <script src="/static/pwa/install.js" defer></script>
     <script>
       (function () {
         const saved = localStorage.getItem("autovpn-theme");
@@ -52,7 +61,7 @@
       main {
         max-width: 900px;
         margin: 0 auto;
-        padding: 28px;
+        padding: max(28px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
       }
       section {
         background: var(--panel);
@@ -81,6 +90,7 @@
       button:hover, a.button:hover {
         background: var(--accent-hover);
       }
+      [hidden] { display: none !important; }
       .muted { color: var(--muted); }
       .status-grid {
         display: grid;
@@ -333,7 +343,7 @@
       }
       @media (max-width: 720px) {
         main {
-          padding: 18px;
+          padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
         }
         .guide-stage summary {
           padding: 12px;
@@ -386,13 +396,38 @@
   </head>
   <body>
     <main>
-      {% if anchors %}
-      <section>
-        <h2>Якорные VPN</h2>
-        <p class="muted">Отдельные подключения к сохранённым серверам. Можно попробовать в сети, где основной VPN недоступен.</p>
-        {% for anchor in anchors %}
-        <p><a class="button" href="/anchor/{{ anchor.anchor_id }}/client/{{ client.token }}">{{ anchor.box_name }} · {{ anchor.ip }}</a></p>
-        {% endfor %}
+      {% if ip_change.enabled or ip_change.operation %}
+      <section id="ip-change">
+        <h2>Смена IP</h2>
+        <p class="muted">Смена IP общая для всех пользователей VPN. После смены обновите подписку или ключ AmneziaVPN на этой странице и проверьте подключение. Старые серверы удаляются в 23:30 МСК после подтверждения; до этого старые подключения продолжают работать.</p>
+        {% set operation = ip_change.operation %}
+        {% if ip_change.busy %}
+          <p>Идёт настройка VPN. Пожалуйста, подождите — страница обновится автоматически.</p>
+        {% elif operation and operation.action_state == 'AWAITING_USER_REVIEW' %}
+          <p>Новый IP готов. Обновите подключение и проверьте: всё работает?</p>
+          <form method="post" action="/client/{{ client.token }}/ip-change/{{ operation.id }}/accept">
+            <button type="submit">Да, всё ок</button>
+          </form>
+          <form method="post" action="/client/{{ client.token }}/ip-change/{{ operation.id }}/retry">
+            <button type="submit">Нет, сменить IP ещё раз</button>
+          </form>
+        {% elif operation and operation.action_state == 'SSH_UNREACHABLE' %}
+          <p>Новый сервер пока не отвечает. Текущее подключение сохранено.</p>
+          {% for decision, label in [('ssh-wait', 'Подождать ещё'), ('ssh-retry', 'Создать другой сервер'), ('ssh-cancel', 'Отмена')] %}
+          <form method="post" action="/client/{{ client.token }}/ip-change/{{ operation.id }}/{{ decision }}"><button type="submit">{{ label }}</button></form>
+          {% endfor %}
+        {% else %}
+          {% if operation and operation.action_state == 'CLEANUP_SCHEDULED' %}
+            <p>Подтверждение принято. Удаление старых серверов назначено на {{ ip_change.cleanup_at|msk }}. Обновите подключения на всех устройствах до этого времени.</p>
+          {% elif operation and operation.status in ['FAILED', 'AMBIGUOUS', 'TIMED_OUT'] %}
+            <p>Не удалось завершить смену IP. Если повторная попытка недоступна, обратитесь к администратору.</p>
+          {% endif %}
+          {% if ip_change.pending_review %}
+            <p>Ожидаем, пока другой пользователь проверит новое подключение.</p>
+          {% elif ip_change.enabled %}
+            <form method="post" action="/client/{{ client.token }}/ip-change"><button type="submit">Сменить IP</button></form>
+          {% endif %}
+        {% endif %}
       </section>
       {% endif %}
       <div class="page-top">
@@ -411,6 +446,23 @@
         </div>
         <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
       </div>
+
+      <section data-pwa-section>
+        <h2>AutoVPN на главном экране</h2>
+        <p>Установите личную страницу как приложение: подключения и смена IP будут под рукой.</p>
+        <button type="button" data-pwa-install hidden>Установить AutoVPN</button>
+        <details>
+          <summary>Как установить на телефон</summary>
+          <p data-pwa-help>Android: откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран». iPhone и iPad: откройте страницу в Safari, нажмите «Поделиться» → «На экран Домой».</p>
+        </details>
+      </section>
+      <section>
+        <h2>Приложение AutoVPN для Android и TV</h2>
+        <p>Добавляйте актуальные подключения в AmneziaVPN и NekoBox с телефона или телевизора. Для работы установите один из этих VPN-клиентов.</p>
+        <a class="button" href="/static/downloads/AutoVPN-0.2.0.apk" download>Скачать APK · 0.2.0</a>
+        <p class="muted">Android 8 и новее. После установки нажмите «Привязать AutoVPN» и вставьте ссылку на эту личную страницу.</p>
+        <details><summary>Переход с тестовой AutoVPN TV 0.1.0</summary><p>Сначала удалите тестовую версию, затем установите новый APK и повторите привязку. Подключения в AmneziaVPN и NekoBox сохранятся.</p></details>
+      </section>
 
       {% if protocol_status_available %}
         <section>
@@ -841,6 +893,9 @@
       </section>
     </main>
     <script>
+      {% if ip_change.busy %}
+      setTimeout(() => window.location.reload(), 5000);
+      {% endif %}
       function toggleTheme() {
         const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
         const next = current === "dark" ? "light" : "dark";

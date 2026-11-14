@@ -49,6 +49,18 @@ def validate_review(db, operation_id: int) -> dict:
     return row
 
 
+def has_pending_review(db) -> bool:
+    rows = db.execute("SELECT id FROM ip_change_operations WHERE status='DONE' "
+                      "AND action_state='AWAITING_USER_REVIEW'").fetchall()
+    for row in rows:
+        try:
+            validate_review(db, row['id'])
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def pending_review() -> dict | None:
     with get_db() as db:
         rows = db.execute("SELECT id FROM ip_change_operations WHERE status = 'DONE' AND action_state = 'AWAITING_USER_REVIEW' ORDER BY id DESC").fetchall()

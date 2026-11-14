@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <queries>
+        <package android:name="org.amnezia.vpn" />
+        <package android:name="moe.nb4a" />
+    </queries>
+    <application android:label="AutoVPN" android:icon="@drawable/icon" android:banner="@drawable/banner"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/extraction_rules"
+        android:usesCleartextTraffic="false" android:supportsRtl="true">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -286,12 +286,29 @@ async def _resume_ssh_wait(operation_id: int, config: CapturedVpnConfig,
                          error_message=sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password()))
 
 
+def _cleanup_target(db, operation_id: int) -> dict:
+    if not context(db, operation_id).get('cleanup_at'):
+        return validate_target(db, operation_id)
+    # Scheduled cleanups may outlive further rotations. Protect today's primary,
+    # and delete only the exact retained boxes approved in this operation.
+    bound = bound_provider(operation_id)
+    credentials = bound_credentials(db, bound)
+    if (provider_name() != 'sprintbox' or credentials['login'] != bound.get('login')
+            or hashlib.sha256(credentials['key'].encode()).hexdigest() != bound.get('credential_hash')):
+        raise IpChangeError('SprintBOX cleanup account changed; inspect manually')
+    def value(key):
+        row = db.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        return row['value'] if row else ''
+    return {'new_ip': value('current_ip'),
+            'new_ip_id': value('config.sprintbox_box_name'),
+            'account_id': current_id(db)}
+
+
 async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming | None = None,
                                sleeper: Sleeper = _sleep) -> None:
     timing = timing or IpRotationTiming.configured()
     bound = bound_provider(operation_id)
-    with get_db() as db:
-        credentials = bound_credentials(db, bound)
+    credentials = {"key": "", "login": ""}
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         claimed = db.execute(
@@ -306,7 +323,8 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
     ambiguous = False
     try:
         with get_db() as db:
-            active = validate_target(db, operation_id)
+            credentials = bound_credentials(db, bound)
+            active = _cleanup_target(db, operation_id)
         retained = operation_context.get("retained_boxes", {})
         results = operation_context.setdefault("cleanup_results", {})
         for ref, expected_ip in dict(retained).items():
@@ -315,14 +333,14 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
             name = ref
             try:
                 with get_db() as db:
-                    validate_target(db, operation_id)
+                    active = _cleanup_target(db, operation_id)
                     owner_credentials, name = box_owner(db, ref, credentials)
                     from app.anchors import protected_box
                     if protected_box(db, owner_credentials["login"], name, expected_ip):
                         results[ref] = {"state": "ANCHOR"}
                         continue
-                if (name == active['new_ip_id'] and
-                        owner_credentials.get('account_id') == bound.get('account_id')):
+                if (expected_ip == active['new_ip'] or (name == active['new_ip_id'] and
+                        owner_credentials.get('account_id', '') == active.get('account_id', bound.get('account_id', '')))):
                     raise IpChangeError("Refusing to delete the active VPN box")
                 client = SprintboxClient(owner_credentials['login'], owner_credentials['key'], timeout=timing.provider_timeout)
                 await _step(operation_id, "delete_old_box")
@@ -334,6 +352,17 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
                     raise IpChangeError("Box IP changed; inspect it manually")
                 if ref in results:
                     raise IpChangeError("Deletion was already attempted; inspect it manually")
+                # Overlapping nightly queues can contain the same retained box.
+                # Never repeat an uncertain deletion sent by another operation.
+                with get_db() as db:
+                    for prior in db.execute("SELECT key,value FROM settings WHERE key LIKE 'ip_change.%.sprintbox'").fetchall():
+                        if prior['key'] == f'ip_change.{operation_id}.sprintbox':
+                            continue
+                        prior_ctx = json.loads(prior['value'])
+                        prior_state = prior_ctx.get('cleanup_results', {}).get(ref, {}).get('state')
+                        if (prior_ctx.get('retained_boxes', {}).get(ref) == expected_ip
+                                and prior_state in {'SENDING', 'SENT', 'AMBIGUOUS'}):
+                            raise IpChangeError('Another deletion attempt is uncertain; inspect manually')
                 results[ref] = {"state": "SENDING"}
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
                 sending = True

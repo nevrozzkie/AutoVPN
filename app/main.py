@@ -71,10 +71,11 @@ from app.vps_provider import (
     ip_rotation_available, first_sprintbox_box,
 )
 from app.sprintbox_review import (
-    pending_review, prepare_cleanup, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait,
+    pending_review, pending_ssh_decision, prepare_ssh_wait, cancel_ssh_wait,
     pending_host_key_retry, prepare_host_key_retry,
 )
 from app.sprintbox_rotation import run_sprintbox_cleanup
+from app.scheduled_cleanup import cleanup_queue, queue_cleanup_now, source_label
 from app.sprintbox_accounts import (
     list_accounts, save_account, select_account, ensure_legacy_account, account as sprintbox_account,
     current_id as sprintbox_current_account_id,
@@ -162,7 +163,13 @@ async def lifespan(_: FastAPI):
     fail_incomplete_install_operations(
         "AutoVPN was restarted while this VPS operation was still running. Review its state before retrying."
     )
-    yield
+    from app.scheduled_cleanup import cleanup_loop
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -256,6 +263,7 @@ STATUS_LABELS = {
     "AMBIGUOUS": "Требуется проверка",
     "PURCHASE_SENDING": "Отправка запроса создания",
     "PURCHASE_SENT": "Ожидание создания",
+    "CLEANUP_SCHEDULED": "Удаление назначено на 23:30 МСК",
     "AWAITING_USER_REVIEW": "Ожидает вашей проверки",
     "APPLYING": "Установка VPN",
     "RECONCILED": "Проверено вручную",
@@ -323,6 +331,7 @@ def step_label(value: object) -> str:
         "delete_old_box": "удаление старого бокса",
         "wait_old_box_deletion": "ожидание удаления старого бокса",
         "awaiting_user_review": "ожидание вашей проверки VPN",
+        "cleanup_scheduled": "удаление старых серверов в 23:30 МСК",
         "cleanup_queued": "ожидание удаления старых боксов",
         "ssh_decision": "SSH недоступен — выберите действие",
         "cancelled": "попытка отменена",
@@ -334,6 +343,7 @@ def step_label(value: object) -> str:
 templates.env.filters["msk"] = format_msk
 templates.env.filters["status_label"] = status_label
 templates.env.filters["step_label"] = step_label
+templates.env.globals["ip_change_source"] = source_label
 templates.env.globals["vps_provider"] = provider_name
 templates.env.globals["first_sprintbox_box"] = first_sprintbox_box
 templates.env.globals["provider_label"] = lambda: "SprintBOX" if provider_name() == "sprintbox" else "Aeza"
@@ -705,6 +715,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
             "protocol_status_available": protocol_status_available,
             "base_url": str(request.base_url).rstrip("/"),
             "latest_operation": get_latest_operation(),
+            "cleanup_queue": cleanup_queue(),
             "sprintbox_review": pending_review() if provider_name() == "sprintbox" else None,
             "sprintbox_ssh_decision": pending_ssh_decision(),
             "sprintbox_host_key_retry": pending_host_key_retry(),
@@ -782,15 +793,26 @@ def refresh_ip(background_tasks: BackgroundTasks, _: str = Depends(require_admin
 
 
 @app.post("/admin/sprintbox/{operation_id}/accept")
-def accept_sprintbox(operation_id: int, background_tasks: BackgroundTasks,
+def accept_sprintbox(operation_id: int,
                      keep_boxes: list[str] = Form([]),
                      _: str = Depends(require_admin)) -> RedirectResponse:
     try:
-        prepare_cleanup(operation_id, keep_boxes=keep_boxes)
+        from app.scheduled_cleanup import schedule_cleanup
+        schedule_cleanup(operation_id, keep_boxes=keep_boxes)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post('/admin/sprintbox/{operation_id}/cleanup-now')
+def cleanup_sprintbox_now(operation_id: int, background_tasks: BackgroundTasks,
+                          _: str = Depends(require_admin)) -> RedirectResponse:
+    try:
+        queue_cleanup_now(operation_id)
     except (ValueError, OperationBusyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     background_tasks.add_task(run_sprintbox_cleanup, operation_id)
-    return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse('/admin', status_code=303)
 
 
 def _sprintbox_accounts_page(request: Request, *, error: str = "", checked: dict | None = None,
@@ -1753,6 +1775,95 @@ def sing_box_subscription(token: str) -> JSONResponse:
     return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
 
 
+def user_ip_change_state(client_id: int) -> dict:
+    enabled = (provider_name() == 'sprintbox' and safe_aeza_ip_rotation_enabled()
+               and transactional_vpn_apply_enabled() and bool(get_setting('current_ip')))
+    with get_db() as db:
+        row = db.execute("SELECT o.* FROM ip_change_operations o JOIN settings s "
+                         "ON s.key='ip_change.' || o.id || '.client_id' "
+                         "WHERE s.value=? ORDER BY o.id DESC LIMIT 1", (str(client_id),)).fetchone()
+        from app.sprintbox_review import has_pending_review
+        pending = has_pending_review(db)
+        due = None
+        if row:
+            from app.sprintbox_review import context
+            due = context(db, row['id']).get('cleanup_at')
+    return {'enabled': enabled, 'operation': row, 'cleanup_at': due,
+            'busy': get_active_vps_operation() is not None, 'pending_review': bool(pending)}
+
+
+def require_vpn_user(token: str) -> dict:
+    client = get_client_by_token(token)
+    if not client or not client['enabled']:
+        raise HTTPException(status_code=404)
+    return client
+
+
+@app.get('/client/service-worker.js')
+def client_service_worker() -> Response:
+    return Response((PACKAGE_DIR / 'static/pwa/service-worker.js').read_text(),
+                    media_type='text/javascript', headers={'Cache-Control': 'private, no-store',
+                                                          'Service-Worker-Allowed': '/client/'})
+
+
+@app.get('/client/{token}/manifest.webmanifest')
+def client_manifest(token: str) -> JSONResponse:
+    require_vpn_user(token)
+    start = f'/client/{token}'
+    return JSONResponse({
+        'id': start, 'name': 'AutoVPN', 'short_name': 'AutoVPN', 'lang': 'ru',
+        'description': 'Личная страница AutoVPN: подключения и смена IP',
+        'start_url': start, 'scope': '/client/', 'display': 'standalone',
+        'background_color': '#0d1117', 'theme_color': '#0d1117',
+        'icons': [{'src': f'/static/pwa/icon-{size}.png', 'sizes': f'{size}x{size}',
+                   'type': 'image/png', 'purpose': 'any maskable'} for size in (192, 512)],
+    }, media_type='application/manifest+json', headers={'Cache-Control': 'private, no-store'})
+
+
+@app.post('/client/{token}/ip-change')
+def start_user_ip_change(token: str, background_tasks: BackgroundTasks) -> RedirectResponse:
+    client = require_vpn_user(token)
+    if not user_ip_change_state(client['id'])['enabled']:
+        raise HTTPException(status_code=409, detail='Смена IP сейчас недоступна')
+    from app.vpn_state import prepare_ip_change_operation
+    try:
+        prepared = prepare_ip_change_operation(user_client_id=client['id'])
+    except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(_run_operation_background, prepared.operation_id)
+    return RedirectResponse(f'/client/{token}', status_code=303)
+
+
+@app.post('/client/{token}/ip-change/{operation_id}/{decision}')
+def decide_user_ip_change(token: str, operation_id: int, decision: str,
+                          background_tasks: BackgroundTasks) -> RedirectResponse:
+    client = require_vpn_user(token)
+    from app.scheduled_cleanup import require_owner, schedule_cleanup
+    from app.vpn_state import prepare_ip_change_operation
+    try:
+        with get_db() as db:
+            require_owner(db, operation_id, client['id'])
+        if decision == 'accept':
+            schedule_cleanup(operation_id, client_id=client['id'])
+        elif decision in {'retry', 'ssh-retry', 'ssh-wait', 'ssh-cancel'}:
+            if decision != 'ssh-cancel' and not user_ip_change_state(client['id'])['enabled']:
+                raise ValueError('Смена IP сейчас недоступна')
+            if decision == 'ssh-cancel':
+                cancel_ssh_wait(operation_id)
+            elif decision == 'ssh-wait':
+                prepare_ssh_wait(operation_id)
+                background_tasks.add_task(_run_operation_background, operation_id)
+            else:
+                args = {'review_operation_id' if decision == 'retry' else 'ssh_decision_id': operation_id}
+                prepared = prepare_ip_change_operation(user_client_id=client['id'], **args)
+                background_tasks.add_task(_run_operation_background, prepared.operation_id)
+        else:
+            raise HTTPException(status_code=404)
+    except (ValueError, OperationBusyError, IpChangeSafetyHoldError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return RedirectResponse(f'/client/{token}', status_code=303)
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     config = capture_vpn_config()
@@ -1789,13 +1900,13 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             if config.amnezia.protocol.enabled
             else "",
             "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
-            "anchors": list_anchors(token),
+            "ip_change": user_ip_change_state(client["id"]),
         },
     )
 
 
 @app.get("/anchor/{anchor_id}/{kind}/{token}")
-def anchor_resource(request: Request, anchor_id: str, kind: str, token: str):
+def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, _: str = Depends(require_admin)):
     if kind not in {"client", "sub", "sing-box", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
         raise HTTPException(status_code=404)
     bound = anchor_client(anchor_id, token)

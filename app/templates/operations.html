@@ -6,7 +6,7 @@
 <table>
   <thead>
     <tr>
-      <th>ID</th>
+      <th>ID / источник</th>
       <th>Статус</th>
       <th>Шаг</th>
       <th>Старый IP</th>
@@ -22,7 +22,7 @@
   <tbody>
     {% for operation in operations %}
       <tr>
-        <td>{{ operation.id }}</td>
+        <td>{{ operation.id }}<br>{{ ip_change_source(operation.id) }}</td>
         <td>{{ (operation.action_state if operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED'] else operation.status)|status_label }}</td>
         <td>{{ operation.current_step|step_label }}</td>
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>

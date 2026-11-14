@@ -115,10 +115,22 @@ def prepare_install_operation(target_host: str) -> PreparedInstall:
 
 def prepare_ip_change_operation(*, review_operation_id: int | None = None,
                                 ssh_decision_id: int | None = None,
-                                anchor_id: str | None = None) -> PreparedIpChange:
+                                anchor_id: str | None = None,
+                                user_client_id: int | None = None) -> PreparedIpChange:
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        if user_client_id is not None:
+            enabled = db.execute('SELECT enabled,name FROM clients WHERE id=?', (user_client_id,)).fetchone()
+            if not enabled or not enabled['enabled']:
+                raise ValueError('Пользователь отключён')
+            if review_operation_id is not None or ssh_decision_id is not None:
+                from app.scheduled_cleanup import require_owner
+                require_owner(db, review_operation_id if review_operation_id is not None else ssh_decision_id, user_client_id)
+            else:
+                from app.sprintbox_review import has_pending_review
+                if has_pending_review(db):
+                    raise ValueError('Дождитесь подтверждения предыдущей смены IP')
         if sum(value is not None for value in (review_operation_id, ssh_decision_id, anchor_id)) > 1:
             raise ValueError("Choose one SprintBOX decision")
         if ssh_decision_id is not None:
@@ -172,10 +184,18 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
         )
         operation_id = int(cursor.lastrowid)
         acquire_vps_lease(db, "IP_CHANGE", operation_id)
+        if user_client_id is not None:
+            db.execute('INSERT INTO settings(key,value) VALUES (?,?)',
+                       (f'ip_change.{operation_id}.client_id', str(user_client_id)))
+        source = {'kind': 'user', 'client_id': user_client_id, 'name': enabled['name']} if user_client_id is not None else {'kind': 'admin', 'name': 'Администратор'}
+        db.execute('INSERT INTO settings(key,value) VALUES (?,?)',
+                   (f'ip_change.{operation_id}.source', json.dumps(source, ensure_ascii=False)))
         from app.vps_provider import bind_provider
         bind_provider(db, operation_id)
         from app.sprintbox_review import _bound, context
         bound = _bound(db, operation_id)
+        if user_client_id is not None and bound.get('provider') != 'sprintbox':
+            raise ValueError('Смена IP пользователями доступна только для SprintBOX')
         if anchor_id is not None:
             from app.sprintbox_controls import bind_anchor_promotion
             bound = bind_anchor_promotion(db, operation_id, anchor_id, bound, config)

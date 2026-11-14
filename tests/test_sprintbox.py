@@ -476,23 +476,26 @@ def test_anchor_routes_keep_frozen_endpoints_and_deny_other_or_revoked_clients(s
     token = original.clients[0].token
     later_client = create_client("Not installed on anchor")
     base = f"/anchor/{anchor['anchor_id']}"
+    set_setting("config.admin_password", "test-password")
+    auth = ("admin", "test-password")
     with TestClient(main.app, base_url="http://panel.local") as client:
         for kind in ("client", "sub", "sing-box", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"):
-            response = client.get(f"{base}/{kind}/{token}")
+            assert client.get(f"{base}/{kind}/{token}").status_code == 401
+            response = client.get(f"{base}/{kind}/{token}", auth=auth)
             assert response.status_code == 200, response.text[:200]
             assert response.headers["cache-control"] == "private, no-store"
             assert response.headers["referrer-policy"] == "no-referrer"
-            assert client.get(f"{base}/{kind}/{later_client['token']}").status_code == 404
-        assert f"@{OLD}:" in client.get(f"{base}/sub/{token}").text
-        assert f"@{NEW}:" not in client.get(f"{base}/sub/{token}").text
-        outbounds = client.get(f"{base}/sing-box/{token}").json()["outbounds"]
+            assert client.get(f"{base}/{kind}/{later_client['token']}", auth=auth).status_code == 404
+        assert f"@{OLD}:" in client.get(f"{base}/sub/{token}", auth=auth).text
+        assert f"@{NEW}:" not in client.get(f"{base}/sub/{token}", auth=auth).text
+        outbounds = client.get(f"{base}/sing-box/{token}", auth=auth).json()["outbounds"]
         assert outbounds[1]["server"] == OLD and outbounds[2]["server"] == OLD
-        assert f"Endpoint = {OLD}:" in client.get(f"{base}/amnezia/{token}").text
-        assert anchor["anchor_id"] in client.get(f"/client/{token}").text
-        assert original.vless.private_key not in client.get(f"{base}/client/{token}").text
+        assert f"Endpoint = {OLD}:" in client.get(f"{base}/amnezia/{token}", auth=auth).text
+        assert anchor["anchor_id"] not in client.get(f"/client/{token}").text
+        assert original.vless.private_key not in client.get(f"{base}/client/{token}", auth=auth).text
         assert client.get("/admin/anchors").status_code == 401
         set_client_enabled(original.clients[0].id, False)
-        assert client.get(f"{base}/sub/{token}").status_code == 404
+        assert client.get(f"{base}/sub/{token}", auth=auth).status_code == 404
 
 
 def test_accept_checkbox_http_saves_anchor_and_prevents_duplicate_decision(scenario):
@@ -829,9 +832,11 @@ def test_accept_endpoint_requires_auth_and_is_not_replayed(scenario):
         assert client.post(url, auth=("admin", "test-password"), headers={"Origin": "http://evil.local"}).status_code == 403
         response = client.post(url, auth=("admin", "test-password"), headers={"Origin": "http://panel.local"}, follow_redirects=False)
         assert response.status_code == 303
-        assert scenario.deleted_names == ["box-old"]
+        assert scenario.deleted_names == []
+        assert get_operation(first)["action_state"] == "CLEANUP_SCHEDULED"
         assert client.post(url, auth=("admin", "test-password"), headers={"Origin": "http://panel.local"}).status_code == 409
-        assert scenario.deleted_names == ["box-old"]
+        assert scenario.deleted_names == []
+        assert get_operation(first)["action_state"] == "CLEANUP_SCHEDULED"
 
 
 def test_cleanup_continues_after_one_box_is_rejected(scenario, monkeypatch):
