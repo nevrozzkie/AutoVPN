@@ -1965,7 +1965,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     device_management_available = (device_vpn_state['applied_revision'] == device_vpn_state['desired_revision'] and get_active_vps_operation() is None)
     selected_id = request.query_params.get('device','mobile')
     selected_device = next((item for item in devices if str(item['id']) == selected_id),None)
-    if selected_device is None or selected_device.get('placeholder'):
+    if selected_device is None:
         raise HTTPException(status_code=404)
     device_config, device_client = config, captured_client
     if not selected_device['legacy'] and selected_device['ready']:

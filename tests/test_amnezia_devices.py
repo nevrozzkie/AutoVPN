@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -40,10 +41,17 @@ def test_add_export_revoke_preserves_first_identity_and_other_protocols(device_u
     original=capture_vpn_config()
     with TestClient(main.app,base_url='http://panel.local') as http:
         legacy=http.get(f"/amnezia/{user['token']}").text
+        def tabs():
+            page = http.get(f"/client/{user['token']}").text
+            return re.search(r'<nav class="device-tabs".*?</nav>', page, re.S).group()
+        assert '<a ' not in tabs()
+        assert 'Добавить устройство' in tabs()
+        assert 'desktop' not in tabs()
         start=http.post(f"/client/{user['token']}/amnezia-devices",data={'name':'desktop'},follow_redirects=False)
         assert start.status_code==303
         device_id=int(start.headers['location'].split('device=')[1].split('#')[0])
         assert len(calls)==1
+        assert 'Главный' in tabs() and 'desktop' in tabs()
         first=http.get(f"/amnezia/{user['token']}")
         second=http.get(f"/amnezia/{user['token']}?device={device_id}")
         assert first.text==legacy and second.status_code==200
@@ -72,6 +80,7 @@ def test_add_export_revoke_preserves_first_identity_and_other_protocols(device_u
         assert http.get(f"/amnezia/{user['token']}?device={device_id}").status_code==404
         assert http.get(f"/amnezia/{user['token']}").text==legacy
         assert capture_vpn_config().amnezia_devices==()
+        assert '<a ' not in tabs() and 'Добавить устройство' in tabs()
 
 
 def test_unconfirmed_and_failed_identity_never_exports_legacy_key(device_user,monkeypatch):
@@ -105,9 +114,9 @@ def test_restart_preserves_pending_peer_and_prevents_auto_resend(device_user):
 
 def test_device_inputs_disabled_owner_and_ip_address_reservations(device_user):
     user,other,_=device_user
-    with pytest.raises(ValueError):devices.prepare_device(user['id'],name='mobile')
+    with pytest.raises(ValueError):devices.prepare_device(user['id'],name='ГЛАВНЫЙ')
     with pytest.raises(ValueError):devices.prepare_device(user['id'],name='\n')
-    first,operation=devices.prepare_device(user['id'],name='desktop')
+    first,operation=devices.prepare_device(user['id'],name='mobile')
     asyncio.run(devices.run_device_sync(operation))
     second,operation=devices.prepare_device(other['id'],name='desktop')
     asyncio.run(devices.run_device_sync(operation))

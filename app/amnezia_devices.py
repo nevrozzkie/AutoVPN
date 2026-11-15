@@ -25,7 +25,7 @@ def device_list(client_id):
         applied = applied_config(db)
         known = {d.id: d.public_key for d in applied.amnezia_devices} if applied else {}
         rows = db.execute('SELECT d.*,o.status AS operation_status FROM amnezia_devices d LEFT JOIN vpn_install_operations o ON o.id=d.operation_id WHERE d.client_id=? ORDER BY d.id', (client_id,)).fetchall()
-        result = [{'id': 'mobile', 'name': 'mobile', 'ready': True, 'legacy': True, 'deleted': False}]
+        result = [{'id': 'mobile', 'name': 'Главный', 'ready': True, 'legacy': True, 'deleted': False}]
         for row in rows:
             if row['deleted_at'] and row['id'] not in known:
                 continue
@@ -33,8 +33,6 @@ def device_list(client_id):
                            'ready': not row['deleted_at'] and known.get(row['id']) == row['public_key'],
                            'deleted': bool(row['deleted_at']),
                            'failed': row['operation_status'] in {'FAILED','AMBIGUOUS','TIMED_OUT'}})
-        if not any(row['name'].casefold() == 'desktop' for row in rows):
-            result.insert(1, {'id': 'desktop', 'name': 'desktop', 'placeholder': True, 'ready': False})
         return result
 
 
@@ -59,8 +57,8 @@ def prepare_device(client_id, *, name=None, delete_id=None):
         name = name.strip()
         if not 1 <= len(name) <= 40 or any(unicodedata.category(c).startswith('C') for c in name):
             raise ValueError('Название должно содержать от 1 до 40 символов')
-        if name.casefold() == 'mobile':
-            raise ValueError('Название mobile закреплено за первым конфигом')
+        if name.casefold() == 'главный':
+            raise ValueError('Название «Главный» закреплено за нулевым конфигом')
     host = resolve_eu_host()
     with get_db() as db:
         db.execute('BEGIN IMMEDIATE')

@@ -513,9 +513,7 @@
         <h2>AmneziaVPN</h2>
         <nav class="device-tabs" aria-label="Устройства AmneziaVPN">
           {% for device in amnezia_devices %}
-            {% if device.placeholder %}
-            <form method="post" action="/client/{{ client.token }}/amnezia-devices"><input type="hidden" name="name" value="desktop"><button type="submit" class="device-tab" {% if not device_management_available %}disabled{% endif %}>desktop</button></form>
-            {% else %}
+            {% if not device.legacy or amnezia_devices|length > 1 %}
             <a class="device-tab {% if device.id == selected_device.id %}is-active{% endif %}" {% if device.id == selected_device.id %}aria-current="page"{% endif %} href="/client/{{ client.token }}{% if not device.legacy %}?device={{ device.id }}{% endif %}#amnezia-section">{{ device.name }}{% if device.failed %} · !{% endif %}</a>
             {% endif %}
           {% endfor %}
@@ -543,7 +541,7 @@
           {% else %}<p class="muted">{% if selected_device.deleted %}Отключаем устройство{% else %}Готовим отдельный конфиг{% endif %}… Страница обновится автоматически.</p>{% endif %}
         {% endif %}
         <p class="muted device-hint">Доступ одного пользователя для разных устройств. Для одновременного подключения используйте отдельную вкладку на каждом устройстве.</p>
-        {% if selected_device.legacy %}<p class="muted device-hint">Первый конфиг сохранён для старых ссылок, роутера и TV.</p>{% endif %}
+        {% if selected_device.legacy %}<p class="muted device-hint">Нулевой конфиг используется роутером и TV по умолчанию.</p>{% endif %}
       </section>
       {% endif %}
 
@@ -930,7 +928,7 @@
         <div class="dialog-actions"><button type="button" class="secondary" onclick="this.closest('dialog').close('cancel')">Отмена</button><button type="submit">Добавить</button></div>
       </form>
     </dialog>
-    {% if not selected_device.legacy and not selected_device.placeholder %}
+    {% if not selected_device.legacy %}
     <dialog id="delete-amnezia-device" aria-labelledby="delete-device-title">
       <h2 id="delete-device-title">Удалить {{ selected_device.name }}?</h2>
       <p>Конфиг этого устройства будет отключён на текущем VPN-сервере. Остальные устройства продолжат работать.</p>
