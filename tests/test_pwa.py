@@ -74,3 +74,51 @@ def test_android_download_is_real_apk_and_no_signing_material_is_public(page_cli
         assert 'classes.dex' in apk.namelist()
     assert '/static/downloads/AutoVPN-0.2.0.apk' in client.get(f"/client/{user['token']}").text
     assert client.get('/static/downloads/release.jks').status_code == 404
+
+
+def test_pwa_import_links_preserve_subscription_url_and_amnezia_key(page_client):
+    from html.parser import HTMLParser
+    from urllib.parse import urlsplit, parse_qs
+    from app.db import update_client_name
+
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.hrefs = []
+            self.key = ''
+            self.in_key = False
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == 'a': self.hrefs.append(values.get('href', ''))
+            if tag == 'textarea' and values.get('id') == 'amnezia-key': self.in_key = True
+        def handle_endtag(self, tag):
+            if tag == 'textarea': self.in_key = False
+        def handle_data(self, data):
+            if self.in_key: self.key += data
+
+    client, user = page_client
+    name = 'Телефон & name=чужое # "ключ"'
+    update_client_name(user['id'], name)
+    set_setting('config.vless_enabled', '1')
+    set_setting('config.amnezia_enabled', '1')
+    page = client.get(f"/client/{user['token']}")
+    parsed = Links()
+    parsed.feed(page.text)
+    neko = next(url for url in parsed.hrefs if url.startswith('sn://subscription?'))
+    assert parse_qs(urlsplit(neko).query) == {
+        'url': [f"http://testserver/sub/{user['token']}"],
+        'name': ['AutoVPN · '+name],
+    }
+    amnezia = next(url for url in parsed.hrefs if url.startswith('vpn://'))
+    assert amnezia == parsed.key and len(amnezia) > 100
+    assert 'Скачать APK · 0.2.0' in page.text
+
+
+def test_disabled_protocols_do_not_offer_import_buttons(page_client):
+    client, user = page_client
+    for protocol in ('vless', 'hysteria', 'amnezia'):
+        set_setting(f'config.{protocol}_enabled', '0')
+    page = client.get(f"/client/{user['token']}")
+    assert 'Открыть в NekoBox' not in page.text
+    assert 'Открыть в AmneziaVPN' not in page.text
+    assert 'Скачать APK · 0.2.0' in page.text

@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
@@ -1890,6 +1890,10 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             ),
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
+            "neko_import_url": "sn://subscription?" + urlencode({
+                "url": f"{base_url}/sub/{client['token']}",
+                "name": f"AutoVPN · {client['name']}",
+            }),
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
             "vless_enabled": config.vless.protocol.enabled,
             "hysteria_enabled": config.hysteria.protocol.enabled,

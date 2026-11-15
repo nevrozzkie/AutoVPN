@@ -22,6 +22,30 @@ localhost можно использовать для разработки.
 Документация платформы: [установка PWA](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable),
 [scope service worker](https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register).
 
+## Быстрый импорт из PWA
+
+Рядом с подпиской есть кнопка «Открыть в NekoBox». Она передаёт личную ссылку
+через `sn://subscription?url=...&name=...`; адрес подписки и название кодируются
+отдельно, чтобы символы в имени клиента не меняли параметры импорта.
+Рядом с ключом AmneziaVPN есть «Открыть в AmneziaVPN»: передаётся тот же полный
+`vpn://` ключ, который доступен для копирования на странице.
+
+Кнопки доступны и в обычном браузере, и в установленной PWA. Приложение должно
+быть установлено и поддерживать обработку соответствующей схемы; результат
+импорта подтверждается в VPN-клиенте. Если браузер не открыл приложение,
+используйте копирование подписки/ключа, QR или APK AutoVPN, который остаётся
+доступным. Диплинки не запускаются автоматически и не отправляются посредникам.
+
+Форматы проверены по исходникам клиентов:
+[NekoBox manifest](https://github.com/MatsuriDayo/NekoBoxForAndroid/blob/main/app/src/main/AndroidManifest.xml),
+[обработка подписки NekoBox](https://github.com/MatsuriDayo/NekoBoxForAndroid/blob/main/app/src/main/java/io/nekohasekai/sagernet/ui/MainActivity.kt),
+[AmneziaVPN 5.0.3.0 manifest](https://github.com/amnezia-vpn/amnezia-client/blob/5.0.3.0/client/android/AndroidManifest.xml).
+Открытие импорта на реальном телефоне нужно проверить в его браузере и PWA.
+
+Блок смены IP расположен в конце пользовательской страницы. Создание нового
+платного сервера — в том числе повторная попытка — требует отдельного подтверждения
+с предупреждением о стоимости и влиянии на всех пользователей VPN.
+
 ## Android APK
 
 Исходники восстановлены из сохранённого прототипа в [`android-tv/`](../android-tv/README.md).
