@@ -121,6 +121,7 @@ from app.subscriptions import (
     hysteria_auth,
     render_sing_box_subscription,
     render_subscription,
+    render_connection_keys,
 )
 from app.vpn_config import capture_vpn_config
 from app.vpn_state import IpChangeSafetyHoldError, prepare_install_operation
@@ -2149,6 +2150,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
                 "url": f"{base_url}/sub/{client['token']}",
                 "name": f"AutoVPN · {client['name']}",
             }),
+            "connection_keys": render_connection_keys(config, captured_client.as_dict()),
             "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
             "vless_enabled": config.vless.protocol.enabled,
             "hysteria_enabled": config.hysteria.protocol.enabled,
@@ -2207,6 +2209,7 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, dev
             raise HTTPException(status_code=409, detail='Якорь обновляется; конфиг временно недоступен')
         state = anchor_updates.edit_state(anchor_id)
         return templates.TemplateResponse(request, 'anchor_pending.html', {'state': state, 'token': token, 'anchor_id': anchor_id})
+    keys_client = replace(client, name=f"{client.name} · Якорь {anchor['ip']}")
     own_devices = [item for item in config.amnezia_devices if item.client_id == client.id]
     selected = next((item for item in own_devices if item.id == device), None) if device is not None else None
     if device is not None and selected is None:
@@ -2225,6 +2228,8 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, dev
         return templates.TemplateResponse(request, "anchor_client.html", {
             "anchor": anchor, "client": client, "amnezia_enabled": config.amnezia.protocol.enabled,
             "prefix": prefix, "subscription_enabled": subscription_enabled,
+            "connection_keys": render_connection_keys(config, keys_client.as_dict()),
+            "anchor_keys": True,
             "devices": own_devices, "selected_device": selected,
             "device_suffix": '' if selected is None else f'?device={selected.id}',
             "device_management_available": get_active_vps_operation() is None,

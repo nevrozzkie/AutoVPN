@@ -13,6 +13,7 @@
     <link rel="apple-touch-icon" href="/static/pwa/icon-180.png">
     <script src="/static/pwa/install.js" defer></script>
     <script src="/static/pwa/push.js" defer></script>
+    <script src="/static/connection-tabs.js" defer></script>
     <script>
       (function () {
         const saved = localStorage.getItem("autovpn-theme");
@@ -64,18 +65,20 @@
       </section>
 
       {% if sing_box_enabled %}
-        <section>
+        <section data-connection-tabs>
           <h2>
             {% if vless_enabled and hysteria_enabled %}
-              Подписка VLESS + Hysteria
+              VLESS + Hysteria
             {% elif vless_enabled %}
-              Подписка VLESS
+              VLESS
             {% elif hysteria_enabled %}
-              Подписка Hysteria
+              Hysteria
             {% else %}
               Подписка
             {% endif %}
           </h2>
+          {% include "connection_tabs.html" %}
+          <div id="connection-subscription" role="tabpanel" aria-labelledby="tab-subscription" data-connection-panel="subscription">
           <a class="button connection-primary" href="{{ neko_import_url }}" rel="noreferrer">Открыть в клиенте <span aria-hidden="true">↗</span></a>
           <p class="muted device-hint" style="margin:0 0 14px">Если VPN-клиент не открылся, скопируйте ссылку на подписку ниже и добавьте её в приложении вручную.</p>
           <div class="credential-toolbar" role="group" aria-label="Подписка">
@@ -100,6 +103,8 @@
               <button type="button" class="secondary" data-copy-value="{{ sing_box_subscription_url }}">Копировать ссылку</button>
             </div>
           </details>
+          </div>
+          {% include "connection_keys.html" %}
         </section>
       {% endif %}
 

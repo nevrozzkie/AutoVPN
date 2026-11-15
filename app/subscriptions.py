@@ -45,6 +45,14 @@ def render_subscription(config: CapturedVpnConfig, client: dict) -> str:
     return "\n".join(links) + ("\n" if links else "")
 
 
+def render_connection_keys(config: CapturedVpnConfig, client: dict) -> dict[str, str]:
+    """Individual import keys, using the same identity and transport as the subscription."""
+    if not config.current_ip:
+        return {}
+    return {('vless' if link.startswith('vless://') else 'hysteria'): link
+            for link in render_subscription(config, client).splitlines()}
+
+
 def build_subscription(client: dict, current_ip: str) -> str:
     config = capture_vpn_config()
     return render_subscription(

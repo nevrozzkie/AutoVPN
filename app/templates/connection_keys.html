@@ -1,0 +1,12 @@
+<div id="connection-keys" role="tabpanel" aria-labelledby="tab-keys" data-connection-panel="keys">
+  {% for protocol, key in connection_keys.items() %}
+  <div class="connection-key">
+    <div class="connection-key-header">
+      <h3>{{ 'VLESS' if protocol == 'vless' else 'Hysteria' }}</h3>
+      <button type="button" class="secondary" {% if anchor_keys %}data-copy="{{ protocol }}-key"{% else %}data-copy-value="{{ key }}"{% endif %} aria-label="Копировать {{ 'VLESS' if protocol == 'vless' else 'Hysteria' }}">Копировать</button>
+    </div>
+    <textarea id="{{ protocol }}-key" readonly spellcheck="false" aria-label="Конфиг {{ 'VLESS' if protocol == 'vless' else 'Hysteria' }}">{{ key }}</textarea>
+  </div>
+  {% endfor %}
+  <p class="muted device-hint">Импортируйте ключ в клиент из буфера обмена. После смены IP скопируйте его заново.</p>
+</div>

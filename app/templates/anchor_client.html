@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <script>document.documentElement.dataset.theme=localStorage.getItem('autovpn-theme')||'dark';</script>
+  <script src="/static/connection-tabs.js" defer></script>
   <title>Якорный VPN · {{ client.name }}</title>
   {% include 'client_styles.html' %}
 </head>
@@ -15,7 +16,9 @@
     <p class="muted">Смена IP и настроек основного VPN не меняет это подключение. Доступность проверьте в своём VPN-клиенте.</p>
   </section>
   {% if subscription_enabled %}
-  <section><h2>Подписка {% if vless_enabled %}VLESS{% endif %}{% if vless_enabled and hysteria_enabled %} + {% endif %}{% if hysteria_enabled %}Hysteria{% endif %}</h2>
+  <section data-connection-tabs><h2>{% if vless_enabled %}VLESS{% endif %}{% if vless_enabled and hysteria_enabled %} + {% endif %}{% if hysteria_enabled %}Hysteria{% endif %}</h2>
+    {% include "connection_tabs.html" %}
+    <div id="connection-subscription" role="tabpanel" aria-labelledby="tab-subscription" data-connection-panel="subscription">
     <a class="button connection-primary" href="{{ import_url }}" rel="noreferrer">Открыть в клиенте ↗</a>
     <p class="muted device-hint" style="margin:0 0 14px">Если VPN-клиент не открылся, скопируйте ссылку на подписку ниже и добавьте её в приложении вручную.</p>
     <div class="credential-toolbar"><span class="credential-label">Подписка</span><button class="secondary" data-copy="subscription">Копировать</button><button class="secondary" data-toggle="subscription-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="subscription-qr" aria-expanded="false">QR-код</button></div>
@@ -23,6 +26,8 @@
     <div id="subscription-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки"></div>
     <details class="technical-details"><summary>Clash / Mihomo</summary><p><a class="button secondary" href="{{ prefix }}/clash/{{ client.token }}">Скачать .yaml</a></p></details>
     <details class="technical-details"><summary>sing-box · не тестировалось</summary><p><a class="button secondary" href="{{ prefix }}/sing-box/{{ client.token }}">Скачать JSON</a></p></details>
+    </div>
+    {% include "connection_keys.html" %}
   </section>
   {% endif %}
   {% if amnezia_enabled %}
