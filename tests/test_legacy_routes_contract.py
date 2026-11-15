@@ -295,7 +295,7 @@ def test_ip_and_amnezia_ini_wire_contract(legacy_client: TestClient) -> None:
 
     assert ip_response.content == b"203.0.113.10\n"
     assert config_response.headers["content-disposition"] == (
-        "attachment; filename=amnezia-7.conf"
+        'attachment; filename="amnez-alice-22.conf"'
     )
     assert config_response.content == (
         "[Interface]\n"

@@ -239,6 +239,8 @@ def is_public_token_path(path: str) -> bool:
     if len(parts) == 2 and parts[0] in {
         "sub",
         "sing-box",
+        "clash",
+        "clash-provider",
         "ip",
         "amnezia",
         "amnezia-key",

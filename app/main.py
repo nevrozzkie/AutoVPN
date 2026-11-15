@@ -16,6 +16,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.clash import clash_profile, clash_provider, config_filename, dump_yaml
 from app.config import settings
 from app.aeza import AezaClient
 from app.amnezia import (
@@ -1791,7 +1792,7 @@ def sing_box_subscription(token: str) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
+    return JSONResponse(render_sing_box_subscription(config, client.as_dict()), headers={"Content-Disposition": f'attachment; filename="{config_filename("singbox", client.as_dict(), config.revision, "json")}"'})
 
 
 def user_ip_change_state(client_id: int) -> dict:
@@ -1904,6 +1905,26 @@ def client_protocol_overview() -> tuple[list[dict], str | None]:
     return protocols, max(checks, key=lambda item: item[0])[1] if checks else None
 
 
+@app.get('/clash/{token}')
+@app.get('/clash-provider/{token}')
+def client_clash_config(request: Request, token: str):
+    config = capture_vpn_config()
+    client = config.client_by_token(token)
+    if not client or not client.enabled:
+        raise HTTPException(status_code=404)
+    if not config.current_ip:
+        raise HTTPException(status_code=503)
+    if not (config.vless.protocol.enabled or config.hysteria.protocol.enabled):
+        raise HTTPException(status_code=404)
+    provider = request.url.path.startswith('/clash-provider/')
+    value = clash_provider(config, client.as_dict()) if provider else clash_profile(config, client.as_dict(), str(request.base_url).rstrip('/'))
+    filename = config_filename('clash', client.as_dict(), config.revision, 'yaml')
+    return Response(dump_yaml(value), media_type='application/yaml', headers={
+        'Content-Disposition': f'attachment; filename="{filename}"',
+        'Cache-Control': 'private, no-store', 'profile-update-interval': '1',
+    })
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     config = capture_vpn_config()
@@ -1925,6 +1946,9 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "protocols": protocols,
             "protocols_checked_at": protocols_checked_at,
             "base_url": base_url,
+            "vpn_revision": config.revision,
+            "clash_url": f"{base_url}/clash/{client['token']}",
+            "clash_import_url": "clash://install-config?" + urlencode({"url": f"{base_url}/clash/{client['token']}", "name": config_filename('clash', client, config.revision, 'yaml')[:-5]}),
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "neko_import_url": "sn://subscription?" + urlencode({
                 "url": f"{base_url}/sub/{client['token']}",
@@ -2047,7 +2071,7 @@ def amnezia_config(token: str) -> PlainTextResponse:
     return PlainTextResponse(
         render_amnezia_client_config(config, client),
         headers={
-            "Content-Disposition": f"attachment; filename=amnezia-{client.id}.conf"
+            "Content-Disposition": f'attachment; filename="{config_filename("amnez", client.as_dict(), config.revision, "conf")}"'
         },
     )
 
