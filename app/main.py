@@ -1864,6 +1864,27 @@ def decide_user_ip_change(token: str, operation_id: int, decision: str,
     return RedirectResponse(f'/client/{token}', status_code=303)
 
 
+def client_protocol_overview() -> tuple[list[dict], str | None]:
+    protocols = get_client_protocol_statuses()
+    checks = []
+    for protocol in protocols:
+        state = protocol['status']
+        # Amnezia's deep probe verifies peer configuration, not a VPN handshake.
+        protocol['client_status'] = (
+            'OK' if state == 'VERIFIED' and protocol['key'] != 'amnezia'
+            else 'FAILED' if state == 'FAILED' else 'UNKNOWN'
+        )
+        for key in ('last_checked_at', 'transport_last_checked_at'):
+            value = protocol.get(key)
+            if value:
+                try:
+                    parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                    checks.append((parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC), str(value)))
+                except ValueError:
+                    pass
+    return protocols, max(checks, key=lambda item: item[0])[1] if checks else None
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     config = capture_vpn_config()
@@ -1874,6 +1895,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     client = captured_client.as_dict()
     base_url = str(request.base_url).rstrip("/")
+    protocols, protocols_checked_at = client_protocol_overview()
     return templates.TemplateResponse(
         request,
         "client_page.html",
@@ -1881,13 +1903,8 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "client": client,
             "current_ip": config.current_ip,
             "config_updated_at": config.config_updated_at,
-            "protocols": get_client_protocol_statuses(),
-            "protocol_status_available": bool(
-                get_setting("protocol.vless.last_checked_at")
-                or get_setting("protocol.vless.transport_last_checked_at")
-                or get_setting("protocol.hysteria_quic.transport_last_checked_at")
-                or get_setting("protocol.amnezia.transport_last_checked_at")
-            ),
+            "protocols": protocols,
+            "protocols_checked_at": protocols_checked_at,
             "base_url": base_url,
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "neko_import_url": "sn://subscription?" + urlencode({

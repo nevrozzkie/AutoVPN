@@ -245,7 +245,7 @@ def test_public_transport_refresh_is_bounded_and_preserves_deep_state(
         set_setting("config.hysteria_enabled", "0")
 
 
-def test_public_client_refresh_never_runs_deep_check_and_displays_transport(
+def test_public_client_refresh_preserves_deep_results_and_shows_compact_status(
     monkeypatch,
 ) -> None:
     init_db()
@@ -284,5 +284,37 @@ def test_public_client_refresh_never_runs_deep_check_and_displays_transport(
     )
     assert get_setting("protocol.vless.transport_status") == "TCP_REACHABLE"
     assert page.status_code == 200
-    assert "Транспорт: TCP-порт доступен" in page.text
-    assert "Транспортная проверка не подтверждает VPN handshake" in page.text
+    assert "Последняя проверка:" in page.text
+    assert "Транспорт:" not in page.text
+    assert "handshake" not in page.text
+
+
+
+def test_compact_status_does_not_call_peer_configuration_a_working_vpn():
+    init_db()
+    client = create_client("Compact status")
+    set_setting("current_ip", "203.0.113.10")
+    for protocol in ("vless", "hysteria", "amnezia"):
+        set_setting(f"config.{protocol}_enabled", "1")
+    for key, value in {
+        "vless.status": "VERIFIED",
+        "vless.last_checked_at": "2026-11-15T02:45:00+03:00",
+        "vless.transport_last_checked_at": "2026-11-15T00:10:00+00:00",
+        "hysteria_salamander.status": "UNKNOWN",
+        "hysteria_salamander.last_checked_at": "2026-11-15T00:30:00+00:00",
+        "amnezia.status": "VERIFIED",
+    }.items():
+        set_setting(f"protocol.{key}", value)
+    page = TestClient(main.app).get(f"/client/{client['token']}")
+    status = page.text.split('<section id="vpn-status">', 1)[1].split('</section>', 1)[0]
+    assert status.count('class="ok"') == 1
+    assert status.count('>Не проверено<') == 2
+    assert status.count('Последняя проверка:') == 1
+    assert '15.11.2026 03:30:00 МСК' in status
+    assert 'IP:' in status and 'Конфиг обновлён:' in status
+    assert 'Транспорт:' not in status and 'handshake' not in status
+    # Reachability alone must not upgrade the visible result to OK.
+    set_setting('protocol.vless.status', 'TCP_REACHABLE')
+    page = TestClient(main.app).get(f"/client/{client['token']}")
+    status = page.text.split('<section id="vpn-status">', 1)[1].split('</section>', 1)[0]
+    assert 'class="ok"' not in status

@@ -107,21 +107,11 @@
       .dialog-actions .cancel { background: var(--panel-soft); color: var(--text); border: 1px solid var(--border); }
       [hidden] { display: none !important; }
       .muted { color: var(--muted); }
-      .status-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-        gap: 10px;
-      }
-      .status {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-        background: var(--panel-soft);
-      }
-      .status strong {
-        display: block;
-        margin-bottom: 4px;
-      }
+      .protocol-list { list-style: none; padding: 0; margin: 16px 0; }
+      .protocol-list li { display: flex; gap: 8px; margin: 8px 0; }
+      .protocol-list strong { min-width: 90px; }
+      .vpn-meta { display: grid; gap: 6px; margin-top: 14px; font-size: 14px; }
+      .vpn-meta p { margin: 0; }
       .section-title {
         display: flex;
         align-items: center;
@@ -154,14 +144,6 @@
         border-radius: 8px;
         padding: 14px;
         background: var(--panel-soft);
-      }
-      .guide-intro {
-        display: grid;
-        gap: 10px;
-        margin-bottom: 14px;
-      }
-      .guide-intro p {
-        margin: 0;
       }
       .guide-tabs {
         display: flex;
@@ -400,13 +382,6 @@
       .theme-toggle:hover {
         background: var(--panel-soft);
       }
-      .config-freshness {
-        margin: 10px 0 0;
-        padding: 10px 12px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--panel-soft);
-      }
     </style>
   </head>
   <body>
@@ -414,96 +389,34 @@
       <div class="page-top">
         <div>
           <h1>{{ client.name }}</h1>
-          <p class="muted">IP VPN: {{ current_ip }}</p>
-          <p class="config-freshness">
-            <strong>Конфиг обновлён:</strong>
-            {% if config_updated_at %}
-              {{ config_updated_at|msk }}
-            {% else %}
-              <span class="muted">ещё не фиксировалось</span>
-            {% endif %}
-          </p>
-          <p class="muted">Если это время новее, чем последнее обновление в приложении VPN, обновите подписку.</p>
         </div>
         <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
       </div>
 
-      <section data-pwa-section>
-        <h2>AutoVPN на главном экране</h2>
-        <p>Установите личную страницу как приложение: подключения и смена IP будут под рукой.</p>
-        <button type="button" data-pwa-install hidden>Установить AutoVPN</button>
-        <details>
-          <summary>Как установить на телефон</summary>
-          <p data-pwa-help>Android: откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран». iPhone и iPad: откройте страницу в Safari, нажмите «Поделиться» → «На экран Домой».</p>
-        </details>
+      <section id="vpn-status">
+        <div class="section-title">
+          <h2>Статус VPN</h2>
+          <form method="post" action="/client/{{ client.token }}/protocols/refresh">
+            <button type="submit" title="Обновить статус VPN">↻</button>
+          </form>
+        </div>
+        <ul class="protocol-list">
+          {% for protocol in protocols %}
+          <li>
+            <strong>{{ 'Amnezia' if protocol.key == 'amnezia' else protocol.name }}</strong>
+            <span aria-hidden="true">—</span>
+            {% if protocol.client_status == 'OK' %}<span class="ok">ОК</span>
+            {% elif protocol.client_status == 'FAILED' %}<span class="bad">Не работает</span>
+            {% else %}<span class="muted">Не проверено</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        <div class="vpn-meta muted">
+          <p>IP: <code>{{ current_ip }}</code></p>
+          <p>Конфиг обновлён: {{ config_updated_at|msk if config_updated_at else 'нет данных' }}</p>
+          <p>Последняя проверка: {{ protocols_checked_at|msk if protocols_checked_at else 'ещё не выполнялась' }}</p>
+        </div>
       </section>
-      <section>
-        <h2>Приложение AutoVPN для Android и TV</h2>
-        <p>Добавляйте актуальные подключения в AmneziaVPN и NekoBox с телефона или телевизора. Для работы установите один из этих VPN-клиентов.</p>
-        <a class="button" href="/static/downloads/AutoVPN-0.2.0.apk" download>Скачать APK · 0.2.0</a>
-        <p class="muted">Android 8 и новее. После установки нажмите «Привязать AutoVPN» и вставьте ссылку на эту личную страницу.</p>
-        <details><summary>Переход с тестовой AutoVPN TV 0.1.0</summary><p>Сначала удалите тестовую версию, затем установите новый APK и повторите привязку. Подключения в AmneziaVPN и NekoBox сохранятся.</p></details>
-      </section>
-
-      {% if protocol_status_available %}
-        <section>
-          <div class="section-title">
-            <h2>Статус VPN</h2>
-            <form method="post" action="/client/{{ client.token }}/protocols/refresh">
-              <button type="submit" title="Обновить состояния VPN">↻</button>
-            </form>
-          </div>
-          <div class="status-grid">
-            {% for protocol in protocols %}
-              <div class="status">
-                <strong>{{ protocol.name }}</strong>
-                {% if protocol.status in ["VERIFIED", "SERVICE_ACTIVE"] %}
-                  <span class="ok">{{ protocol.status|status_label }}</span>
-                {% elif protocol.status == "FAILED" %}
-                  <span class="bad">{{ protocol.status|status_label }}</span>
-                {% elif protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
-                  <span class="warn">{{ protocol.status|status_label }}</span>
-                {% else %}
-                  <span class="warn">{{ protocol.status|status_label }}</span>
-                {% endif %}
-                {% if protocol.note %}
-                  <br><span class="muted">{{ protocol.note }}</span>
-                {% endif %}
-                {% if protocol.last_checked_at %}
-                  <br><span class="muted">Проверено: {{ protocol.last_checked_at|msk }}</span>
-                {% endif %}
-                {% if protocol.transport_last_checked_at %}
-                  <br><span class="muted">Транспорт: {{ protocol.transport_status|status_label }}</span>
-                  <br><span class="muted">Проверено снаружи: {{ protocol.transport_last_checked_at|msk }}</span>
-                  {% if protocol.transport_status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
-                    <br><span class="muted">Транспортная проверка не подтверждает VPN handshake или авторизацию.</span>
-                  {% endif %}
-                {% endif %}
-                {% if protocol.status in ["TCP_REACHABLE", "UDP_PACKET_SENT"] %}
-                  {% if protocol.udp %}
-                    <br><span class="muted">Это не проверяет handshake, SNI и авторизацию.</span>
-                  {% else %}
-                    <br><span class="muted">Это не проверяет авторизацию и параметры клиента.</span>
-                  {% endif %}
-                {% endif %}
-                {% if protocol.failed_since %}
-                  <br><span class="bad">Проблема с: {{ protocol.failed_since|msk }}</span>
-                {% endif %}
-              </div>
-            {% endfor %}
-          </div>
-        </section>
-      {% else %}
-        <section>
-          <div class="section-title">
-            <h2>Статус VPN</h2>
-            <form method="post" action="/client/{{ client.token }}/protocols/refresh">
-              <button type="submit" title="Обновить состояния VPN">↻</button>
-            </form>
-          </div>
-          <p class="muted">Статус появится после обновления состояний VPN.</p>
-        </section>
-      {% endif %}
 
       {% if sing_box_enabled %}
         <section>
@@ -518,11 +431,14 @@
               Подписка
             {% endif %}
           </h2>
-          <p><code>{{ subscription_url }}</code></p>
           <a class="button" href="{{ neko_import_url }}" rel="noreferrer">Открыть в NekoBox</a>
           <button type="button" data-copy-value="{{ subscription_url }}">Скопировать подписку</button>
           <button type="button" onclick="document.querySelector('#subscription-qr').classList.add('is-visible')">Показать QR</button>
-          <p class="muted">Подтвердите импорт подписки в NekoBox. Если приложение не открылось, скопируйте подписку и добавьте её вручную.</p>
+          <details class="technical-details">
+            <summary>Ручное подключение</summary>
+            <p>Если NekoBox не открылся, добавьте подписку вручную.</p>
+            <p><code>{{ subscription_url }}</code></p>
+          </details>
           <div id="subscription-qr" class="qr">
             <img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки">
           </div>
@@ -535,31 +451,27 @@
         </section>
       {% endif %}
 
+      {% if amnezia_enabled %}
       <section>
         <h2>AmneziaVPN</h2>
-        {% if amnezia_enabled %}
-          <a class="button" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN</a>
-          <a class="button" href="{{ amnezia_url }}">Скачать .conf</a>
-          <button type="button" onclick="navigator.clipboard.writeText(document.querySelector('#amnezia-key').value)">Скопировать ключ</button>
-          <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
-          <p class="muted">Подтвердите импорт ключа в AmneziaVPN. Если приложение не открылось или QR не считывается, скопируйте ключ ниже и вставьте его вручную.</p>
+        <a class="button" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN</a>
+        <a class="button" href="{{ amnezia_url }}">Скачать .conf</a>
+        <button type="button" onclick="navigator.clipboard.writeText(document.querySelector('#amnezia-key').value)">Скопировать ключ</button>
+        <button type="button" onclick="document.querySelector('#amnezia-qr').classList.add('is-visible')">Показать QR</button>
+        <details class="technical-details">
+          <summary>Ручное подключение</summary>
+          <p>Если AmneziaVPN не открылась, вставьте ключ вручную.</p>
           <textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea>
-          <div id="amnezia-qr" class="qr">
-            <img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN">
-          </div>
-        {% else %}
-          <p class="muted">AmneziaWG выключена в настройках сервера.</p>
-        {% endif %}
+        </details>
+        <div id="amnezia-qr" class="qr">
+          <img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN">
+        </div>
       </section>
+      {% endif %}
 
       <section>
         <h2>Гайды</h2>
-        <div class="guide-intro">
-          <p>Советую использовать протоколы в таком порядке: VLESS → AmneziaVPN → Hysteria. Меняйте протокол, если текущий сломался.</p>
-          <p>VLESS и Hysteria обновляются через подписку: когда сверху страницы время конфига стало новее, достаточно обновить подписку в приложении.</p>
-          <p>Для AmneziaVPN смотрите время обновления конфига в начале страницы. Если ключ устарел, откройте ниже пункт «Обновление ключа». После установки стоит настроить маршрутизацию — инструкции тоже ниже.</p>
-          <p class="muted">Гайды ниже написаны для Android: скриншоты и названия кнопок будут из Android-приложений. На других устройствах логика похожая, но интерфейс может отличаться.</p>
-        </div>
+        <p class="muted">Рекомендуемый порядок: VLESS → Amnezia → Hysteria.</p>
         <div class="guide-tabs">
           {% if sing_box_enabled %}
             <button type="button" data-open-guide="guide-vless-hysteria">VLESS + Hysteria</button>
@@ -871,6 +783,31 @@
               </div>
             </div>
           </details>
+          </div>
+        </details>
+
+        <details id="guide-pwa" class="guide-app" data-pwa-section>
+          <summary><span class="stage-title"><strong>AutoVPN на телефоне</strong><span>установка PWA</span></span></summary>
+          <div class="guide-app-body">
+            <button type="button" data-pwa-install hidden>Установить AutoVPN</button>
+            <p data-pwa-help>Android: меню браузера → «Установить приложение» или «Добавить на главный экран». iPhone и iPad: Safari → «Поделиться» → «На экран Домой».</p>
+          </div>
+        </details>
+
+        <details id="guide-tv" class="guide-app">
+          <summary><span class="stage-title"><strong>AutoVPN для телевизора</strong><span>Android TV · APK</span></span></summary>
+          <div class="guide-app-body">
+            <p>Для телевизора с Android 8 и новее. Приложение помогает добавлять подключения в AmneziaVPN и NekoBox с пульта.</p>
+            <a class="button" href="/static/downloads/AutoVPN-0.2.0.apk" download>Скачать APK · 0.2.0</a>
+            <ol>
+              <li>Установите APK и один из VPN-клиентов: AmneziaVPN или NekoBox.</li>
+              <li>Нажмите «Привязать AutoVPN» и вставьте ссылку на эту личную страницу.</li>
+              <li>Выберите VPN-клиент и подтвердите импорт в нём.</li>
+            </ol>
+            <details class="guide-stage">
+              <summary>Переход с тестовой версии 0.1.0</summary>
+              <p>Удалите тестовую AutoVPN TV, установите новый APK и повторите привязку. Подключения в VPN-клиентах сохранятся.</p>
+            </details>
           </div>
         </details>
 
