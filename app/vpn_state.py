@@ -401,6 +401,9 @@ def publish_ip_change(
                 operation_id,
             ),
         )
+        if new_ip != bound_config.current_ip:
+            from app.web_push import enqueue_ip_changed
+            enqueue_ip_changed(db, operation_id)
         return published_revision
 
 

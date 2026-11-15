@@ -19,3 +19,30 @@ self.addEventListener('fetch', (event) => {
     }})
   ));
 });
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    const parsed = event.data ? event.data.json() : {};
+    if (parsed && typeof parsed === 'object') data = parsed;
+  } catch { /* still show a visible notification */ }
+  event.waitUntil(self.registration.showNotification(
+    typeof data.title === 'string' ? data.title.slice(0, 80) : 'Уведомление', {
+      body: typeof data.body === 'string' ? data.body.slice(0, 500) : 'Новое уведомление',
+      tag: typeof data.tag === 'string' ? data.tag : 'notice',
+      renotify: false,
+      data: {url: typeof data.url === 'string' && /^\/client\/[A-Za-z0-9_-]+$/.test(data.url) ? data.url : '/client/'}
+    }
+  ));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const path = event.notification.data?.url;
+  if (typeof path !== 'string' || !/^\/client\/[A-Za-z0-9_-]+$/.test(path)) return;
+  const url = new URL(path, self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(async (windows) => {
+    const existing = windows.find(client => client.url.split(/[?#]/)[0] === url);
+    if (existing) return existing.focus();
+    return self.clients.openWindow(url);
+  }));
+});

@@ -17,6 +17,7 @@ dependencies = [
     "qrcode[pil]>=7.4.2",
     "cryptography>=42.0.0",
     "paramiko>=3.4.0",
+    "pywebpush>=2.0.3,<3",
 ]
 
 [project.optional-dependencies]

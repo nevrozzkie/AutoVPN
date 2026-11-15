@@ -29,6 +29,21 @@ def test_runtime_constraints_cover_direct_dependencies_and_installers_use_them()
     ]
     constrained = {_normalized_name(line) for line in lines}
     expected_runtime = {
+        "aiohappyeyeballs",
+        "aiohttp",
+        "aiosignal",
+        "attrs",
+        "charset-normalizer",
+        "frozenlist",
+        "http-ece",
+        "multidict",
+        "propcache",
+        "py-vapid",
+        "pywebpush",
+        "requests",
+        "urllib3",
+        "yarl",
+
         "annotated-doc",
         "annotated-types",
         "anyio",

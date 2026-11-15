@@ -86,7 +86,7 @@ from app.sprintbox_accounts import (
 from app.sprintbox import SprintboxClient
 
 from app.anchors import list_anchors, anchor_client, has_anchor_access, set_anchor_access
-from app import anchor_updates
+from app import anchor_updates, web_push
 from app.sprintbox_controls import (anchor_target, prepare_deletion, confirm_deletion, deletion, run_deletion, recheck_deletion)
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
@@ -169,11 +169,13 @@ async def lifespan(_: FastAPI):
     )
     from app.scheduled_cleanup import cleanup_loop
     cleanup_task = asyncio.create_task(cleanup_loop())
+    push_task = asyncio.create_task(web_push.push_loop())
     try:
         yield
     finally:
         cleanup_task.cancel()
-        await asyncio.gather(cleanup_task, return_exceptions=True)
+        push_task.cancel()
+        await asyncio.gather(cleanup_task, push_task, return_exceptions=True)
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -1881,6 +1883,94 @@ def require_vpn_user(token: str) -> dict:
     if not client or not client['enabled']:
         raise HTTPException(status_code=404)
     return client
+
+
+@app.get('/client/{token}/push')
+def push_configuration(token: str) -> JSONResponse:
+    require_vpn_user(token)
+    try:
+        return JSONResponse({'publicKey': web_push.vapid_keys()['public']})
+    except Exception:
+        return JSONResponse({'error': 'Уведомления временно недоступны'}, status_code=503)
+
+
+@app.post('/client/{token}/push')
+async def push_subscribe(token: str, request: Request) -> JSONResponse:
+    client = require_vpn_user(token)
+    try:
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise ValueError('Подписка слишком большая')
+        import json
+        web_push.subscribe(client['id'], json.loads(raw))
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({'error': str(exc)[:200]}, status_code=400)
+    except Exception:
+        return JSONResponse({'error': 'Не удалось включить уведомления. Попробуйте позже.'}, status_code=503)
+    return JSONResponse({'ok': True})
+
+
+@app.post('/client/{token}/push/status')
+async def push_subscription_status(token: str, request: Request) -> JSONResponse:
+    client = require_vpn_user(token)
+    try:
+        import json
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise ValueError()
+        endpoint = json.loads(raw).get('endpoint')
+        if not isinstance(endpoint, str):
+            raise ValueError()
+        with get_db() as db:
+            subscribed = db.execute('SELECT 1 FROM push_subscriptions WHERE client_id=? AND endpoint=?',
+                                    (client['id'], endpoint)).fetchone() is not None
+        return JSONResponse({'enabled': subscribed})
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse({'error': 'Некорректная подписка'}, status_code=400)
+
+
+@app.post('/client/{token}/push/unsubscribe')
+async def push_unsubscribe(token: str, request: Request) -> JSONResponse:
+    client = require_vpn_user(token)
+    try:
+        import json
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise ValueError()
+        endpoint = json.loads(raw).get('endpoint')
+        if not isinstance(endpoint, str):
+            raise ValueError()
+        web_push.unsubscribe(client['id'], endpoint)
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse({'error': 'Некорректная подписка'}, status_code=400)
+    except Exception:
+        return JSONResponse({'error': 'Не удалось отключить уведомления. Попробуйте позже.'}, status_code=503)
+    return JSONResponse({'ok': True})
+
+
+@app.get('/admin/notifications', response_class=HTMLResponse)
+def admin_notifications(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(request, 'notifications.html', {
+        **web_push.admin_status(), 'request_id': secrets.token_hex(16),
+        'sent': request.query_params.get('sent') == '1',
+    })
+
+
+@app.post('/admin/notifications')
+def send_admin_notification(body: str = Form(..., max_length=500),
+                            title: str = Form('Уведомление', max_length=80),
+                            audience: str = Form('all'), recipients: list[int] = Form([]),
+                            request_id: str = Form(..., pattern=r'^[a-f0-9]{32}$'),
+                            _: str = Depends(require_admin)) -> RedirectResponse:
+    if audience not in ('all', 'selected') or (audience == 'selected' and not recipients):
+        raise HTTPException(status_code=400, detail='Выберите получателей')
+    try:
+        with get_db() as db:
+            web_push.enqueue(db, body, title=title, event_key='custom:' + request_id,
+                             client_ids=recipients if audience == 'selected' else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return RedirectResponse('/admin/notifications?sent=1', status_code=303)
 
 
 @app.get('/client/service-worker.js')

@@ -12,6 +12,7 @@
     <link rel="icon" type="image/png" href="/static/pwa/icon-192.png">
     <link rel="apple-touch-icon" href="/static/pwa/icon-180.png">
     <script src="/static/pwa/install.js" defer></script>
+    <script src="/static/pwa/push.js" defer></script>
     <script>
       (function () {
         const saved = localStorage.getItem("autovpn-theme");
@@ -456,6 +457,14 @@
           <div class="guide-app-body">
             <button type="button" data-pwa-install>Установить AutoVPN</button>
             <p data-pwa-help>Android: меню браузера → «Установить приложение» или «Добавить на главный экран». iPhone и iPad: Safari → «Поделиться» → «На экран Домой».</p>
+          </div>
+        </details>
+
+        <details id="guide-notifications" class="guide-app" data-push-root data-push-base="/client/{{ client.token }}/push">
+          <summary><span class="stage-title"><strong>Уведомления</strong><span>по желанию</span></span></summary>
+          <div class="guide-app-body">
+            <button type="button" data-push-toggle hidden>Включить уведомления</button>
+            <p data-push-status role="status">Уведомления необязательны. Для их включения нужен поддерживаемый браузер и HTTPS. На iPhone откройте установленную PWA с экрана «Домой».</p>
           </div>
         </details>
 

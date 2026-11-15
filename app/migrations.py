@@ -495,6 +495,26 @@ def _apply_amnezia_devices(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE UNIQUE INDEX amnezia_device_names ON amnezia_devices(client_id,name COLLATE NOCASE) WHERE deleted_at IS NULL")
 
 
+def _apply_web_push(connection: sqlite3.Connection) -> None:
+    for sql in (
+        """CREATE TABLE push_subscriptions (
+            id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            endpoint TEXT NOT NULL UNIQUE, keys_json TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+        """CREATE TABLE push_messages (
+            id INTEGER PRIMARY KEY, event_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL)""",
+        """CREATE TABLE push_deliveries (
+            message_id INTEGER NOT NULL REFERENCES push_messages(id) ON DELETE CASCADE,
+            subscription_id INTEGER REFERENCES push_subscriptions(id) ON DELETE SET NULL,
+            state TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt INTEGER NOT NULL, claimed_at INTEGER,
+            UNIQUE(message_id, subscription_id))""",
+        "CREATE INDEX push_deliveries_due ON push_deliveries(state,next_attempt)",
+    ):
+        connection.execute(sql)
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -599,6 +619,9 @@ MIGRATIONS = (
     Migration(version=13, name="amnezia_devices",
               signature="per-client additional Amnezia identities; legacy first peer remains unchanged",
               apply=_apply_amnezia_devices),
+    Migration(version=14, name="web_push",
+              signature="optional browser subscriptions and durable deduplicated notification outbox",
+              apply=_apply_web_push),
 )
 
 

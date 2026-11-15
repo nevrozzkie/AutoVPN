@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Уведомления</h1>
+{% if sent %}<p class="ok" role="status">Уведомление добавлено в очередь.</p>{% endif %}
+<section class="panel">
+  <h2>Отправить уведомление</h2>
+  <p class="muted">Сообщения получают только устройства, на которых пользователь сам включил уведомления. При смене IP отправляется: «Айпи был сменён. Не забудьте обновить конфиги».</p>
+  <form method="post" action="/admin/notifications" style="display:grid;gap:16px;max-width:640px">
+    <input type="hidden" name="request_id" value="{{ request_id }}">
+    <label>Заголовок<input name="title" value="Уведомление" required maxlength="80"></label>
+    <label>Текст<textarea name="body" required maxlength="500" rows="4" style="width:100%;box-sizing:border-box"></textarea></label>
+    <label>Получатели<select name="audience"><option value="all">Все подписавшиеся</option><option value="selected">Только выбранные ниже</option></select></label>
+    <fieldset><legend>Подписавшиеся пользователи</legend>
+      {% for person in subscribers %}<label style="display:block;padding:8px 0"><input type="checkbox" name="recipients" value="{{ person.id }}"> {{ person.name }} · устройств: {{ person.devices }}</label>
+      {% else %}<p class="muted">Пока никто не включил уведомления.</p>{% endfor %}
+    </fieldset>
+    <button type="submit" {% if not subscribers %}disabled{% endif %}>Отправить уведомление</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Последние отправки</h2>
+  <p class="muted">«Принято сервисом» означает приём push-сервисом, а не прочтение. Временные ошибки повторяются до 6 попыток в течение суток. История хранится 7 дней.</p>
+  <div style="overflow-x:auto"><table><thead><tr><th>Время (МСК)</th><th>Сообщение</th><th>Состояние</th><th>Устройств</th></tr></thead><tbody>
+  {% for item in messages %}<tr><td>{{ item.created_at|msk }}</td><td><strong>{{ item.title }}</strong><br>{{ item.body }}</td><td>{{ {'PENDING':'В очереди','INFLIGHT':'Отправляется','SENT':'Принято сервисом','EXPIRED':'Подписка истекла','FAILED':'Не отправлено','SKIPPED':'Пропущено'}.get(item.state, 'Нет подписавшихся') }}</td><td>{{ item.count }}</td></tr>
+  {% else %}<tr><td colspan="4">Отправок пока нет.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
