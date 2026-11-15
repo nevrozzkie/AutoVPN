@@ -1325,6 +1325,8 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
             "base_url": str(request.base_url).rstrip("/"),
             "format_bytes": format_bytes,
             "hysteria_auth": hysteria_auth,
+            "access_changed": request.query_params.get("access"),
+            "vpn_state": get_vpn_state(),
             "stats_last_refresh_at": get_setting("stats.last_refresh_at"),
             "stats_last_error": get_setting("stats.last_error"),
         },
@@ -1350,16 +1352,22 @@ def admin_rename_client(
     return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/admin/clients/{client_id}/unblock")
 @app.post("/admin/clients/{client_id}/enable")
 def admin_enable_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
+    if not get_client_by_id(client_id):
+        raise HTTPException(status_code=404)
     set_client_enabled(client_id, True)
-    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients?access=unblocked", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/admin/clients/{client_id}/block")
 @app.post("/admin/clients/{client_id}/disable")
 def admin_disable_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
+    if not get_client_by_id(client_id):
+        raise HTTPException(status_code=404)
     set_client_enabled(client_id, False)
-    return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/admin/clients?access=blocked", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/clients/{client_id}/delete")

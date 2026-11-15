@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Клиенты</h1>
+{% if access_changed in ['blocked', 'unblocked'] %}
+<p class="ok" role="status">{{ 'Пользователь заблокирован. Данные и ключи сохранены.' if access_changed == 'blocked' else 'Пользователь разблокирован. Прежние ссылки и ключи сохранены.' }}</p>
+{% endif %}
+{% if vpn_state.desired_revision != vpn_state.applied_revision %}
+<section class="panel warning">Изменения ещё не применены к основному VPN. <a href="/admin#vpn-sync">Синхронизировать VPN →</a></section>
+{% endif %}
+<p class="muted">Блокировка сразу закрывает кабинет и выдачу конфигов. Уже импортированные подключения на основном сервере отключатся после синхронизации. Сохранённые подключения на якорных серверах эта кнопка не меняет.</p>
 
 <form method="post" action="/admin/clients" class="actions">
   <input type="text" name="name" placeholder="Имя клиента" required>
@@ -26,7 +33,7 @@
         {% if client.router is not none %}
           <span class="badge">Роутер{% if client.router.label %}: {{ client.router.label }}{% else %}: {{ client.router.router_id }}{% endif %}</span>
         {% endif %}
-        <span class="muted">{{ "включён" if client.enabled else "отключён" }}</span>
+        <span class="muted">{{ "активен" if client.enabled else "заблокирован" }}</span>
         <span class="muted">
           VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
         </span>
@@ -90,17 +97,19 @@
 
       <div class="actions">
         {% if client.enabled %}
-          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/disable">
-            <button type="submit">Отключить</button>
+          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/block" data-confirm-message="Заблокировать пользователя {{ client.name }}? Кабинет закроется, данные и ключи сохранятся. Для отключения уже импортированных конфигов синхронизируйте VPN.">
+            <button type="submit">Заблокировать</button>
           </form>
         {% else %}
-          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/enable">
-            <button type="submit">Включить</button>
+          <form class="inline" method="post" action="/admin/clients/{{ client.id }}/unblock">
+            <button type="submit">Разблокировать</button>
           </form>
         {% endif %}
+        <details><summary>Удаление</summary>
         <form class="inline" method="post" action="/admin/clients/{{ client.id }}/delete" data-confirm-message="Удалить клиента {{ client.name }}? После этого его подписка перестанет работать.">
-          <button type="submit" class="danger-button">Удалить</button>
+          <button type="submit" class="danger-button">Удалить пользователя</button>
         </form>
+        </details>
       </div>
     </details>
   {% else %}

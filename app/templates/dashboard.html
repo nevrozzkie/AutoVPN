@@ -194,7 +194,7 @@
   <p class="muted">«Всё ок» — завершить настройку{% if sprintbox_review.retained_boxes %}, сохранить отмеченные боксы как якорные и назначить удаление остальных на ближайшее окно (23:30, 23:55, 04:00, 07:00 МСК){% endif %}. Якорные VPN продолжают оплачиваться и доступны в отдельном разделе. «Попробовать другой IP» — создать ещё один платный бокс, сохранив все предыдущие.</p>
 </section>
 {% endif %}
-<div class="actions action-bar">
+<div class="actions action-bar" id="vpn-sync">
   <form method="post" action="/admin/install/run" class="inline">
     <button type="submit" {% if install_running or active_vps_operation or not target_host %}disabled{% endif %}>Установить / синхронизировать VPN</button>
   </form>
