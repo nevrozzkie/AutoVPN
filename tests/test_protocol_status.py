@@ -298,10 +298,10 @@ def test_compact_status_does_not_call_peer_configuration_a_working_vpn():
         set_setting(f"config.{protocol}_enabled", "1")
     for key, value in {
         "vless.status": "VERIFIED",
-        "vless.last_checked_at": "2026-11-15T02:45:00+03:00",
-        "vless.transport_last_checked_at": "2026-11-15T00:10:00+00:00",
+        "vless.last_checked_at": "2020-11-15T02:45:00+03:00",
+        "vless.transport_last_checked_at": "2020-11-15T00:10:00+00:00",
         "hysteria_salamander.status": "UNKNOWN",
-        "hysteria_salamander.last_checked_at": "2026-11-15T00:30:00+00:00",
+        "hysteria_salamander.last_checked_at": "2020-11-15T00:30:00+00:00",
         "amnezia.status": "VERIFIED",
     }.items():
         set_setting(f"protocol.{key}", value)
@@ -310,7 +310,7 @@ def test_compact_status_does_not_call_peer_configuration_a_working_vpn():
     assert status.count('class="ok"') == 1
     assert status.count('>Не проверено<') == 2
     assert status.count('Последняя проверка:') == 1
-    assert '15.11.2026 03:30:00 МСК' in status
+    assert '15.11.2020 03:30:00 МСК' in status
     assert 'IP:' in status and 'Конфиг обновлён:' in status
     assert 'Транспорт:' not in status and 'handshake' not in status
     # Reachability alone must not upgrade the visible result to OK.
@@ -318,3 +318,13 @@ def test_compact_status_does_not_call_peer_configuration_a_working_vpn():
     page = TestClient(main.app).get(f"/client/{client['token']}")
     status = page.text.split('<section id="vpn-status">', 1)[1].split('</section>', 1)[0]
     assert 'class="ok"' not in status
+
+
+
+def test_recent_timestamp_labels_and_absolute_fallback():
+    from datetime import datetime, UTC, timedelta
+    now = datetime.now(UTC)
+    assert main.format_recent_msk((now-timedelta(hours=2)).isoformat()) == '2 часа назад'
+    assert main.format_recent_msk((now-timedelta(minutes=5)).isoformat()) == '5 минут назад'
+    old = (now-timedelta(hours=25)).isoformat()
+    assert main.format_recent_msk(old) == main.format_msk(old)
