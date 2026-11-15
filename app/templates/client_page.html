@@ -517,7 +517,7 @@
             <a class="device-tab {% if device.id == selected_device.id %}is-active{% endif %}" {% if device.id == selected_device.id %}aria-current="page"{% endif %} href="/client/{{ client.token }}{% if not device.legacy %}?device={{ device.id }}{% endif %}#amnezia-section">{{ device.name }}{% if device.failed %} · !{% endif %}</a>
             {% endif %}
           {% endfor %}
-          <button type="button" class="device-add" {% if not device_management_available %}disabled{% endif %} aria-label="Добавить устройство" onclick="document.getElementById('add-amnezia-device').showModal()">+</button>
+          <button type="button" {% if amnezia_devices|length > 1 %}class="device-add"{% endif %} {% if not device_management_available %}disabled{% endif %} aria-label="Добавить устройство" onclick="document.getElementById('add-amnezia-device').showModal()">{% if amnezia_devices|length > 1 %}+{% else %}Добавить устройство{% endif %}</button>
         </nav>
         {% if not device_management_available %}<p class="muted device-hint">Управление устройствами временно недоступно: дождитесь завершения настройки VPN или обратитесь к администратору.</p>{% endif %}
         {% if amnezia_devices|selectattr('failed')|list %}<p class="warn">Изменение устройства не подтверждено. Обратитесь к администратору.</p>{% endif %}
@@ -541,7 +541,6 @@
           {% else %}<p class="muted">{% if selected_device.deleted %}Отключаем устройство{% else %}Готовим отдельный конфиг{% endif %}… Страница обновится автоматически.</p>{% endif %}
         {% endif %}
         <p class="muted device-hint">Доступ одного пользователя для разных устройств. Для одновременного подключения используйте отдельную вкладку на каждом устройстве.</p>
-        {% if selected_device.legacy %}<p class="muted device-hint">Нулевой конфиг используется роутером и TV по умолчанию.</p>{% endif %}
       </section>
       {% endif %}
 
@@ -869,6 +868,7 @@
           <summary><span class="stage-title"><strong>AutoVPN для телевизора</strong><span>Android TV · APK</span></span></summary>
           <div class="guide-app-body">
             <p>Для телевизора с Android 8 и новее. Приложение помогает добавлять подключения в AmneziaVPN и NekoBox с пульта.</p>
+            <p>Телевизор по умолчанию получает нулевой конфиг AmneziaVPN. Если вы добавили устройства, на странице он отображается во вкладке «Главный»; без устройств этот же конфиг показывается сразу, без вкладки.</p>
             <a class="button" href="/static/downloads/AutoVPN-0.2.0.apk" download>Скачать APK · 0.2.0</a>
             <ol>
               <li>Установите APK и один из VPN-клиентов: AmneziaVPN или NekoBox.</li>
@@ -945,7 +945,7 @@
       </form>
     </dialog>
     <script>
-      {% if ip_change.busy %}
+      {% if ip_change.busy or amnezia_device_pending %}
       setTimeout(() => window.location.reload(), 5000);
       {% endif %}
       document.querySelectorAll('dialog').forEach(dialog => {

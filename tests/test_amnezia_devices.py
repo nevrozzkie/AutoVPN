@@ -112,6 +112,25 @@ def test_restart_preserves_pending_peer_and_prevents_auto_resend(device_user):
     assert not next(d for d in devices.device_list(user['id']) if d['id']==device_id)['ready']
 
 
+def test_deletion_finishing_during_page_render_still_refreshes(device_user, monkeypatch):
+    user, _, _ = device_user
+    device_id, operation = devices.prepare_device(user['id'], name='Laptop')
+    asyncio.run(devices.run_device_sync(operation))
+    _, deletion = devices.prepare_device(user['id'], delete_id=device_id)
+    original = main.user_ip_change_state
+    def finish_before_busy_check(client_id):
+        complete_install_operation(deletion, 'Deletion acknowledged')
+        return original(client_id)
+    monkeypatch.setattr(main, 'user_ip_change_state', finish_before_busy_check)
+    http = TestClient(main.app)
+    page = http.get(f"/client/{user['token']}").text
+    assert 'Laptop' in page
+    assert 'setTimeout(() => window.location.reload(), 5000)' in page
+    page = http.get(f"/client/{user['token']}").text
+    assert 'Laptop' not in page
+    assert 'setTimeout(() => window.location.reload(), 5000)' not in page
+
+
 def test_device_inputs_disabled_owner_and_ip_address_reservations(device_user):
     user,other,_=device_user
     with pytest.raises(ValueError):devices.prepare_device(user['id'],name='ГЛАВНЫЙ')

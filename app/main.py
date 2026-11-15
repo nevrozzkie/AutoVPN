@@ -1981,6 +1981,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         {
             "client": client,
             "amnezia_devices": devices, "selected_device": selected_device,
+            "amnezia_device_pending": any(not item["legacy"] and not item["ready"] and not item["failed"] for item in devices),
             "device_management_available": device_management_available,
             "current_ip": config.current_ip,
             "config_updated_at": config.config_updated_at,
