@@ -8,5 +8,5 @@
     <textarea id="{{ protocol }}-key" readonly spellcheck="false" aria-label="Конфиг {{ 'VLESS' if protocol == 'vless' else 'Hysteria' }}">{{ key }}</textarea>
   </div>
   {% endfor %}
-  <p class="muted device-hint">Эти конфиги не обновляются автоматически. После смены IP или настроек заново скопируйте нужный ключ и импортируйте его в клиент.</p>
+  <p class="muted device-hint">Обновляйте вручную после смены IP или настроек.</p>
 </div>

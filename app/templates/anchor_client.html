@@ -19,9 +19,9 @@
   <section data-connection-tabs><h2>{% if vless_enabled %}VLESS{% endif %}{% if vless_enabled and hysteria_enabled %} + {% endif %}{% if hysteria_enabled %}Hysteria{% endif %}</h2>
     {% include "connection_tabs.html" %}
     <div id="connection-subscription" role="tabpanel" aria-labelledby="tab-subscription" data-connection-panel="subscription">
-    <p class="muted device-hint" style="margin:0 0 16px">Подписка может обновлять адреса и настройки автоматически, если это поддерживает ваш клиент. При необходимости обновите её вручную в приложении.</p>
+    <p class="muted device-hint" style="margin:0 0 16px">Автообновление — если поддерживается и настроено в клиенте.</p>
     <a class="button connection-primary" href="{{ import_url }}" rel="noreferrer">Открыть в клиенте ↗</a>
-    <p class="muted device-hint" style="margin:0 0 14px">Если VPN-клиент не открылся, скопируйте ссылку на подписку ниже и добавьте её в приложении вручную.</p>
+    <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Добавьте подписку вручную.</p>
     <div class="credential-toolbar"><span class="credential-label">Подписка</span><button class="secondary" data-copy="subscription">Копировать</button><button class="secondary" data-toggle="subscription-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="subscription-qr" aria-expanded="false">QR-код</button></div>
     <div id="subscription-panel" class="credential-panel" hidden><textarea id="subscription" aria-label="Подписка" readonly>{{ prefix }}/sub/{{ client.token }}</textarea></div>
     <div id="subscription-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки"></div>
@@ -39,13 +39,12 @@
       <button type="button" {% if devices %}class="device-add"{% endif %} {% if not device_management_available %}disabled{% endif %} aria-label="Добавить устройство" onclick="document.getElementById('add-device').showModal()">{{ '+' if devices else 'Добавить устройство' }}</button>
     </nav>
     <a class="button connection-primary" href="{{ amnezia_key }}" rel="noreferrer">Открыть в AmneziaVPN ↗</a>
-    <p class="muted device-hint" style="margin:0 0 14px">Если AmneziaVPN не открылась, скопируйте ключ ниже и импортируйте его в приложении вручную.</p>
+    <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Импортируйте ключ вручную.</p>
     <div class="credential-toolbar"><span class="credential-label">Ключ AmneziaVPN</span><button class="secondary" data-copy="amnezia-key">Копировать</button><button class="secondary" data-toggle="amnezia-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="amnezia-qr" aria-expanded="false">QR-код</button></div>
     <div id="amnezia-panel" class="credential-panel" hidden><textarea id="amnezia-key" aria-label="Ключ AmneziaVPN" readonly>{{ amnezia_key }}</textarea></div>
     <div id="amnezia-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/amnezia.qr/{{ client.token }}{{ device_suffix }}" alt="QR AmneziaVPN"></div>
     <div class="downloads"><a class="button secondary" href="{{ prefix }}/amnezia/{{ client.token }}{{ device_suffix }}">Скачать .conf</a>{% if selected_device %}<button class="danger" type="button" {% if not device_management_available %}disabled{% endif %} onclick="document.getElementById('delete-device').showModal()">Удалить устройство</button>{% endif %}</div>
-    <p class="muted device-hint">Доступ одного пользователя для разных устройств. Для одновременного подключения используйте отдельный профиль на каждом устройстве.</p>
-    <p class="muted device-hint">Ключ AmneziaVPN не обновляется автоматически: после смены IP или настроек импортируйте его заново.</p>
+    <p class="muted device-hint">Для одного пользователя: отдельный профиль на устройство, обновление вручную.</p>
   </section>
   {% endif %}
 </main>

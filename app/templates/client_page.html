@@ -79,9 +79,9 @@
           </h2>
           {% include "connection_tabs.html" %}
           <div id="connection-subscription" role="tabpanel" aria-labelledby="tab-subscription" data-connection-panel="subscription">
-          <p class="muted device-hint" style="margin:0 0 16px">Подписка может обновлять адреса и настройки автоматически, если это поддерживает ваш клиент. При необходимости обновите её вручную в приложении.</p>
+          <p class="muted device-hint" style="margin:0 0 16px">Автообновление — если поддерживается и настроено в клиенте.</p>
           <a class="button connection-primary" href="{{ neko_import_url }}" rel="noreferrer">Открыть в клиенте <span aria-hidden="true">↗</span></a>
-          <p class="muted device-hint" style="margin:0 0 14px">Если VPN-клиент не открылся, скопируйте ссылку на подписку ниже и добавьте её в приложении вручную.</p>
+          <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Добавьте подписку вручную.</p>
           <div class="credential-toolbar" role="group" aria-label="Подписка">
             <span class="credential-label">Подписка</span>
             <button type="button" class="secondary" data-copy-value="{{ subscription_url }}">Копировать</button>
@@ -125,7 +125,7 @@
         {% if selected_device.ready %}
 
         <a class="button connection-primary" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN <span aria-hidden="true">↗</span></a>
-        <p class="muted device-hint" style="margin:0 0 14px">Если AmneziaVPN не открылась, скопируйте ключ ниже и импортируйте его в приложении вручную.</p>
+        <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Импортируйте ключ вручную.</p>
         <div class="credential-toolbar" role="group" aria-label="Ключ AmneziaVPN">
           <span class="credential-label">Ключ AmneziaVPN</span>
           <button type="button" class="secondary" onclick="copyClientValue(this, document.getElementById('amnezia-key').value)">Копировать</button>
@@ -142,8 +142,7 @@
           {% if selected_device.failed %}<p class="warn">Не удалось подтвердить изменение устройства. Нужна помощь администратора.</p>
           {% else %}<p class="muted">{% if selected_device.deleted %}Отключаем устройство{% else %}Готовим отдельный конфиг{% endif %}… Страница обновится автоматически.</p>{% endif %}
         {% endif %}
-        <p class="muted device-hint">Ключ AmneziaVPN не обновляется автоматически: после смены IP или настроек импортируйте его заново.</p>
-        <p class="muted device-hint">Доступ одного пользователя для разных устройств. Для одновременного подключения используйте отдельную вкладку на каждом устройстве.</p>
+        <p class="muted device-hint">Для одного пользователя: отдельный профиль на устройство, обновление вручную.</p>
       </section>
       {% endif %}
 
