@@ -340,6 +340,25 @@ def step_label(value: object) -> str:
     return label.replace("Aeza", "SprintBOX") if provider_name() == "sprintbox" else label
 
 
+def format_recent_msk(value: object) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        seconds = (datetime.now(UTC) - parsed).total_seconds()
+        if 0 <= seconds < 86400:
+            if seconds < 60:
+                return 'только что'
+            count = int(seconds // (3600 if seconds >= 3600 else 60))
+            forms = ('час', 'часа', 'часов') if seconds >= 3600 else ('минуту', 'минуты', 'минут')
+            word = forms[2] if 11 <= count % 100 <= 14 else forms[0] if count % 10 == 1 else forms[1] if 2 <= count % 10 <= 4 else forms[2]
+            return f'{count} {word} назад'
+    except (ValueError, TypeError):
+        pass
+    return format_msk(value)
+
+
+templates.env.filters["recent_msk"] = format_recent_msk
 templates.env.filters["msk"] = format_msk
 templates.env.filters["status_label"] = status_label
 templates.env.filters["step_label"] = step_label

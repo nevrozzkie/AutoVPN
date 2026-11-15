@@ -18,10 +18,16 @@
   });
   window.addEventListener('appinstalled', installed);
   button?.addEventListener('click', async () => {
-    if (!promptEvent) return;
+    if (!promptEvent) {
+      if (help) {
+        help.textContent = /iPhone|iPad|iPod/.test(navigator.userAgent || '')
+          ? 'В Safari нажмите «Поделиться» → «На экран Домой». Браузер требует выполнить этот шаг вручную.'
+          : 'Откройте меню браузера → «Установить приложение» или «Добавить на главный экран». Если предложение установки появится, эта кнопка откроет его.';
+      }
+      return;
+    }
     const pending = promptEvent;
     promptEvent = undefined;
-    button.hidden = true;
     try {
       await pending.prompt();
       await pending.userChoice;
