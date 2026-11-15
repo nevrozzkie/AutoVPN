@@ -39,7 +39,7 @@ def clash_provider(config, client):
 
 def clash_profile(config, client, base_url):
     name = config_filename('clash', client, config.revision, 'yaml')[:-5]
-    return {'mode': 'rule', 'mixed-port': 7897, 'allow-lan': False,
+    return {'mode': 'rule', 'mixed-port': 7897,
             'proxy-providers': {name: {'type': 'http', 'url': f"{base_url}/clash-provider/{client['token']}",
                                      'path': f'./providers/{name}.yaml', 'interval': 3600, 'proxy': 'DIRECT'}},
             'proxy-groups': [{'name': 'VPN', 'type': 'select', 'use': [name]}],
