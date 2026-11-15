@@ -8,11 +8,19 @@
   <p class="muted">Состав клиентов и настройки якоря зафиксированы на момент последней синхронизации его сервера. Новые клиенты туда автоматически не добавляются. Отключение клиента в панели закрывает выдачу его конфигов; для отзыва уже импортированных ключей нужен отдельный отзыв на старом сервере.</p>
 </section>
 {% for anchor in anchors %}
+{% set edit = anchor_edit_states.get(anchor.anchor_id) %}
 <section class="panel">
   <h2>{{ anchor.box_name }} · {{ anchor.ip }}</h2>
   <p>Аккаунт: {{ anchor.account_label or anchor.account_login }}.</p>
   <p class="muted">Сохранён {{ anchor.created_at|msk }}. Защищён от автоматической очистки.</p>
-  {% if anchor.maintenance_operation_id %}
+  {% if edit and edit.status in ['PENDING','RUNNING'] %}
+  <p class="muted">Применяем изменения якоря… Страница обновится автоматически.</p>
+  <script>setTimeout(()=>location.reload(),3000)</script>
+  {% elif edit %}
+  <p class="warning">Изменение якоря не подтверждено. Проверьте сервер перед повторным применением.</p>
+  <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/retry-edit"><button {% if busy %}disabled{% endif %}>Повторить применение</button></form>
+  <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/restore-edit"><p class="muted">Чтобы отменить изменение, заново примените последний подтверждённый конфиг. Это может кратко переподключить клиентов якоря.</p><button {% if busy %}disabled{% endif %}>Восстановить подтверждённый конфиг</button></form>
+  {% elif anchor.maintenance_operation_id %}
   <p class="warning">Якорь перенастраивается или предыдущая попытка не завершилась. Выдача прежних профилей приостановлена. Проверьте журнал перед повторной попыткой.</p>
   {% elif not anchor.ready %}
   <p>Бокс сохранён без конфигов: нет подтверждённого снимка VPN. Используйте прежний профиль подключения, если VPN на нём установлен.</p>
@@ -26,6 +34,18 @@
     </div><button type="submit">Сохранить доступы</button>
     <p class="muted">Снятие отметки закрывает страницу и загрузку конфигов. Уже импортированный ключ продолжит работать на сервере.</p>
   </form>
+  {% endif %}
+  {% if anchor.ready %}
+  {% set installed_ids = anchor.clients|map(attribute='id')|list %}
+  {% set available = all_clients|rejectattr('id','in',installed_ids)|list %}
+  <details style="margin:20px 0"><summary>Добавить пользователей на сервер</summary>
+    <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/users">
+      <p class="muted">Выбранные пользователи получат конфиги и ссылку в кабинете после применения. Во время применения возможно краткое переподключение к якорю.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">
+      {% for person in available %}<label style="display:flex;gap:8px;align-items:center;padding:12px;border:1px solid var(--border);border-radius:10px"><input style="width:auto" type="checkbox" name="client_ids" value="{{ person.id }}">{{ person.name }}</label>{% else %}<p class="muted">Все включённые пользователи уже есть на сервере.</p>{% endfor %}
+      </div><button type="submit" {% if busy or not available %}disabled{% endif %}>Добавить выбранных</button>
+    </form>
+  </details>
   {% endif %}
   <div class="actions">
     {% if anchor.can_promote %}<a class="button" href="/admin/anchors/{{ anchor.anchor_id }}/promote/confirm">Сделать основным</a>{% endif %}

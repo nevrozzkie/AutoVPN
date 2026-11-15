@@ -31,6 +31,11 @@
         <button class="theme-toggle" type="button" onclick="toggleTheme()" title="Переключить тему">◐</button>
       </div>
 
+      {% if user_anchors %}
+      <section><h2>Якорные VPN</h2><div class="downloads">
+        {% for anchor in user_anchors %}<a class="button secondary" href="/anchor/{{ anchor.anchor_id }}/client/{{ client.token }}">Якорный VPN · {{ anchor.ip }}</a>{% endfor %}
+      </div></section>
+      {% endif %}
       <section id="vpn-status">
         <div class="section-title">
           <h2>Статус VPN</h2>
@@ -71,6 +76,7 @@
             {% endif %}
           </h2>
           <a class="button connection-primary" href="{{ neko_import_url }}" rel="noreferrer">Открыть в клиенте <span aria-hidden="true">↗</span></a>
+          <p class="muted device-hint" style="margin:0 0 14px">Если не открывается, попробуйте добавить подключение самостоятельно: скопируйте подписку ниже.</p>
           <div class="credential-toolbar" role="group" aria-label="Подписка">
             <span class="credential-label">Подписка</span>
             <button type="button" class="secondary" data-copy-value="{{ subscription_url }}">Копировать</button>
@@ -112,6 +118,7 @@
         {% if selected_device.ready %}
 
         <a class="button connection-primary" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN <span aria-hidden="true">↗</span></a>
+        <p class="muted device-hint" style="margin:0 0 14px">Если не открывается, попробуйте добавить подключение самостоятельно: скопируйте подписку или ключ ниже.</p>
         <div class="credential-toolbar" role="group" aria-label="Ключ AmneziaVPN">
           <span class="credential-label">Ключ AmneziaVPN</span>
           <button type="button" class="secondary" onclick="copyClientValue(this, document.getElementById('amnezia-key').value)">Копировать</button>
@@ -132,11 +139,6 @@
       </section>
       {% endif %}
 
-      {% if user_anchors %}
-      <section><h2>Якорные VPN</h2><div class="downloads">
-        {% for anchor in user_anchors %}<a class="button secondary" href="/anchor/{{ anchor.anchor_id }}/client/{{ client.token }}">Якорный VPN · {{ anchor.ip }}</a>{% endfor %}
-      </div></section>
-      {% endif %}
       <section>
         <h2>Гайды</h2>
         <p class="muted">Рекомендуемый порядок: VLESS → Amnezia → Hysteria.</p>

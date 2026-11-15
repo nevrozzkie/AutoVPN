@@ -70,12 +70,12 @@ def list_anchors(token: str | None = None) -> list[dict]:
         return result
 
 
-def anchor_client(anchor_id: str, token: str):
+def anchor_client(anchor_id: str, token: str, *, allow_maintenance: bool = False):
     with get_db() as db:
         live = db.execute("SELECT id FROM clients WHERE token=? AND enabled=1 AND deleted_at IS NULL",
                           (token,)).fetchone()
         row = db.execute("SELECT * FROM vpn_anchors WHERE anchor_id=?", (anchor_id,)).fetchone()
-    if not live or not row or not row["payload_json"] or row.get("maintenance_operation_id"):
+    if not live or not row or not row["payload_json"] or (row.get("maintenance_operation_id") and not allow_maintenance):
         return None
     config = captured_vpn_config_from_json(row.pop("payload_json"))
     client = config.client_by_token(token)

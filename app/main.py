@@ -86,6 +86,7 @@ from app.sprintbox_accounts import (
 from app.sprintbox import SprintboxClient
 
 from app.anchors import list_anchors, anchor_client, has_anchor_access, set_anchor_access
+from app import anchor_updates
 from app.sprintbox_controls import (anchor_target, prepare_deletion, confirm_deletion, deletion, run_deletion, recheck_deletion)
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
@@ -706,7 +707,7 @@ async def admin_dashboard(request: Request, _: str = Depends(require_admin)) -> 
     current_ip = get_setting("current_ip")
     clients = list_clients()
     target_host = resolve_eu_host()
-    latest_install_operation = get_latest_install_operation()
+    latest_install_operation = get_latest_install_operation(primary_only=True)
     latest_server_operation = get_latest_server_operation()
     active_vps_operation = get_active_vps_operation()
     vpn_state = get_vpn_state()
@@ -919,6 +920,8 @@ def admin_select_sprintbox_account(request: Request, account_id: int, _: str = D
 def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     return templates.TemplateResponse(request, "anchors.html", {
         "anchors": list_anchors(), "busy":get_active_vps_operation() is not None,
+        "all_clients": [client for client in list_clients() if client['enabled']],
+        "anchor_edit_states": {anchor['anchor_id']: anchor_updates.edit_state(anchor['anchor_id']) for anchor in list_anchors()},
     }, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
 
@@ -928,6 +931,37 @@ def admin_anchor_access(anchor_id: str, client_ids: list[int] = Form(default=[])
         set_anchor_access(anchor_id, client_ids)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    return RedirectResponse('/admin/anchors', status_code=303)
+
+
+@app.post('/admin/anchors/{anchor_id}/users')
+def add_anchor_users(anchor_id: str, background_tasks: BackgroundTasks, client_ids: list[int] = Form(default=[]), _: str = Depends(require_admin)):
+    try:
+        operation = anchor_updates.prepare_users(anchor_id, client_ids)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if operation is not None:
+        background_tasks.add_task(anchor_updates.run_edit, operation)
+    return RedirectResponse('/admin/anchors', status_code=303)
+
+
+@app.post('/admin/anchors/{anchor_id}/retry-edit')
+def retry_anchor_edit(anchor_id: str, background_tasks: BackgroundTasks, _: str = Depends(require_admin)):
+    try:
+        operation = anchor_updates.retry_edit(anchor_id)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(anchor_updates.run_edit, operation)
+    return RedirectResponse('/admin/anchors', status_code=303)
+
+
+@app.post('/admin/anchors/{anchor_id}/restore-edit')
+def restore_anchor_edit(anchor_id: str, background_tasks: BackgroundTasks, _: str = Depends(require_admin)):
+    try:
+        operation = anchor_updates.restore_edit(anchor_id)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(anchor_updates.run_edit, operation)
     return RedirectResponse('/admin/anchors', status_code=303)
 
 
@@ -1277,7 +1311,7 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
         int(router_entry["client_id"]): router_entry
         for router_entry in list_routers()
     }
-    clients = list_clients_with_stats()
+    clients = [client for client in list_clients_with_stats() if int(client["id"]) not in routers_by_client_id]
     for client in clients:
         client["router"] = routers_by_client_id.get(int(client["id"]))
     return templates.TemplateResponse(
@@ -1414,6 +1448,16 @@ def admin_routers(request: Request, _: str = Depends(require_admin)) -> HTMLResp
             "clients_by_id": {int(client["id"]): client for client in clients},
         },
     )
+
+
+@app.post('/admin/routers/{router_id}/client-state')
+def toggle_router_client(router_id: str, _: str = Depends(require_admin)):
+    entry = _require_router_entry(router_id)
+    client = get_client_by_id(entry['client_id'])
+    if not client:
+        raise HTTPException(status_code=404)
+    set_client_enabled(client['id'], not client['enabled'])
+    return RedirectResponse('/admin/routers', status_code=303)
 
 
 @app.post("/admin/routers", response_class=HTMLResponse)
@@ -1742,7 +1786,7 @@ async def _run_install_background(operation_id: int) -> None:
 def admin_refresh_protocols(background_tasks: BackgroundTasks, _: str = Depends(require_admin)) -> RedirectResponse:
     current_ip = get_setting("current_ip")
     target_host = resolve_eu_host()
-    latest_install_operation = get_latest_install_operation()
+    latest_install_operation = get_latest_install_operation(primary_only=True)
     if (
         current_ip
         and target_host
@@ -2030,18 +2074,56 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     )
 
 
+def authorize_anchor(request: Request, anchor_id: str, token: str, credentials: HTTPBasicCredentials | None = Depends(setup_security)):
+    if has_anchor_access(anchor_id, token):
+        return False
+    if credentials is None:
+        raise HTTPException(status_code=401, headers={'WWW-Authenticate': 'Basic'})
+    require_admin(request, credentials)
+    return True
+
+
+@app.post('/anchor/{anchor_id}/devices/{token}')
+def add_anchor_device(anchor_id: str, token: str, background_tasks: BackgroundTasks, name: str = Form(...), admin: bool = Depends(authorize_anchor)):
+    try:
+        device_id, operation = anchor_updates.prepare_anchor_device(anchor_id, token, name=name, admin=admin)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if operation is not None:
+        background_tasks.add_task(anchor_updates.run_edit, operation)
+    return RedirectResponse(f'/anchor/{anchor_id}/client/{token}?device={device_id}#amnezia-section', status_code=303)
+
+
+@app.post('/anchor/{anchor_id}/devices/{token}/{device_id}/delete')
+def delete_anchor_device(anchor_id: str, token: str, device_id: int, background_tasks: BackgroundTasks, admin: bool = Depends(authorize_anchor)):
+    try:
+        _, operation = anchor_updates.prepare_anchor_device(anchor_id, token, delete_id=device_id, admin=admin)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(anchor_updates.run_edit, operation)
+    return RedirectResponse(f'/anchor/{anchor_id}/client/{token}#amnezia-section', status_code=303)
+
+
 @app.get("/anchor/{anchor_id}/{kind}/{token}")
-def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, credentials: HTTPBasicCredentials | None = Depends(setup_security)):
-    if not has_anchor_access(anchor_id, token):
-        if credentials is None:
-            raise HTTPException(status_code=401, headers={'WWW-Authenticate': 'Basic'})
-        require_admin(request, credentials)
+def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, device: int | None = None, admin: bool = Depends(authorize_anchor)):
     if kind not in {"client", "sub", "sing-box", "clash", "clash-provider", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
         raise HTTPException(status_code=404)
-    bound = anchor_client(anchor_id, token)
+    bound = anchor_client(anchor_id, token, allow_maintenance=True)
     if bound is None:
         raise HTTPException(status_code=404)
     anchor, config, client = bound
+    if anchor['maintenance_operation_id']:
+        if kind != 'client':
+            raise HTTPException(status_code=409, detail='Якорь обновляется; конфиг временно недоступен')
+        state = anchor_updates.edit_state(anchor_id)
+        return templates.TemplateResponse(request, 'anchor_pending.html', {'state': state, 'token': token, 'anchor_id': anchor_id})
+    own_devices = [item for item in config.amnezia_devices if item.client_id == client.id]
+    selected = next((item for item in own_devices if item.id == device), None) if device is not None else None
+    if device is not None and selected is None:
+        raise HTTPException(status_code=404)
+    if selected is not None and kind in {'client', 'amnezia', 'amnezia-key', 'amnezia.qr'}:
+        client = replace(client, name=f'{client.name} {selected.name}', amnezia_private_key=selected.private_key,
+                         amnezia_public_key=selected.public_key, amnezia_preshared_key=selected.preshared_key, amnezia_ipv4=selected.ipv4)
     client = replace(client, name=f"{client.name} · Якорь {anchor['ip']}")
     subscription_enabled = config.vless.protocol.enabled or config.hysteria.protocol.enabled
     if kind in {"amnezia", "amnezia-key", "amnezia.qr"} and not config.amnezia.protocol.enabled:
@@ -2053,6 +2135,9 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, cre
         return templates.TemplateResponse(request, "anchor_client.html", {
             "anchor": anchor, "client": client, "amnezia_enabled": config.amnezia.protocol.enabled,
             "prefix": prefix, "subscription_enabled": subscription_enabled,
+            "devices": own_devices, "selected_device": selected,
+            "device_suffix": '' if selected is None else f'?device={selected.id}',
+            "device_management_available": get_active_vps_operation() is None,
             "vless_enabled": config.vless.protocol.enabled, "hysteria_enabled": config.hysteria.protocol.enabled,
             "import_url": 'sn://subscription?' + urlencode({'url': f'{prefix}/sub/{token}', 'name': client.name}),
             "amnezia_key": render_amnezia_vpn_key(config, client) if config.amnezia.protocol.enabled else "",

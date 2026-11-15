@@ -45,6 +45,7 @@
         {% endif %}
       </summary>
 
+      {% if client %}<div class="actions"><a class="button" href="/client/{{ client.token }}">Кабинет и конфиги роутера</a><form method="post" action="/admin/routers/{{ router.router_id }}/client-state"><button type="submit">{{ 'Отключить VPN-клиента' if client.enabled else 'Включить VPN-клиента' }}</button></form></div>{% endif %}
       <div class="client-grid">
         <form method="post" action="/admin/routers/{{ router.router_id }}/rename">
           <label class="label" for="router-name-{{ router.router_id }}">Название</label>

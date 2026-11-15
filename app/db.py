@@ -773,10 +773,11 @@ def list_install_operations(limit: int = 100) -> list[dict[str, Any]]:
         ).fetchall()
 
 
-def get_latest_install_operation() -> dict[str, Any] | None:
+def get_latest_install_operation(*, primary_only: bool = False) -> dict[str, Any] | None:
     with get_db() as db:
+        condition = "WHERE NOT EXISTS (SELECT 1 FROM settings s WHERE s.key='install.' || o.id || '.anchor_edit')" if primary_only else ""
         return db.execute(
-            "SELECT * FROM vpn_install_operations ORDER BY id DESC LIMIT 1"
+            f"SELECT o.* FROM vpn_install_operations o {condition} ORDER BY o.id DESC LIMIT 1"
         ).fetchone()
 
 

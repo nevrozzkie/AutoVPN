@@ -60,6 +60,6 @@ def test_cannot_grant_missing_or_disabled_clients_or_serve_maintenance(anchor_us
     assert http.get(f"/anchor/{anchor}/amnezia/{user['token']}").status_code!=200
     set_client_enabled(user['id'],True)
     with get_db() as db:db.execute('UPDATE vpn_anchors SET maintenance_operation_id=99 WHERE anchor_id=?',(anchor,))
-    assert http.get(f"/anchor/{anchor}/sub/{user['token']}").status_code==404
+    assert http.get(f"/anchor/{anchor}/sub/{user['token']}").status_code==409
     assert anchor not in http.get(f"/client/{user['token']}").text
     set_anchor_access(anchor, [])
