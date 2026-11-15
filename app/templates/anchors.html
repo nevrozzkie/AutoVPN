@@ -17,6 +17,16 @@
   {% elif not anchor.ready %}
   <p>Бокс сохранён без конфигов: нет подтверждённого снимка VPN. Используйте прежний профиль подключения, если VPN на нём установлен.</p>
   {% endif %}
+  {% if anchor.has_config %}
+  <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/access">
+    <h3>Доступ в личном кабинете</h3>
+    <p class="muted">Отметьте пользователей, которым будет видна ссылка и доступны конфиги этого якоря.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">
+    {% for client in anchor.clients %}<label style="display:flex;align-items:center;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px"><input style="width:auto" type="checkbox" name="client_ids" value="{{ client.id }}" {% if client.granted %}checked{% endif %}>{{ client.name }}</label>{% else %}<p>Нет доступных пользователей в сохранённой конфигурации.</p>{% endfor %}
+    </div><button type="submit">Сохранить доступы</button>
+    <p class="muted">Снятие отметки закрывает страницу и загрузку конфигов. Уже импортированный ключ продолжит работать на сервере.</p>
+  </form>
+  {% endif %}
   <div class="actions">
     {% if anchor.can_promote %}<a class="button" href="/admin/anchors/{{ anchor.anchor_id }}/promote/confirm">Сделать основным</a>{% endif %}
     {% if anchor.account_id %}<a href="/admin/sprintbox/accounts/{{ anchor.account_id }}/boxes/{{ anchor.box_name|urlencode }}/delete/confirm">Удалить бокс</a>{% endif %}

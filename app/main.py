@@ -85,7 +85,7 @@ from app.sprintbox_accounts import (
 )
 from app.sprintbox import SprintboxClient
 
-from app.anchors import list_anchors, anchor_client
+from app.anchors import list_anchors, anchor_client, has_anchor_access, set_anchor_access
 from app.sprintbox_controls import (anchor_target, prepare_deletion, confirm_deletion, deletion, run_deletion, recheck_deletion)
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
@@ -911,6 +911,15 @@ def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResp
     return templates.TemplateResponse(request, "anchors.html", {
         "anchors": list_anchors(), "busy":get_active_vps_operation() is not None,
     }, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.post('/admin/anchors/{anchor_id}/access')
+def admin_anchor_access(anchor_id: str, client_ids: list[int] = Form(default=[]), _: str = Depends(require_admin)):
+    try:
+        set_anchor_access(anchor_id, client_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return RedirectResponse('/admin/anchors', status_code=303)
 
 
 @app.get("/admin/anchors/{anchor_id}/promote/confirm", response_class=HTMLResponse)
@@ -1982,6 +1991,7 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         {
             "client": client,
             "amnezia_devices": devices, "selected_device": selected_device,
+            "user_anchors": list_anchors(token),
             "amnezia_device_pending": any(item.get("pending_deletion") or (not item["legacy"] and not item["ready"] and not item["failed"]) for item in devices),
             "device_management_available": device_management_available,
             "current_ip": config.current_ip,
@@ -2012,8 +2022,12 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
 
 
 @app.get("/anchor/{anchor_id}/{kind}/{token}")
-def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, _: str = Depends(require_admin)):
-    if kind not in {"client", "sub", "sing-box", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
+def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, credentials: HTTPBasicCredentials | None = Depends(setup_security)):
+    if not has_anchor_access(anchor_id, token):
+        if credentials is None:
+            raise HTTPException(status_code=401, headers={'WWW-Authenticate': 'Basic'})
+        require_admin(request, credentials)
+    if kind not in {"client", "sub", "sing-box", "clash", "clash-provider", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
         raise HTTPException(status_code=404)
     bound = anchor_client(anchor_id, token)
     if bound is None:
@@ -2023,22 +2037,30 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, _: 
     subscription_enabled = config.vless.protocol.enabled or config.hysteria.protocol.enabled
     if kind in {"amnezia", "amnezia-key", "amnezia.qr"} and not config.amnezia.protocol.enabled:
         raise HTTPException(status_code=404)
-    if kind in {"sub", "sing-box", "subscription.qr"} and not subscription_enabled:
+    if kind in {"sub", "sing-box", "clash", "clash-provider", "subscription.qr"} and not subscription_enabled:
         raise HTTPException(status_code=404)
     prefix = f"{str(request.base_url).rstrip('/')}/anchor/{anchor_id}"
     if kind == "client":
         return templates.TemplateResponse(request, "anchor_client.html", {
             "anchor": anchor, "client": client, "amnezia_enabled": config.amnezia.protocol.enabled,
             "prefix": prefix, "subscription_enabled": subscription_enabled,
+            "vless_enabled": config.vless.protocol.enabled, "hysteria_enabled": config.hysteria.protocol.enabled,
+            "import_url": 'sn://subscription?' + urlencode({'url': f'{prefix}/sub/{token}', 'name': client.name}),
             "amnezia_key": render_amnezia_vpn_key(config, client) if config.amnezia.protocol.enabled else "",
         })
+    if kind in {'clash', 'clash-provider'}:
+        value = clash_provider(config, client.as_dict()) if kind == 'clash-provider' else clash_profile(config, client.as_dict(), str(request.base_url).rstrip('/'))
+        if kind == 'clash':
+            for provider in value['proxy-providers'].values():
+                provider['url'] = f'{prefix}/clash-provider/{token}'
+        return Response(dump_yaml(value), media_type='application/yaml', headers={'Content-Disposition': f'attachment; filename="{config_filename("anchor-clash", client.as_dict(), config.revision, "yaml")}"'})
     if kind == "sub":
         return PlainTextResponse(render_subscription(config, client.as_dict()))
     if kind == "sing-box":
-        return JSONResponse(render_sing_box_subscription(config, client.as_dict()))
+        return JSONResponse(render_sing_box_subscription(config, client.as_dict()), headers={"Content-Disposition": f'attachment; filename="{config_filename("anchor-singbox", client.as_dict(), config.revision, "json")}"'})
     if kind == "amnezia":
         return PlainTextResponse(render_amnezia_client_config(config, client), headers={
-            "Content-Disposition": f"attachment; filename=anchor-amnezia-{client.id}.conf",
+            "Content-Disposition": f'attachment; filename="{config_filename("anchor-amnez", client.as_dict(), config.revision, "conf")}"',
         })
     if kind == "amnezia-key":
         return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")

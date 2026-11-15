@@ -53,16 +53,19 @@ def list_anchors(token: str | None = None) -> list[dict]:
         for row in rows:
             payload = row.pop("payload_json")
             config = captured_vpn_config_from_json(payload) if payload else None
+            row["has_config"] = config is not None
             row["can_promote"] = config is not None and bool(row.get("account_id"))
             row["ready"] = config is not None and not row.get("maintenance_operation_id")
-            if not row["ready"]:
-                config = None
             clients = [client for client in config.enabled_clients
-                       if live_clients.get(client.token) == client.id and (token is None or token == client.token)] if config else []
+                       if live_clients.get(client.token) == client.id and (token is None or token == client.token)] if config and (token is None or row["ready"]) else []
             if token is not None and not clients:
                 continue
             # No server keys or other clients' credentials in template context.
-            row["clients"] = [{"name": client.name, "token": client.token} for client in clients]
+            grants = _grants(db, row['anchor_id'])
+            if token is not None and not any(client.id in grants for client in clients):
+                continue
+            row["clients"] = [{"id": client.id, "name": client.name, "token": client.token,
+                               "granted": client.id in grants} for client in clients]
             result.append(row)
         return result
 
@@ -99,3 +102,30 @@ def retain_as_anchors(db, operation_id: int, selected: list[str]) -> None:
         retained.pop(name)
     db.execute("UPDATE settings SET value=? WHERE key=?",
                (json.dumps(ctx), f"ip_change.{operation_id}.sprintbox"))
+
+
+def _grants(db, anchor_id):
+    row = db.execute('SELECT value FROM settings WHERE key=?', (f'anchor.{anchor_id}.clients',)).fetchone()
+    return set(json.loads(row['value'])) if row else set()
+
+
+def has_anchor_access(anchor_id, token):
+    with get_db() as db:
+        client = db.execute('SELECT id FROM clients WHERE token=? AND enabled=1 AND deleted_at IS NULL', (token,)).fetchone()
+        return bool(client and client['id'] in _grants(db, anchor_id))
+
+
+def set_anchor_access(anchor_id, client_ids):
+    with get_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        anchor = db.execute('SELECT payload_json,maintenance_operation_id FROM vpn_anchors WHERE anchor_id=?', (anchor_id,)).fetchone()
+        if not anchor or not anchor['payload_json']:
+            raise ValueError('Якорь недоступен для выдачи доступа')
+        config = captured_vpn_config_from_json(anchor['payload_json'])
+        live = {row['id']: row['token'] for row in db.execute('SELECT id,token FROM clients WHERE enabled=1 AND deleted_at IS NULL')}
+        eligible = {client.id for client in config.enabled_clients if live.get(client.id) == client.token}
+        selected = set(client_ids)
+        if not selected <= eligible:
+            raise ValueError('Выбранный пользователь отсутствует в конфигурации якоря или отключён')
+        db.execute('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                   (f'anchor.{anchor_id}.clients', json.dumps(sorted(selected))))

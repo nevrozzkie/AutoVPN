@@ -1,44 +1,51 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
+  <script>document.documentElement.dataset.theme=localStorage.getItem('autovpn-theme')||'dark';</script>
   <title>Якорный VPN · {{ client.name }}</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { max-width: 780px; margin: 24px auto; padding: 0 20px; font: 16px/1.5 system-ui, sans-serif; }
-    section { border: 1px solid #758392; border-radius: 8px; padding: 18px; margin: 18px 0; }
-    input, textarea { box-sizing: border-box; width: 100%; padding: 10px; font: inherit; }
-    textarea { min-height: 120px; }
-    a, button { overflow-wrap: anywhere; }
-    button, .button { display: inline-block; padding: 9px 13px; margin: 8px 8px 8px 0; border: 0; border-radius: 6px; background: #0f766e; color: white; text-decoration: none; cursor: pointer; }
-    img { width: 220px; height: 220px; margin-top: 12px; }
-    details { margin-top: 12px; }
-  </style>
+  {% include 'client_styles.html' %}
 </head>
-<body>
-<h1>Якорный VPN</h1>
-<p>{{ client.name }} · {{ anchor.box_name }} · <strong>{{ anchor.ip }}</strong></p>
-<p>Это отдельное подключение к сохранённому серверу. Его IP и параметры не меняются вместе с основным VPN. Доступность проверьте подключением в своей сети.</p>
-<p><a href="/client/{{ client.token }}">Основной VPN и другие якоря</a></p>
-{% if subscription_enabled %}
-<section>
-  <h2>VLESS / Hysteria2</h2>
-  <label for="subscription">Отдельная подписка якорного VPN</label>
-  <input id="subscription" readonly value="{{ prefix }}/sub/{{ client.token }}" onclick="this.select()">
-  <a class="button" href="{{ prefix }}/sub/{{ client.token }}">Открыть подписку</a>
-  <a class="button" href="{{ prefix }}/sing-box/{{ client.token }}">sing-box JSON</a>
-  <details><summary>QR подписки</summary><img src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки якорного VPN"></details>
-</section>
-{% endif %}
-{% if amnezia_enabled %}
-<section>
-  <h2>AmneziaWG</h2>
-  <a class="button" href="{{ prefix }}/amnezia/{{ client.token }}">Скачать .conf</a>
-  <p><label for="amnezia-key">Ключ импорта AmneziaVPN</label></p>
-  <textarea id="amnezia-key" readonly onclick="this.select()">{{ amnezia_key }}</textarea>
-  <details><summary>QR AmneziaVPN</summary><img src="{{ prefix }}/amnezia.qr/{{ client.token }}" alt="QR AmneziaVPN якорного VPN"></details>
-</section>
-{% endif %}
-</body>
-</html>
+<body><main>
+  <div class="page-top"><div><h1>Якорный VPN</h1><span class="revision">{{ client.name }}</span></div><button class="theme-toggle" type="button" aria-label="Переключить тему" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('autovpn-theme',document.documentElement.dataset.theme)">◐</button></div>
+  <p><a href="/client/{{ client.token }}" style="color:var(--accent)">← Личный кабинет</a></p>
+  <section><h2>Отдельное подключение</h2>
+    <p>IP: <code>{{ anchor.ip }}</code></p>
+    <p class="muted">Смена IP и настроек основного VPN не меняет это подключение. Доступность проверьте в своём VPN-клиенте.</p>
+  </section>
+  {% if subscription_enabled %}
+  <section><h2>Подписка {% if vless_enabled %}VLESS{% endif %}{% if vless_enabled and hysteria_enabled %} + {% endif %}{% if hysteria_enabled %}Hysteria{% endif %}</h2>
+    <a class="button connection-primary" href="{{ import_url }}" rel="noreferrer">Открыть в клиенте ↗</a>
+    <div class="credential-toolbar"><span class="credential-label">Подписка</span><button class="secondary" data-copy="subscription">Копировать</button><button class="secondary" data-toggle="subscription-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="subscription-qr" aria-expanded="false">QR-код</button></div>
+    <div id="subscription-panel" class="credential-panel" hidden><textarea id="subscription" aria-label="Подписка" readonly>{{ prefix }}/sub/{{ client.token }}</textarea></div>
+    <div id="subscription-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки"></div>
+    <details class="technical-details"><summary>Clash / Mihomo</summary><p><a class="button secondary" href="{{ prefix }}/clash/{{ client.token }}">Скачать .yaml</a></p></details>
+    <details class="technical-details"><summary>sing-box · не тестировалось</summary><p><a class="button secondary" href="{{ prefix }}/sing-box/{{ client.token }}">Скачать JSON</a></p></details>
+  </section>
+  {% endif %}
+  {% if amnezia_enabled %}
+  <section><h2>AmneziaVPN</h2>
+    <a class="button connection-primary" href="{{ amnezia_key }}" rel="noreferrer">Открыть в AmneziaVPN ↗</a>
+    <div class="credential-toolbar"><span class="credential-label">Ключ AmneziaVPN</span><button class="secondary" data-copy="amnezia-key">Копировать</button><button class="secondary" data-toggle="amnezia-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="amnezia-qr" aria-expanded="false">QR-код</button></div>
+    <div id="amnezia-panel" class="credential-panel" hidden><textarea id="amnezia-key" aria-label="Ключ AmneziaVPN" readonly>{{ amnezia_key }}</textarea></div>
+    <div id="amnezia-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/amnezia.qr/{{ client.token }}" alt="QR AmneziaVPN"></div>
+    <div class="downloads"><a class="button secondary" href="{{ prefix }}/amnezia/{{ client.token }}">Скачать .conf</a></div>
+    <p class="muted device-hint">Используйте этот конфиг на одном устройстве одновременно.</p>
+  </section>
+  {% endif %}
+</main>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(button=>button.addEventListener('click',()=>{
+    const panel=document.getElementById(button.dataset.toggle);panel.hidden=!panel.hidden;
+    button.setAttribute('aria-expanded',String(!panel.hidden));
+    if(!button.dataset.toggle.endsWith('-qr'))button.textContent=panel.hidden?'Показать':'Скрыть';
+    else button.textContent=panel.hidden?'QR-код':'Скрыть QR';
+  }));
+  document.querySelectorAll('[data-copy]').forEach(button=>button.addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).value);button.textContent='Скопировано ✓';}
+    catch{button.textContent='Не удалось скопировать';}
+    setTimeout(()=>button.textContent='Копировать',1800);
+  }));
+</script>
+</body></html>
