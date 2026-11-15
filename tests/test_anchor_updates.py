@@ -145,9 +145,9 @@ def test_router_client_is_managed_from_routers_and_anchor_links_are_first(editab
     assert not get_client_by_id(other['id'])['enabled']
     page=http.get(f"/client/{user['token']}").text
     assert page.index('Якорные VPN')<page.index('<section id="vpn-status">')
-    assert 'Если не открывается, попробуйте добавить подключение самостоятельно' in page
+    assert 'Если VPN-клиент не открылся, скопируйте ссылку на подписку' in page
     anchor_page=http.get(f"/anchor/{anchor}/client/{user['token']}").text
-    assert 'Если не открывается, попробуйте добавить подключение самостоятельно' in anchor_page
+    assert 'Если VPN-клиент не открылся, скопируйте ссылку на подписку' in anchor_page
 
 
 def test_explicit_retry_can_bind_rotated_api_key_for_same_owner(editable,monkeypatch):

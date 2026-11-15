@@ -76,7 +76,7 @@
             {% endif %}
           </h2>
           <a class="button connection-primary" href="{{ neko_import_url }}" rel="noreferrer">Открыть в клиенте <span aria-hidden="true">↗</span></a>
-          <p class="muted device-hint" style="margin:0 0 14px">Если не открывается, попробуйте добавить подключение самостоятельно: скопируйте подписку ниже.</p>
+          <p class="muted device-hint" style="margin:0 0 14px">Если VPN-клиент не открылся, скопируйте ссылку на подписку ниже и добавьте её в приложении вручную.</p>
           <div class="credential-toolbar" role="group" aria-label="Подписка">
             <span class="credential-label">Подписка</span>
             <button type="button" class="secondary" data-copy-value="{{ subscription_url }}">Копировать</button>
@@ -118,7 +118,7 @@
         {% if selected_device.ready %}
 
         <a class="button connection-primary" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN <span aria-hidden="true">↗</span></a>
-        <p class="muted device-hint" style="margin:0 0 14px">Если не открывается, попробуйте добавить подключение самостоятельно: скопируйте подписку или ключ ниже.</p>
+        <p class="muted device-hint" style="margin:0 0 14px">Если AmneziaVPN не открылась, скопируйте ключ ниже и импортируйте его в приложении вручную.</p>
         <div class="credential-toolbar" role="group" aria-label="Ключ AmneziaVPN">
           <span class="credential-label">Ключ AmneziaVPN</span>
           <button type="button" class="secondary" onclick="copyClientValue(this, document.getElementById('amnezia-key').value)">Копировать</button>
