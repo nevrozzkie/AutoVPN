@@ -136,7 +136,7 @@ def test_disabled_user_cannot_start_or_confirm(user_flow):
 
 def test_next_window_and_admin_source(user_flow):
     assert next_cleanup(BEFORE) == '2026-11-15T20:30:00+00:00'
-    assert next_cleanup(DUE) == '2026-11-16T20:30:00+00:00'
+    assert next_cleanup(DUE) == '2026-11-15T20:55:00+00:00'
     op = prepare_ip_change_operation().operation_id
     assert source_label(op) == 'Администратор'
 
@@ -153,8 +153,103 @@ def test_busy_cleanup_waits_for_next_window(user_flow):
     run(second)
     asyncio.run(dispatch_cleanups(DUE.replace(hour=21)))
     assert boxes.deleted_names == []
-    asyncio.run(dispatch_cleanups(DUE.replace(day=16)))
+    asyncio.run(dispatch_cleanups(DUE.replace(minute=55)))
     assert boxes.deleted_names == ['box-old']
+
+
+@pytest.mark.parametrize('current,expected', [
+    ('2026-11-15T20:55:00+00:00', '2026-11-16T01:00:00+00:00'),
+    ('2026-11-16T01:00:00+00:00', '2026-11-16T04:00:00+00:00'),
+    ('2026-11-16T04:00:00+00:00', '2026-11-16T20:30:00+00:00'),
+    ('2026-11-16T00:59:59+00:00', '2026-11-16T01:00:00+00:00'),
+])
+def test_cleanup_window_boundaries(current, expected):
+    assert next_cleanup(datetime.fromisoformat(current)) == expected
+
+
+@pytest.mark.parametrize('hour,minute', [(20, 30), (20, 55), (1, 0), (4, 0)])
+def test_each_moscow_cleanup_window_dispatches(user_flow, hour, minute):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    due = datetime(2026, 11, 16, hour, minute, tzinfo=UTC)
+    asyncio.run(dispatch_cleanups(due))
+    asyncio.run(dispatch_cleanups(due))
+    assert boxes.deleted_names == ['box-old']
+    assert cleanup_queue() == []
+
+
+def test_explicit_rejection_retries_once_per_window_until_success(user_flow):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    boxes.fail = 'delete-rejected'
+    for due, expected in [
+        (DUE, '2026-11-15T20:55:00+00:00'),
+        (DUE.replace(minute=55), '2026-11-16T01:00:00+00:00'),
+        (datetime(2026, 11, 16, 1, tzinfo=UTC), '2026-11-16T04:00:00+00:00'),
+    ]:
+        count = boxes.events.count('delete')
+        asyncio.run(dispatch_cleanups(due))
+        assert boxes.events.count('delete') == count + 1
+        assert cleanup_queue()[0]['cleanup_at'] == expected
+        init_db()
+        asyncio.run(dispatch_cleanups(due))
+        assert boxes.events.count('delete') == count + 1
+    boxes.fail = ''
+    asyncio.run(dispatch_cleanups(datetime(2026, 11, 16, 4, tzinfo=UTC)))
+    assert boxes.deleted_names == ['box-old']
+    assert cleanup_queue() == []
+
+
+@pytest.mark.parametrize('failure,state', [('delete-timeout', 'CLEANUP_AMBIGUOUS'),
+                                          ('delete-task-error', 'CLEANUP_REJECTED')])
+def test_uncertain_or_accepted_deletion_is_not_retried_at_backup_windows(user_flow, failure, state):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    boxes.fail = failure
+    asyncio.run(dispatch_cleanups(DUE))
+    assert get_operation(op)['action_state'] == state
+    for due in [DUE.replace(minute=55), datetime(2026, 11, 16, 1, tzinfo=UTC),
+                datetime(2026, 11, 16, 4, tzinfo=UTC)]:
+        asyncio.run(dispatch_cleanups(due))
+    assert boxes.events.count('delete') == 1
+    assert cleanup_queue() == []
+
+
+def test_retry_rechecks_current_primary_before_sending(user_flow):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    boxes.fail = 'delete-rejected'
+    asyncio.run(dispatch_cleanups(DUE))
+    assert cleanup_queue()
+    boxes.fail = ''
+    set_setting('current_ip', OLD)
+    set_setting('config.sprintbox_box_name', 'box-old')
+    asyncio.run(dispatch_cleanups(DUE.replace(minute=55)))
+    assert boxes.events.count('delete') == 1
+    assert boxes.deleted_names == []
+    assert get_operation(op)['action_state'] == 'CLEANUP_REJECTED'
+
+
+def test_retry_skips_box_removed_in_provider_panel(user_flow):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    boxes.fail = 'delete-rejected'
+    asyncio.run(dispatch_cleanups(DUE))
+    del boxes.boxes['box-old']
+    asyncio.run(dispatch_cleanups(DUE.replace(minute=55)))
+    assert boxes.events.count('delete') == 1
+    assert get_operation(op)['action_state'] == 'DONE'
+    assert cleanup_queue() == []
 
 
 def test_scheduled_cleanup_cannot_delete_server_that_became_primary(user_flow):

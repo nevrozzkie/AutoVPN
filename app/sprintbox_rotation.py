@@ -7,6 +7,7 @@ import math
 import secrets
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from app.db import get_db, now_iso, set_setting, update_operation
@@ -329,6 +330,7 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
         results = operation_context.setdefault("cleanup_results", {})
         for ref, expected_ip in dict(retained).items():
             sending = False
+            rejected = False
             owner_credentials = credentials
             name = ref
             try:
@@ -350,7 +352,7 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
                 box = await client.get_box(name)
                 if expected_ip not in box_ipv4(box):
                     raise IpChangeError("Box IP changed; inspect it manually")
-                if ref in results:
+                if ref in results and results[ref].get('state') != 'REJECTED':
                     raise IpChangeError("Deletion was already attempted; inspect it manually")
                 # Overlapping nightly queues can contain the same retained box.
                 # Never repeat an uncertain deletion sent by another operation.
@@ -366,7 +368,13 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
                 results[ref] = {"state": "SENDING"}
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
                 sending = True
-                job = await client.delete_box(name)
+                try:
+                    job = await client.delete_box(name)
+                except SprintboxApiError:
+                    # An explicit rejection of this request is safe to retry in
+                    # a later window. A lost response or failed task is not.
+                    rejected = True
+                    raise
                 results[ref] = {"state": "SENT", "task": job}
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
                 await _wait_task(client, job, operation_id, "wait_old_box_deletion", timing, sleeper)
@@ -377,15 +385,25 @@ async def run_sprintbox_cleanup(operation_id: int, *, timing: IpRotationTiming |
                 uncertain = sending and not isinstance(exc, SprintboxApiError)
                 ambiguous = ambiguous or uncertain
                 message = sanitize_error(exc, owner_credentials["key"], owner_credentials["login"], eu_ssh_password())
-                results[ref] = {**results.get(ref, {}), "state": "AMBIGUOUS" if uncertain else "MANUAL", "error": message}
+                results[ref] = {**results.get(ref, {}),
+                                "state": "REJECTED" if rejected else "AMBIGUOUS" if uncertain else "MANUAL", "error": message}
                 warnings.append(f"{name}: {message}")
             finally:
                 if results.get(ref, {}).get("state") in {"DELETED", "ABSENT", "ANCHOR"}:
                     retained.pop(ref, None)
                 set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
-        warning = "Удалите или проверьте старые боксы вручную в кабинете SprintBOX: " + "; ".join(warnings) if warnings else ""
-        update_operation(operation_id, status="DONE", current_step="done", error_message="",
-                         action_state="CLEANUP_AMBIGUOUS" if ambiguous else "CLEANUP_REJECTED" if warnings else "DONE",
+        retry = bool(operation_context.get('cleanup_at') and retained and not ambiguous
+                     and all(results.get(ref, {}).get('state') == 'REJECTED' for ref in retained))
+        if retry:
+            from app.scheduled_cleanup import next_cleanup
+            attempt_at = operation_context.get('cleanup_attempt_at') or now_iso()
+            operation_context['cleanup_at'] = next_cleanup(datetime.fromisoformat(attempt_at))
+            set_setting(f"ip_change.{operation_id}.sprintbox", json.dumps(operation_context))
+        warning = (("SprintBOX отклонил удаление; повторим в следующее окно: " if retry else
+                    "Удалите или проверьте старые боксы вручную в кабинете SprintBOX: ")
+                   + "; ".join(warnings)) if warnings else ""
+        update_operation(operation_id, status="DONE", current_step="cleanup_scheduled" if retry else "done", error_message="",
+                         action_state="CLEANUP_SCHEDULED" if retry else "CLEANUP_AMBIGUOUS" if ambiguous else "CLEANUP_REJECTED" if warnings else "DONE",
                          cleanup_warning=warning)
     except Exception as exc:
         message = sanitize_error(exc, credentials["key"], credentials["login"], eu_ssh_password())

@@ -1,4 +1,4 @@
-"""Persist accepted SprintBOX cleanups and dispatch only at 23:30 Moscow time."""
+"""Persist accepted SprintBOX cleanups and dispatch in fixed Moscow-time windows."""
 from __future__ import annotations
 
 import asyncio
@@ -12,14 +12,16 @@ from app.operation_coordinator import OperationBusyError, acquire_vps_lease
 from app.sprintbox_review import context, validate_review
 
 MSK = ZoneInfo('Europe/Moscow')
+CLEANUP_WINDOWS = ((4, 0), (7, 0), (23, 30), (23, 55))
 logger = logging.getLogger(__name__)
 
 
 def next_cleanup(now: datetime | None = None) -> str:
     local = (now or datetime.now(UTC)).astimezone(MSK)
-    due = local.replace(hour=23, minute=30, second=0, microsecond=0)
-    if due <= local:
-        due += timedelta(days=1)
+    candidates = [local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                  for hour, minute in CLEANUP_WINDOWS]
+    due = next((candidate for candidate in candidates if candidate > local),
+               candidates[0] + timedelta(days=1))
     return due.astimezone(UTC).isoformat(timespec='seconds')
 
 
@@ -52,8 +54,8 @@ async def dispatch_cleanups(now: datetime | None = None) -> None:
     from app.sprintbox_rotation import run_sprintbox_cleanup
     current = now or datetime.now(UTC)
     local = current.astimezone(MSK)
-    # A missed window (downtime or busy VPS) waits for the next night.
-    if (local.hour, local.minute) != (23, 30):
+    # A missed window (downtime or busy VPS) waits for the next scheduled window.
+    if (local.hour, local.minute) not in CLEANUP_WINDOWS:
         return
     with get_db() as db:
         rows = db.execute("SELECT id FROM ip_change_operations WHERE status='DONE' "
@@ -63,13 +65,17 @@ async def dispatch_cleanups(now: datetime | None = None) -> None:
             db.execute('BEGIN IMMEDIATE')
             operation_id = row['id']
             operation = db.execute('SELECT action_state FROM ip_change_operations WHERE id=?', (operation_id,)).fetchone()
-            due = context(db, operation_id).get('cleanup_at')
+            ctx = context(db, operation_id)
+            due = ctx.get('cleanup_at')
             if operation['action_state'] != 'CLEANUP_SCHEDULED' or not due or datetime.fromisoformat(due) > current:
                 continue
             try:
                 acquire_vps_lease(db, 'IP_CHANGE', operation_id)
             except OperationBusyError:
                 return
+            ctx['cleanup_attempt_at'] = current.isoformat(timespec='seconds')
+            db.execute('UPDATE settings SET value=? WHERE key=?',
+                       (json.dumps(ctx), f'ip_change.{operation_id}.sprintbox'))
             db.execute("UPDATE ip_change_operations SET status='PENDING',action_state='CLEANUP_QUEUED', "
                        "current_step='cleanup_queued',updated_at=? WHERE id=?", (now_iso(), operation_id))
         await run_sprintbox_cleanup(operation_id)
@@ -136,5 +142,9 @@ def queue_cleanup_now(operation_id: int) -> None:
         if not row or row['status'] != 'DONE' or row['action_state'] != 'CLEANUP_SCHEDULED':
             raise ValueError('Удаление уже запущено или отсутствует в очереди')
         acquire_vps_lease(db, 'IP_CHANGE', operation_id)
+        ctx = context(db, operation_id)
+        ctx['cleanup_attempt_at'] = now_iso()
+        db.execute('UPDATE settings SET value=? WHERE key=?',
+                   (json.dumps(ctx), f'ip_change.{operation_id}.sprintbox'))
         db.execute("UPDATE ip_change_operations SET status='PENDING',action_state='CLEANUP_QUEUED', "
                    "current_step='cleanup_queued',updated_at=? WHERE id=?", (now_iso(), operation_id))
