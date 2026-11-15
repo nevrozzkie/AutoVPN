@@ -484,6 +484,17 @@ def _apply_sprintbox_box_controls(connection: sqlite3.Connection) -> None:
     )""")
 
 
+def _apply_amnezia_devices(connection: sqlite3.Connection) -> None:
+    connection.execute("""CREATE TABLE amnezia_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, private_key TEXT NOT NULL, public_key TEXT NOT NULL UNIQUE,
+        preshared_key TEXT NOT NULL, ipv4 TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, deleted_at TEXT, operation_id INTEGER
+    )""")
+    connection.execute("CREATE UNIQUE INDEX amnezia_device_names ON amnezia_devices(client_id,name COLLATE NOCASE) WHERE deleted_at IS NULL")
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -585,6 +596,9 @@ MIGRATIONS = (
         signature="durable manually confirmed box deletions and anchor maintenance quarantine during promotion",
         apply=_apply_sprintbox_box_controls,
     ),
+    Migration(version=13, name="amnezia_devices",
+              signature="per-client additional Amnezia identities; legacy first peer remains unchanged",
+              apply=_apply_amnezia_devices),
 )
 
 

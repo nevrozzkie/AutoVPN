@@ -349,6 +349,8 @@ def _allocate_amnezia_address(db: sqlite3.Connection) -> str:
                 "SELECT ipv4 FROM router_amnezia_peers WHERE ipv4 != ''"
             )
         )
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='amnezia_devices'").fetchone():
+        used.update(str(row['ipv4']) for row in db.execute('SELECT ipv4 FROM amnezia_devices'))
     # The first usable host is the server. Every client and auxiliary peer row
     # reserves its address, including disabled and soft-deleted owners.
     for address in list(network.hosts())[1:]:
@@ -373,6 +375,8 @@ def _legacy_or_free_amnezia_address(
                 "SELECT 1 FROM router_amnezia_peers WHERE ipv4 = ? LIMIT 1",
                 (preferred,),
             ).fetchone()
+        if not in_use and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='amnezia_devices'").fetchone():
+            in_use = db.execute('SELECT 1 FROM amnezia_devices WHERE ipv4=? LIMIT 1', (preferred,)).fetchone()
         if not in_use:
             return preferred
     return _allocate_amnezia_address(db)
@@ -442,6 +446,11 @@ def list_router_amnezia_public_keys() -> list[dict[str, Any]]:
             ORDER BY client.id, router.router_id
             """
         ).fetchall()
+
+
+def list_device_amnezia_public_keys() -> list[dict[str, Any]]:
+    with get_db() as db:
+        return db.execute('SELECT d.client_id,d.public_key FROM amnezia_devices d JOIN clients c ON c.id=d.client_id WHERE d.deleted_at IS NULL AND c.enabled=1 AND c.deleted_at IS NULL').fetchall()
 
 
 def list_clients_with_stats() -> list[dict[str, Any]]:

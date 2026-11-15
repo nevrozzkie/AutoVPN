@@ -6,7 +6,7 @@ import shlex
 from dataclasses import dataclass
 
 from app.config import settings
-from app.db import get_setting, list_clients, list_router_amnezia_public_keys
+from app.db import get_setting, list_clients, list_router_amnezia_public_keys, list_device_amnezia_public_keys
 from app.runtime_config import hysteria_port, server_command_timeout_seconds, vless_port
 from app.hysteria_auth import hysteria_auth
 from app.vpn_config import CapturedVpnConfig
@@ -92,10 +92,11 @@ def build_deep_check_script(
         amnezia_public_keys.extend(
             peer.public_key for peer in config.router_amnezia_peers if peer.public_key
         )
+        amnezia_public_keys.extend(device.public_key for device in config.amnezia_devices)
     else:
         amnezia_public_keys.extend(
             str(peer["public_key"])
-            for peer in list_router_amnezia_public_keys()
+            for peer in list_router_amnezia_public_keys() + list_device_amnezia_public_keys()
             if peer.get("public_key")
         )
     amnezia_public_keys = list(dict.fromkeys(amnezia_public_keys))

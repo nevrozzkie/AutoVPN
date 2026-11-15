@@ -248,6 +248,8 @@ def is_public_token_path(path: str) -> bool:
         return True
     if len(parts) < 2 or parts[0] != "client":
         return False
+    if len(parts) >= 3 and parts[2] == "amnezia-devices":
+        return True
     if parts[2:] == ("ip-change",) or (len(parts) == 5 and parts[2] == "ip-change"):
         return True
     return parts[2:] in {

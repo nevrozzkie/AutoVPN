@@ -270,6 +270,10 @@ def render_amnezia_server_config(config: "CapturedVpnConfig") -> str:
         }
         for peer in config.router_amnezia_peers
     )
+    peers.extend({'name': f'device {device.client_id} {device.name}',
+                  'amnezia_public_key': device.public_key,
+                  'amnezia_preshared_key': device.preshared_key,
+                  'amnezia_ipv4': device.ipv4} for device in config.amnezia_devices)
     return build_amnezia_server_config(
         peers,
         server_private_key=config.amnezia.server_private_key,

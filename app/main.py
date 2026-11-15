@@ -16,6 +16,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.amnezia_devices import device_list, config_for_device, prepare_device, run_device_sync
 from app.clash import clash_profile, clash_provider, config_filename, dump_yaml
 from app.config import settings
 from app.aeza import AezaClient
@@ -1925,6 +1926,29 @@ def client_clash_config(request: Request, token: str):
     })
 
 
+@app.post('/client/{token}/amnezia-devices')
+def create_user_amnezia_device(token: str, background_tasks: BackgroundTasks, name: str = Form(...)):
+    client = require_vpn_user(token)
+    try:
+        device_id, operation_id = prepare_device(client['id'], name=name)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if operation_id is not None:
+        background_tasks.add_task(run_device_sync, operation_id)
+    return RedirectResponse(f'/client/{token}?device={device_id}#amnezia-section',status_code=303)
+
+
+@app.post('/client/{token}/amnezia-devices/{device_id}/delete')
+def delete_user_amnezia_device(token: str, device_id: int, background_tasks: BackgroundTasks):
+    client = require_vpn_user(token)
+    try:
+        _, operation_id = prepare_device(client['id'], delete_id=device_id)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(run_device_sync,operation_id)
+    return RedirectResponse(f'/client/{token}#amnezia-section',status_code=303)
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     config = capture_vpn_config()
@@ -1936,11 +1960,28 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     client = captured_client.as_dict()
     base_url = str(request.base_url).rstrip("/")
     protocols, protocols_checked_at = client_protocol_overview()
+    devices = device_list(client['id'])
+    device_vpn_state = get_vpn_state()
+    device_management_available = (device_vpn_state['applied_revision'] == device_vpn_state['desired_revision'] and get_active_vps_operation() is None)
+    selected_id = request.query_params.get('device','mobile')
+    selected_device = next((item for item in devices if str(item['id']) == selected_id),None)
+    if selected_device is None or selected_device.get('placeholder'):
+        raise HTTPException(status_code=404)
+    device_config, device_client = config, captured_client
+    if not selected_device['legacy'] and selected_device['ready']:
+        try:
+            device_config,device_client = config_for_device(config,captured_client,int(selected_id))
+        except (LookupError,ValueError):
+            selected_device['ready'] = False
+    suffix = '' if selected_device['legacy'] else f'?device={selected_id}'
+
     return templates.TemplateResponse(
         request,
         "client_page.html",
         {
             "client": client,
+            "amnezia_devices": devices, "selected_device": selected_device,
+            "device_management_available": device_management_available,
             "current_ip": config.current_ip,
             "config_updated_at": config.config_updated_at,
             "protocols": protocols,
@@ -1958,11 +1999,11 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "hysteria_enabled": config.hysteria.protocol.enabled,
             "sing_box_enabled": config.vless.protocol.enabled or config.hysteria.protocol.enabled,
             "amnezia_enabled": config.amnezia.protocol.enabled,
-            "amnezia_url": f"{base_url}/amnezia/{client['token']}",
-            "amnezia_vpn_key": render_amnezia_vpn_key(config, captured_client)
-            if config.amnezia.protocol.enabled
+            "amnezia_url": f"{base_url}/amnezia/{client['token']}{suffix}",
+            "amnezia_vpn_key": render_amnezia_vpn_key(device_config, device_client)
+            if config.amnezia.protocol.enabled and selected_device["ready"]
             else "",
-            "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr",
+            "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr{suffix}",
             "ip_change": user_ip_change_state(client["id"]),
         },
     )
@@ -2033,11 +2074,17 @@ def client_subscription_qr(request: Request, token: str) -> Response:
 
 
 @app.get("/client/{token}/amnezia.qr")
-def client_amnezia_qr(token: str) -> Response:
+def client_amnezia_qr(token: str, device: int | None = None) -> Response:
     config = capture_vpn_config()
     client = config.client_by_token(token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        config,client = config_for_device(config,client,device)
+    except LookupError:
+        raise HTTPException(status_code=404) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from None
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     import qrcode
@@ -2060,11 +2107,17 @@ def current_eu_ip(token: str) -> PlainTextResponse:
 
 
 @app.get("/amnezia/{token}", response_class=PlainTextResponse)
-def amnezia_config(token: str) -> PlainTextResponse:
+def amnezia_config(token: str, device: int | None = None) -> PlainTextResponse:
     config = capture_vpn_config()
     client = config.client_by_token(token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        config,client = config_for_device(config,client,device)
+    except LookupError:
+        raise HTTPException(status_code=404) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from None
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     return PlainTextResponse(
@@ -2076,11 +2129,17 @@ def amnezia_config(token: str) -> PlainTextResponse:
 
 
 @app.get("/amnezia-key/{token}", response_class=PlainTextResponse)
-def amnezia_vpn_key(token: str) -> PlainTextResponse:
+def amnezia_vpn_key(token: str, device: int | None = None) -> PlainTextResponse:
     config = capture_vpn_config()
     client = config.client_by_token(token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        config,client = config_for_device(config,client,device)
+    except LookupError:
+        raise HTTPException(status_code=404) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from None
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")

@@ -93,6 +93,17 @@ class RouterAmneziaPeer:
 
 
 @dataclass(frozen=True)
+class AmneziaDevice:
+    id: int
+    client_id: int
+    name: str
+    private_key: str = field(repr=False)
+    public_key: str
+    preshared_key: str = field(repr=False)
+    ipv4: str
+
+
+@dataclass(frozen=True)
 class CapturedVpnConfig:
     current_ip: str
     config_updated_at: str
@@ -102,6 +113,7 @@ class CapturedVpnConfig:
     clients: tuple[VpnClient, ...]
     revision: int = 0
     router_amnezia_peers: tuple[RouterAmneziaPeer, ...] = ()
+    amnezia_devices: tuple[AmneziaDevice, ...] = ()
 
     @property
     def enabled_clients(self) -> tuple[VpnClient, ...]:
@@ -152,6 +164,16 @@ def _capture_router_peers(connection: sqlite3.Connection) -> tuple[RouterAmnezia
             """
         ).fetchall()
     )
+
+
+def _capture_devices(connection):
+    schema = connection.execute('SELECT MAX(version) AS version FROM schema_migrations').fetchone()
+    if schema is None or int(schema['version'] or 0) < 13:
+        return ()
+    return tuple(AmneziaDevice(**dict(row)) for row in connection.execute(
+        "SELECT d.id,d.client_id,d.name,d.private_key,d.public_key,d.preshared_key,d.ipv4 "
+        "FROM amnezia_devices d JOIN clients c ON c.id=d.client_id "
+        "WHERE d.deleted_at IS NULL AND c.enabled=1 AND c.deleted_at IS NULL ORDER BY d.id").fetchall())
 
 
 def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
@@ -245,6 +267,7 @@ def _capture(connection: sqlite3.Connection) -> CapturedVpnConfig:
         clients=clients,
         revision=int(state["desired_revision"]),
         router_amnezia_peers=router_peers,
+        amnezia_devices=_capture_devices(connection),
     )
 
 
@@ -282,6 +305,8 @@ def canonical_vpn_config_json(config: CapturedVpnConfig) -> str:
     # shape when no auxiliary peers were included in that server deployment.
     if config.router_amnezia_peers:
         payload["router_amnezia_peers"] = [asdict(peer) for peer in config.router_amnezia_peers]
+    if config.amnezia_devices:
+        payload["amnezia_devices"] = [asdict(device) for device in config.amnezia_devices]
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -322,6 +347,7 @@ def captured_vpn_config_from_json(payload_json: str) -> CapturedVpnConfig:
         ),
         clients=tuple(VpnClient(**client) for client in payload["clients"]),
         revision=int(payload["revision"]),
+        amnezia_devices=tuple(AmneziaDevice(**device) for device in payload.get("amnezia_devices", [])),
         router_amnezia_peers=tuple(
             RouterAmneziaPeer(**peer) for peer in payload.get("router_amnezia_peers", [])
         ),

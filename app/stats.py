@@ -8,6 +8,7 @@ from app.db import (
     get_client_stats,
     list_clients,
     list_router_amnezia_public_keys,
+    list_device_amnezia_public_keys,
     now_iso,
     set_setting,
     upsert_client_stats,
@@ -147,7 +148,7 @@ async def refresh_client_stats() -> dict[str, Any]:
     refreshed = 0
     seen_at = now_iso()
     router_keys_by_client: dict[int, list[str]] = {}
-    for peer in list_router_amnezia_public_keys():
+    for peer in list_router_amnezia_public_keys() + list_device_amnezia_public_keys():
         router_keys_by_client.setdefault(int(peer["client_id"]), []).append(
             str(peer["public_key"])
         )

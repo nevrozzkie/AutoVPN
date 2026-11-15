@@ -123,6 +123,22 @@
       .revision { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 4px 10px; }
       @media (max-width: 480px) { section { padding: 20px; } main { padding-left: 16px; padding-right: 16px; } }
       @media (prefers-reduced-motion: reduce) { button, a.button { transition: none; } }
+      .page-top { padding: 2px 0 10px; align-items: center; }
+      .page-top h1 { margin: 0 0 10px; font-size: clamp(26px, 5vw, 34px); }
+      main > section:first-of-type { margin-top: 12px; }
+      .section-title { justify-content: space-between; }
+      .section-title .status-refresh { min-height: 34px; width: 34px; height: 34px; padding: 0; border-radius: 10px; font-size: 18px; background: var(--panel-soft); color: var(--muted); border-color: var(--border); }
+      :root[data-theme="dark"] .status-refresh { color: var(--muted); }
+      .device-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 12px; margin-bottom: 12px; scrollbar-width: thin; }
+      .device-tabs > *, .device-tabs form { flex: 0 0 auto; margin: 0; }
+      .device-tab, .device-tabs button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 9px 16px; border: 1px solid var(--border); border-radius: 99px; background: var(--panel-soft); color: var(--text); text-decoration: none; font-size: 14px; font-weight: 600; white-space: nowrap; }
+      :root[data-theme="dark"] .device-tabs button { color: var(--text); }
+      .device-tab.is-active { border-color: var(--accent); background: var(--code-bg); color: var(--accent); }
+      .device-tabs .device-add { min-width: 40px; padding: 0; font-size: 22px; }
+      .device-name-field { width: 100%; min-height: 48px; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); font: inherit; margin: 12px 0 20px; }
+      .device-hint { font-size: 13px; line-height: 1.6; margin: 14px 0 0; }
+      button.danger { background: var(--panel-soft); border-color: var(--border); color: var(--bad); }
+      :root[data-theme="dark"] button.danger { color: var(--bad); }
       dialog {
         box-sizing: border-box;
         width: min(480px, calc(100vw - 36px));
@@ -399,12 +415,12 @@
       }
       .page-top {
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         justify-content: space-between;
         gap: 16px;
       }
       .page-top h1 {
-        margin-bottom: 0;
+        margin: 0 0 10px;
       }
       .theme-toggle {
         background: transparent;
@@ -431,7 +447,7 @@
         <div class="section-title">
           <h2>Статус VPN</h2>
           <form method="post" action="/client/{{ client.token }}/protocols/refresh">
-            <button type="submit" title="Обновить статус VPN">↻</button>
+            <button type="submit" class="status-refresh" aria-label="Обновить статус VPN" title="Обновить статус VPN">↻</button>
           </form>
         </div>
         <ul class="protocol-list">
@@ -493,8 +509,22 @@
       {% endif %}
 
       {% if amnezia_enabled %}
-      <section>
+      <section id="amnezia-section">
         <h2>AmneziaVPN</h2>
+        <nav class="device-tabs" aria-label="Устройства AmneziaVPN">
+          {% for device in amnezia_devices %}
+            {% if device.placeholder %}
+            <form method="post" action="/client/{{ client.token }}/amnezia-devices"><input type="hidden" name="name" value="desktop"><button type="submit" class="device-tab" {% if not device_management_available %}disabled{% endif %}>desktop</button></form>
+            {% else %}
+            <a class="device-tab {% if device.id == selected_device.id %}is-active{% endif %}" {% if device.id == selected_device.id %}aria-current="page"{% endif %} href="/client/{{ client.token }}{% if not device.legacy %}?device={{ device.id }}{% endif %}#amnezia-section">{{ device.name }}{% if device.failed %} · !{% endif %}</a>
+            {% endif %}
+          {% endfor %}
+          <button type="button" class="device-add" {% if not device_management_available %}disabled{% endif %} aria-label="Добавить устройство" onclick="document.getElementById('add-amnezia-device').showModal()">+</button>
+        </nav>
+        {% if not device_management_available %}<p class="muted device-hint">Управление устройствами временно недоступно: дождитесь завершения настройки VPN или обратитесь к администратору.</p>{% endif %}
+        {% if amnezia_devices|selectattr('failed')|list %}<p class="warn">Изменение устройства не подтверждено. Обратитесь к администратору.</p>{% endif %}
+        {% if selected_device.ready %}
+
         <a class="button connection-primary" href="{{ amnezia_vpn_key }}" rel="noreferrer">Открыть в AmneziaVPN <span aria-hidden="true">↗</span></a>
         <div class="credential-toolbar" role="group" aria-label="Ключ AmneziaVPN">
           <span class="credential-label">Ключ AmneziaVPN</span>
@@ -504,7 +534,16 @@
         </div>
         <div id="amnezia-manual" class="credential-panel" hidden><textarea id="amnezia-key" aria-label="Ключ AmneziaVPN" readonly>{{ amnezia_vpn_key }}</textarea></div>
         <div id="amnezia-qr" class="qr"><img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN"></div>
-        <div class="downloads"><a class="button secondary" href="{{ amnezia_url }}">Скачать .conf</a></div>
+        <div class="downloads">
+          <a class="button secondary" href="{{ amnezia_url }}">Скачать .conf</a>
+          {% if not selected_device.legacy %}<button type="button" class="danger" {% if not device_management_available %}disabled{% endif %} onclick="document.getElementById('delete-amnezia-device').showModal()">Удалить устройство</button>{% endif %}
+        </div>
+        {% else %}
+          {% if selected_device.failed %}<p class="warn">Не удалось подтвердить изменение устройства. Нужна помощь администратора.</p>
+          {% else %}<p class="muted">{% if selected_device.deleted %}Отключаем устройство{% else %}Готовим отдельный конфиг{% endif %}… Страница обновится автоматически.</p>{% endif %}
+        {% endif %}
+        <p class="muted device-hint">Доступ одного пользователя для разных устройств. Для одновременного подключения используйте отдельную вкладку на каждом устройстве.</p>
+        {% if selected_device.legacy %}<p class="muted device-hint">Первый конфиг сохранён для старых ссылок, роутера и TV.</p>{% endif %}
       </section>
       {% endif %}
 
@@ -882,6 +921,22 @@
       </section>
       {% endif %}
     </main>
+    <dialog id="add-amnezia-device" aria-labelledby="add-device-title">
+      <h2 id="add-device-title">Новое устройство</h2>
+      <p class="muted">Для него будет создан отдельный ключ AmneziaVPN.</p>
+      <form method="post" action="/client/{{ client.token }}/amnezia-devices">
+        <label for="device-name">Название</label>
+        <input id="device-name" class="device-name-field" name="name" required maxlength="40" placeholder="Например, планшет" autocomplete="off">
+        <div class="dialog-actions"><button type="button" class="secondary" onclick="this.closest('dialog').close('cancel')">Отмена</button><button type="submit">Добавить</button></div>
+      </form>
+    </dialog>
+    {% if not selected_device.legacy and not selected_device.placeholder %}
+    <dialog id="delete-amnezia-device" aria-labelledby="delete-device-title">
+      <h2 id="delete-device-title">Удалить {{ selected_device.name }}?</h2>
+      <p>Конфиг этого устройства будет отключён на текущем VPN-сервере. Остальные устройства продолжат работать.</p>
+      <form method="post" action="/client/{{ client.token }}/amnezia-devices/{{ selected_device.id }}/delete" class="dialog-actions"><button type="button" class="secondary" onclick="this.closest('dialog').close('cancel')">Отмена</button><button type="submit" class="danger">Удалить устройство</button></form>
+    </dialog>
+    {% endif %}
     <dialog id="ip-change-confirm" aria-labelledby="ip-change-confirm-title">
       <h2 id="ip-change-confirm-title">Вы точно хотите сменить IP?</h2>
       <p>Это может помочь с доступом к VPN, если проблема в текущем IP. Смена создаёт новый платный сервер и стоит денег.</p>
