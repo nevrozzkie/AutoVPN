@@ -27,6 +27,7 @@ from app.amnezia import (
     render_amnezia_vpn_key,
 )
 from app.db import (
+    public_vpn_version,
     create_client,
     create_operation,
     delete_client,
@@ -1793,7 +1794,7 @@ def sing_box_subscription(token: str) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return JSONResponse(render_sing_box_subscription(config, client.as_dict()), headers={"Content-Disposition": f'attachment; filename="{config_filename("singbox", client.as_dict(), config.revision, "json")}"'})
+    return JSONResponse(render_sing_box_subscription(config, client.as_dict()), headers={"Content-Disposition": f'attachment; filename="{config_filename("singbox", client.as_dict(), public_vpn_version(), "json")}"'})
 
 
 def user_ip_change_state(client_id: int) -> dict:
@@ -1919,7 +1920,7 @@ def client_clash_config(request: Request, token: str):
         raise HTTPException(status_code=404)
     provider = request.url.path.startswith('/clash-provider/')
     value = clash_provider(config, client.as_dict()) if provider else clash_profile(config, client.as_dict(), str(request.base_url).rstrip('/'))
-    filename = config_filename('clash', client.as_dict(), config.revision, 'yaml')
+    filename = config_filename('clash', client.as_dict(), public_vpn_version(), 'yaml')
     return Response(dump_yaml(value), media_type='application/yaml', headers={
         'Content-Disposition': f'attachment; filename="{filename}"',
         'Cache-Control': 'private, no-store', 'profile-update-interval': '1',
@@ -1981,14 +1982,14 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         {
             "client": client,
             "amnezia_devices": devices, "selected_device": selected_device,
-            "amnezia_device_pending": any(not item["legacy"] and not item["ready"] and not item["failed"] for item in devices),
+            "amnezia_device_pending": any(item.get("pending_deletion") or (not item["legacy"] and not item["ready"] and not item["failed"]) for item in devices),
             "device_management_available": device_management_available,
             "current_ip": config.current_ip,
-            "config_updated_at": config.config_updated_at,
+            "config_updated_at": get_setting("vpn.public_updated_at", config.config_updated_at),
             "protocols": protocols,
             "protocols_checked_at": protocols_checked_at,
             "base_url": base_url,
-            "vpn_revision": config.revision,
+            "vpn_revision": public_vpn_version(),
             "clash_url": f"{base_url}/clash/{client['token']}",
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "neko_import_url": "sn://subscription?" + urlencode({
@@ -2124,7 +2125,7 @@ def amnezia_config(token: str, device: int | None = None) -> PlainTextResponse:
     return PlainTextResponse(
         render_amnezia_client_config(config, client),
         headers={
-            "Content-Disposition": f'attachment; filename="{config_filename("amnez", client.as_dict(), config.revision, "conf")}"'
+            "Content-Disposition": f'attachment; filename="{config_filename("amnez", client.as_dict(), public_vpn_version(), "conf")}"'
         },
     )
 

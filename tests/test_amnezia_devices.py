@@ -15,6 +15,7 @@ from app.db import init_db,create_client,set_setting,get_db,get_vpn_state,set_cl
 from app.vpn_config import capture_vpn_config,canonical_vpn_config_json,captured_vpn_config_from_json
 from app.vpn_state import prepare_install_operation,complete_install_operation
 from app.operation_coordinator import recover_incomplete_vps_operations
+from app.db import public_vpn_version
 
 
 @pytest.fixture
@@ -124,11 +125,35 @@ def test_deletion_finishing_during_page_render_still_refreshes(device_user, monk
     monkeypatch.setattr(main, 'user_ip_change_state', finish_before_busy_check)
     http = TestClient(main.app)
     page = http.get(f"/client/{user['token']}").text
-    assert 'Laptop' in page
+    assert 'Laptop' not in page
     assert 'setTimeout(() => window.location.reload(), 5000)' in page
     page = http.get(f"/client/{user['token']}").text
     assert 'Laptop' not in page
     assert 'setTimeout(() => window.location.reload(), 5000)' not in page
+
+
+def test_devices_do_not_change_public_version_and_pending_deletion_hides_tab(device_user):
+    user, _, _ = device_user
+    version = public_vpn_version()
+    device_id, operation = devices.prepare_device(user['id'], name='Tablet')
+    asyncio.run(devices.run_device_sync(operation))
+    assert public_vpn_version() == version
+    _, operation = devices.prepare_device(user['id'], delete_id=device_id)
+    # SSH is still pending: hide the deleted tab on the first redirected GET.
+    page = TestClient(main.app).get(f"/client/{user['token']}").text
+    assert 'Tablet' not in page and 'Добавить устройство</button>' in page
+    assert 'setTimeout(() => window.location.reload(), 5000)' in page
+    assert public_vpn_version() == version
+    asyncio.run(devices.run_device_sync(operation))
+    assert public_vpn_version() == version
+    create_client('Another user')
+    assert public_vpn_version() == version
+    set_setting('config.amnezia_port', '51821')
+    assert public_vpn_version() == version + 1
+    set_setting('config.amnezia_port', '51821')
+    assert public_vpn_version() == version + 1
+    set_setting('current_ip', '203.0.113.11')
+    assert public_vpn_version() == version + 2
 
 
 def test_device_inputs_disabled_owner_and_ip_address_reservations(device_user):

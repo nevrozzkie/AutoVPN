@@ -118,7 +118,10 @@ def init_db() -> None:
             )
         )
         if vpn_changed:
-            _mark_vpn_config_updated(db)
+            _mark_vpn_config_updated(db, public_change=True)
+
+        db.execute("INSERT OR IGNORE INTO settings(key,value) SELECT 'vpn.public_version',CAST(desired_revision AS TEXT) FROM vpn_state WHERE singleton=1")
+        db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('vpn.public_updated_at',?)", (_setting(db, 'vpn.config_updated_at'),))
 
 
 def _setting(db: sqlite3.Connection, key: str) -> str:
@@ -136,8 +139,23 @@ def _set_setting(db: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def _mark_vpn_config_updated(db: sqlite3.Connection) -> int:
+def public_vpn_version() -> int:
+    with get_db() as db:
+        return int(_setting(db, 'vpn.public_version') or db.execute('SELECT desired_revision FROM vpn_state WHERE singleton=1').fetchone()['desired_revision'])
+
+
+def _bump_public_vpn_version(db, timestamp):
+    current = _setting(db, 'vpn.public_version')
+    if not current:
+        current = db.execute('SELECT desired_revision FROM vpn_state WHERE singleton=1').fetchone()['desired_revision']
+    _set_setting(db, 'vpn.public_version', str(int(current) + 1))
+    _set_setting(db, 'vpn.public_updated_at', timestamp)
+
+
+def _mark_vpn_config_updated(db: sqlite3.Connection, *, public_change: bool = False) -> int:
     timestamp = now_iso()
+    if public_change:
+        _bump_public_vpn_version(db, timestamp)
     _set_setting(db, "vpn.config_updated_at", timestamp)
     db.execute(
         """
@@ -394,7 +412,7 @@ def set_setting(key: str, value: str) -> None:
         previous = _setting(db, key)
         _set_setting(db, key, value)
         if _is_vpn_setting(key) and previous != value:
-            _mark_vpn_config_updated(db)
+            _mark_vpn_config_updated(db, public_change=True)
 
 
 def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = False,
@@ -417,7 +435,7 @@ def set_settings(values: dict[str, str], *, mark_vpn_config_updated: bool = Fals
             values.items(),
         )
         if vpn_changed:
-            _mark_vpn_config_updated(db)
+            _mark_vpn_config_updated(db, public_change=True)
 
 
 def mark_vpn_config_updated() -> None:

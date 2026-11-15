@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass, replace
 from typing import Any
 
-from app.db import get_db, now_iso, purge_applied_deleted_clients
+from app.db import get_db, now_iso, purge_applied_deleted_clients, _bump_public_vpn_version
 from app.operation_coordinator import acquire_vps_lease, release_vps_lease
 from app.vpn_config import (
     CapturedVpnConfig,
@@ -307,6 +307,8 @@ def publish_ip_change(
 
         published_revision = bound_revision + 1
         bound_config = captured_vpn_config_from_json(row["payload_json"])
+        if new_ip != bound_config.current_ip:
+            _bump_public_vpn_version(db, timestamp)
         published_config = replace(
             bound_config,
             current_ip=new_ip,

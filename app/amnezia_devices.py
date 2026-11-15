@@ -26,8 +26,9 @@ def device_list(client_id):
         known = {d.id: d.public_key for d in applied.amnezia_devices} if applied else {}
         rows = db.execute('SELECT d.*,o.status AS operation_status FROM amnezia_devices d LEFT JOIN vpn_install_operations o ON o.id=d.operation_id WHERE d.client_id=? ORDER BY d.id', (client_id,)).fetchall()
         result = [{'id': 'mobile', 'name': 'Главный', 'ready': True, 'legacy': True, 'deleted': False}]
+        result[0]['pending_deletion'] = any(row['deleted_at'] and row['operation_status'] in {'PENDING', 'RUNNING'} for row in rows)
         for row in rows:
-            if row['deleted_at'] and row['id'] not in known:
+            if row['deleted_at'] and (row['id'] not in known or row['operation_status'] not in {'FAILED', 'AMBIGUOUS', 'TIMED_OUT'}):
                 continue
             result.append({'id': row['id'], 'name': row['name'], 'legacy': False,
                            'ready': not row['deleted_at'] and known.get(row['id']) == row['public_key'],

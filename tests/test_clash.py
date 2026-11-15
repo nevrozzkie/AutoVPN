@@ -1,3 +1,4 @@
+from app.db import public_vpn_version
 import yaml
 from urllib.parse import urlsplit
 from fastapi.testclient import TestClient
@@ -19,7 +20,7 @@ def test_clash_profile_provider_and_versioned_downloads():
         response=http.get(f"/clash/{user['token']}")
         assert response.status_code==200
         assert response.headers['cache-control']=='private, no-store'
-        assert config_filename('clash',user,config.revision,'yaml') in response.headers['content-disposition']
+        assert config_filename('clash',user,public_vpn_version(),'yaml') in response.headers['content-disposition']
         profile=yaml.safe_load(response.text)
         assert profile['mixed-port']==7897 and profile['rules']==['MATCH,VPN']
         provider_name=profile['proxy-groups'][0]['use'][0]
@@ -32,7 +33,7 @@ def test_clash_profile_provider_and_versioned_downloads():
         assert nodes[0]['reality-opts']['public-key']==config.vless.public_key
         assert nodes[1]['password']==hysteria_auth(user,config)
         assert all(p['server']==config.current_ip for p in nodes)
-        assert config_filename('amnez',user,config.revision,'conf') in http.get(f"/amnezia/{user['token']}").headers['content-disposition']
+        assert config_filename('amnez',user,public_vpn_version(),'conf') in http.get(f"/amnezia/{user['token']}").headers['content-disposition']
         set_setting('config.vless_enabled','0')
         assert [p['type'] for p in yaml.safe_load(http.get(urlsplit(provider['url']).path).text)['proxies']]==['hysteria2']
         set_setting('config.hysteria_enabled','0')

@@ -152,4 +152,4 @@ def update_tuning(protocol: str, action: str, submitted: dict[str, str]) -> None
             changed = changed or old is None or old["value"] != value
             _set_setting(db, key, value)
         if changed:
-            _mark_vpn_config_updated(db)
+            _mark_vpn_config_updated(db, public_change=True)
