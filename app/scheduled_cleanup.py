@@ -100,7 +100,33 @@ def cleanup_queue() -> list[dict]:
         rows = db.execute("SELECT * FROM ip_change_operations WHERE status='DONE' "
                           "AND action_state='CLEANUP_SCHEDULED' ORDER BY id").fetchall()
         return [dict(row, cleanup_at=context(db, row['id']).get('cleanup_at'),
+                     anchorable_boxes=context(db, row['id']).get('retained_snapshots', {}),
                      retained_boxes=context(db, row['id']).get('retained_boxes', {})) for row in rows]
+
+
+def retain_queued_box(operation_id: int, box: str) -> None:
+    """Atomically protect a queued server before any cleanup worker can claim it."""
+    from app.db import _active_operation_owner
+    from app.anchors import retain_as_anchors
+    with get_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT status,action_state FROM ip_change_operations WHERE id=?', (operation_id,)).fetchone()
+        if not row or row['status'] != 'DONE' or row['action_state'] != 'CLEANUP_SCHEDULED':
+            raise ValueError('Удаление уже запущено или отсутствует в очереди')
+        owner = _active_operation_owner(db)
+        if owner:
+            raise OperationBusyError(owner)
+        retain_as_anchors(db, operation_id, [box])
+        ctx = context(db, operation_id)
+        timestamp = now_iso()
+        ctx.setdefault('cleanup_results', {})[box] = {'state': 'ANCHOR', 'retained_at': timestamp}
+        finished = not ctx.get('retained_boxes')
+        if finished:
+            ctx['cleanup_at'] = None
+        db.execute('UPDATE settings SET value=? WHERE key=?',
+                   (json.dumps(ctx), f'ip_change.{operation_id}.sprintbox'))
+        db.execute('UPDATE ip_change_operations SET action_state=?,current_step=?,updated_at=? WHERE id=?',
+                   ('DONE' if finished else 'CLEANUP_SCHEDULED', 'done' if finished else 'cleanup_scheduled', timestamp, operation_id))
 
 
 def queue_cleanup_now(operation_id: int) -> None:

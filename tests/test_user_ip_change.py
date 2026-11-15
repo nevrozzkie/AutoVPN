@@ -237,3 +237,74 @@ def test_stale_admin_review_does_not_block_future_user_changes(user_flow):
     assert get_operation(first)['action_state'] == 'AWAITING_USER_REVIEW'
     third = prepare_ip_change_operation(user_client_id=user.id).operation_id
     assert third > second
+
+
+def test_keep_last_queued_box_as_anchor_admin_only_and_frozen(user_flow):
+    from test_sprintbox import _record_old_install
+    from app.anchors import list_anchors, anchor_client
+    from app.db import get_vpn_state, public_vpn_version
+    boxes, user = user_flow
+    _record_old_install()
+    frozen = capture_vpn_config()
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    state, version = get_vpn_state(), public_vpn_version()
+    url = f'/admin/sprintbox/{op}/keep-anchor'
+    auth = ('admin', 'test-password')
+    with TestClient(main.app, base_url='http://panel.local') as http:
+        ref = next(name for name, ip in cleanup_queue()[0]['retained_boxes'].items() if ip == OLD)
+        assert http.post(url, data={'box':ref}).status_code == 401
+        assert http.post(url, data={'box':ref}, auth=auth, headers={'Origin':'https://evil.local'}).status_code == 403
+        assert 'Оставить якорным' in http.get('/admin', auth=auth).text
+        assert http.post(url, data={'box':'unknown'}, auth=auth).status_code == 409
+        saved = http.post(url, data={'box':ref}, auth=auth, follow_redirects=False)
+        assert saved.status_code == 303, saved.text
+        assert http.post(url, data={'box':ref}, auth=auth).status_code == 409
+    assert cleanup_queue() == []
+    assert get_operation(op)['action_state'] == 'DONE'
+    anchor = list_anchors()[0]
+    assert anchor['ready'] and anchor['ip'] == OLD
+    assert anchor_client(anchor['anchor_id'], user.token)[1] == frozen
+    assert get_vpn_state() == state and public_vpn_version() == version
+    asyncio.run(dispatch_cleanups(DUE))
+    assert boxes.deleted_names == []
+
+
+def test_keep_one_box_preserves_other_cleanup_targets_and_deadline(user_flow):
+    from test_sprintbox import _record_old_install
+    from app.scheduled_cleanup import retain_queued_box
+    boxes, user = user_flow
+    _record_old_install()
+    first = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(first)
+    second = prepare_ip_change_operation(user_client_id=user.id, review_operation_id=first).operation_id
+    run(second)
+    schedule_cleanup(second, now=BEFORE)
+    before = cleanup_queue()[0]
+    assert len(before['retained_boxes']) == 2
+    retain_queued_box(second, 'box-old')
+    after = cleanup_queue()[0]
+    assert after['cleanup_at'] == before['cleanup_at']
+    assert after['retained_boxes'] == {'box-new': NEW}
+    asyncio.run(dispatch_cleanups(DUE))
+    assert boxes.deleted_names == ['box-new']
+    assert 'box-old' in boxes.boxes
+
+
+def test_keep_queued_box_rejects_busy_or_already_claimed_cleanup(user_flow):
+    from app.scheduled_cleanup import retain_queued_box, queue_cleanup_now
+    from app.operation_coordinator import OperationBusyError
+    from app.vpn_state import prepare_install_operation, complete_install_operation
+    from app.anchors import list_anchors
+    _, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    schedule_cleanup(op, now=BEFORE)
+    install = prepare_install_operation(NEW)
+    with pytest.raises(OperationBusyError):retain_queued_box(op, 'box-old')
+    assert list_anchors() == [] and cleanup_queue()[0]['retained_boxes']
+    complete_install_operation(install.operation_id, 'Applied')
+    queue_cleanup_now(op)
+    with pytest.raises(ValueError):retain_queued_box(op, 'box-old')
+    assert list_anchors() == []

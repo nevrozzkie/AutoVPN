@@ -78,7 +78,7 @@ from app.sprintbox_review import (
     pending_host_key_retry, prepare_host_key_retry,
 )
 from app.sprintbox_rotation import run_sprintbox_cleanup
-from app.scheduled_cleanup import cleanup_queue, queue_cleanup_now, source_label
+from app.scheduled_cleanup import cleanup_queue, queue_cleanup_now, source_label, retain_queued_box
 from app.sprintbox_accounts import (
     list_accounts, save_account, select_account, ensure_legacy_account, account as sprintbox_account,
     current_id as sprintbox_current_account_id,
@@ -824,6 +824,15 @@ def accept_sprintbox(operation_id: int,
     except (ValueError, OperationBusyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post('/admin/sprintbox/{operation_id}/keep-anchor')
+def keep_queued_anchor(operation_id: int, box: str = Form(...), _: str = Depends(require_admin)):
+    try:
+        retain_queued_box(operation_id, box)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return RedirectResponse('/admin', status_code=303)
 
 
 @app.post('/admin/sprintbox/{operation_id}/cleanup-now')

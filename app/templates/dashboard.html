@@ -9,7 +9,19 @@
     <div class="panel">
       <strong>Смена IP №{{ item.id }}</strong> · {{ ip_change_source(item.id) }}
       <p>{{ item.old_ip or '—' }} → {{ item.new_ip }} · Удаление: {{ item.cleanup_at|msk }}</p>
-      <ul>{% for name, ip in item.retained_boxes.items() %}<li>{{ name }} · {{ ip }}</li>{% else %}<li>Старых серверов нет</li>{% endfor %}</ul>
+      <div style="display:grid;gap:12px;margin:16px 0">
+      {% for name, ip in item.retained_boxes.items() %}
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px">
+          <span>{{ name }} · <code>{{ ip }}</code></span>
+          <form method="post" action="/admin/sprintbox/{{ item.id }}/keep-anchor">
+            <input type="hidden" name="box" value="{{ name }}">
+            <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Оставить якорным</button>
+          </form>
+          {% if name not in item.anchorable_boxes %}<span class="muted">Нет сохранённого конфига: бокс останется без выдачи профилей.</span>{% endif %}
+        </div>
+      {% else %}<p>Старых серверов нет</p>{% endfor %}
+      </div>
+      {% if item.retained_boxes %}<p class="muted">Якорный сервер исключается из удаления и продолжает оплачиваться. Доступы пользователям можно выбрать в разделе <a href="/admin/anchors">«Якорные VPN»</a>.</p>{% endif %}
       <form method="post" action="/admin/sprintbox/{{ item.id }}/cleanup-now">
         <button type="submit" {% if active_vps_operation %}disabled{% endif %}>Удалить сейчас</button>
       </form>
