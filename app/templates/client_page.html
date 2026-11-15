@@ -120,8 +120,6 @@
       .technical-details > summary::after { content: '+'; font-size: 22px; color: var(--muted); }
       .technical-details[open] > summary::after { content: '−'; }
       .technical-details > :not(summary) { margin: 14px 16px; }
-      .client-options { display: grid; gap: 12px; margin-top: 22px; }
-      .client-options .button { width: 100%; min-height: 56px; }
       .revision { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 4px 10px; }
       @media (max-width: 480px) { section { padding: 20px; } main { padding-left: 16px; padding-right: 16px; } }
       @media (prefers-reduced-motion: reduce) { button, a.button { transition: none; } }
@@ -468,18 +466,17 @@
               Подписка
             {% endif %}
           </h2>
-          <button type="button" class="connection-primary" data-open-client>Открыть в клиенте <span aria-hidden="true">↗</span></button>
+          <a class="button connection-primary" href="{{ neko_import_url }}" rel="noreferrer">Открыть в клиенте <span aria-hidden="true">↗</span></a>
           <div class="credential-toolbar" role="group" aria-label="Подписка">
             <span class="credential-label">Подписка</span>
             <button type="button" class="secondary" data-copy-value="{{ subscription_url }}">Копировать</button>
             <button type="button" class="secondary" data-disclose="subscription-manual" data-show="Показать" data-hide="Скрыть" aria-expanded="false" aria-controls="subscription-manual">Показать</button>
             <button type="button" class="secondary" data-toggle-qr="subscription-qr" data-qr-closed="QR-код" aria-expanded="false">QR-код</button>
           </div>
-          <div id="subscription-manual" class="credential-panel" hidden><code>{{ subscription_url }}</code></div>
+          <div id="subscription-manual" class="credential-panel" hidden><textarea readonly aria-label="Ссылка подписки">{{ subscription_url }}</textarea></div>
           <div id="subscription-qr" class="qr"><img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки"></div>
           <details class="technical-details">
             <summary>Clash / Mihomo</summary>
-            <p>Профиль для Clash Meta / Mihomo. Серверы обновляются автоматически.</p>
             <div class="downloads">
               <a class="button secondary" href="{{ clash_url }}">Скачать YAML</a>
               <button type="button" class="secondary" data-copy-value="{{ clash_url }}">Копировать ссылку</button>
@@ -505,7 +502,7 @@
           <button type="button" class="secondary" data-disclose="amnezia-manual" data-show="Показать" data-hide="Скрыть" aria-expanded="false" aria-controls="amnezia-manual">Показать</button>
           <button type="button" class="secondary" data-toggle-qr="amnezia-qr" data-qr-closed="QR-код" aria-expanded="false">QR-код</button>
         </div>
-        <div id="amnezia-manual" class="credential-panel" hidden><textarea id="amnezia-key" readonly>{{ amnezia_vpn_key }}</textarea></div>
+        <div id="amnezia-manual" class="credential-panel" hidden><textarea id="amnezia-key" aria-label="Ключ AmneziaVPN" readonly>{{ amnezia_vpn_key }}</textarea></div>
         <div id="amnezia-qr" class="qr"><img src="{{ amnezia_qr_url }}" alt="QR AmneziaVPN"></div>
         <div class="downloads"><a class="button secondary" href="{{ amnezia_url }}">Скачать .conf</a></div>
       </section>
@@ -890,16 +887,6 @@
       </section>
       {% endif %}
     </main>
-    <dialog id="client-picker" aria-labelledby="client-picker-title">
-      <h2 id="client-picker-title">Выберите клиент</h2>
-      <p class="muted">Подтвердите добавление подписки в приложении.</p>
-      <div class="client-options">
-        <a class="button" href="{{ neko_import_url }}" rel="noreferrer">NekoBox</a>
-        <a class="button" href="{{ clash_import_url }}" rel="noreferrer">Clash / Mihomo</a>
-        <button type="button" class="secondary" data-copy-value="{{ subscription_url }}">Другой клиент · скопировать ссылку</button>
-        <button type="button" class="secondary" onclick="document.getElementById('client-picker').close()">Закрыть</button>
-      </div>
-    </dialog>
     <dialog id="ip-change-confirm" aria-labelledby="ip-change-confirm-title">
       <h2 id="ip-change-confirm-title">Вы точно хотите сменить IP?</h2>
       <p>Это может помочь с доступом к VPN, если проблема в текущем IP. Смена создаёт новый платный сервер и стоит денег.</p>
@@ -913,7 +900,11 @@
       {% if ip_change.busy %}
       setTimeout(() => window.location.reload(), 5000);
       {% endif %}
-      document.querySelectorAll('[data-open-client]').forEach(button => button.addEventListener('click', () => document.getElementById('client-picker').showModal()));
+      document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => {
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close('cancel');
+      }));
       document.querySelectorAll('[data-disclose]').forEach(button => button.addEventListener('click', () => {
         const panel = document.getElementById(button.dataset.disclose);
         panel.hidden = !panel.hidden;

@@ -1948,7 +1948,6 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "base_url": base_url,
             "vpn_revision": config.revision,
             "clash_url": f"{base_url}/clash/{client['token']}",
-            "clash_import_url": "clash://install-config?" + urlencode({"url": f"{base_url}/clash/{client['token']}", "name": config_filename('clash', client, config.revision, 'yaml')[:-5]}),
             "subscription_url": f"{base_url}/sub/{client['token']}",
             "neko_import_url": "sn://subscription?" + urlencode({
                 "url": f"{base_url}/sub/{client['token']}",
