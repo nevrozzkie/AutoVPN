@@ -101,7 +101,7 @@
       button:hover, a.button:hover { background: var(--accent-hover); }
       button:active, a.button:active { transform: translateY(1px); }
       button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-      :root[data-theme="dark"] button.secondary, :root[data-theme="dark"] a.secondary, :root[data-theme="dark"] .theme-toggle { color: var(--text); }
+      :root[data-theme="dark"] button.secondary, :root[data-theme="dark"] a.secondary, :root[data-theme="dark"] .theme-toggle, :root[data-theme="dark"] .guide-tabs button { color: var(--text); }
       button:disabled { opacity: .5; cursor: wait; }
       .button.secondary, button.secondary { background: var(--panel-soft); border-color: var(--border); color: var(--text); }
       .button.secondary:hover, button.secondary:hover { border-color: var(--accent); background: var(--code-bg); }
@@ -900,11 +900,18 @@
       {% if ip_change.busy %}
       setTimeout(() => window.location.reload(), 5000);
       {% endif %}
-      document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => {
-        if (event.target !== dialog) return;
-        const box = dialog.getBoundingClientRect();
-        if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close('cancel');
-      }));
+      document.querySelectorAll('dialog').forEach(dialog => {
+        let beganOutside = false;
+        const outside = event => {
+          const box = dialog.getBoundingClientRect();
+          return event.target === dialog && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom);
+        };
+        dialog.addEventListener('pointerdown', event => { beganOutside = outside(event); });
+        dialog.addEventListener('pointerup', event => {
+          if (beganOutside && outside(event)) dialog.close('cancel');
+          beganOutside = false;
+        });
+      });
       document.querySelectorAll('[data-disclose]').forEach(button => button.addEventListener('click', () => {
         const panel = document.getElementById(button.dataset.disclose);
         panel.hidden = !panel.hidden;
