@@ -11,7 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from app.db import get_db, now_iso, set_setting, update_operation
-from app.eu_install import build_eu_deploy_script, run_remote_command
+from app.eu_install import (build_eu_deploy_script, run_remote_command,
+                            SshHostKeyMismatch, SshConnectError, SshAuthenticationError)
 from app.ip_change import (
     IpChangeError, IpRotationTiming, Sleeper, _ensure_bound_revision_current,
     _sleep, _step, _verify_protocol_health, _wait_for_ssh,
@@ -92,6 +93,78 @@ async def _deploy(operation_id: int, host: str, config: CapturedVpnConfig) -> No
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def _refresh_new_box_host_key(operation_id, config, bound, ssh, name, ip, error, timing):
+    """Forget one stale pin only for this request's newly purchased, verified box."""
+    from app.eu_install import forget_ssh_known_host
+    if error.host != ip or error.port != 22:
+        raise IpChangeError('SSH host key mismatch refers to a different endpoint')
+    _check_binding(bound)
+    _ensure_bound_revision_current(config.revision)
+    credentials = sprintbox_config()
+    client = SprintboxClient(credentials['login'], credentials['key'], timeout=timing.provider_timeout)
+    box = await client.get_box(name)
+    with get_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        operation = db.execute('SELECT * FROM ip_change_operations WHERE id=?', (operation_id,)).fetchone()
+        ctx = context(db, operation_id)
+        lease = db.execute("SELECT 1 FROM operation_leases WHERE resource='vpn_vps' AND owner_type='IP_CHANGE' AND owner_id=?", (operation_id,)).fetchone()
+        revision = db.execute('SELECT desired_revision FROM vpn_state WHERE singleton=1').fetchone()
+        primary = db.execute("SELECT value FROM settings WHERE key='current_ip'").fetchone()
+        anchor = db.execute('SELECT 1 FROM vpn_anchors WHERE ip=?', (ip,)).fetchone()
+        if (not operation or not lease or operation['status'] != 'RUNNING'
+                or operation['purchase_state'] != 'CONFIRMED' or operation['published_revision']
+                or operation['make_main_state'] != 'NOT_STARTED' or operation['apply_state'] != 'RUNNING'
+                or operation['new_ip_id'] != name or operation['new_ip'] != ip
+                or ip == config.current_ip or (primary and ip == primary['value']) or anchor
+                or revision['desired_revision'] != config.revision
+                or not ctx.get('marker') or ctx.get('host_key_reset_attempted')
+                or ctx.get('ssh_key_path') != ssh.credentials.key_path
+                or box.get('name') != name or box.get('description') != ctx['marker'] or box_ipv4(box) != [ip]):
+            raise IpChangeError('Cannot safely refresh the SSH host key for this box')
+        ctx['host_key_reset_attempted'] = True
+        ctx['host_key_reset_at'] = now_iso()
+        db.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(ctx), f'ip_change.{operation_id}.sprintbox'))
+    _check_binding(bound)
+    await _step(operation_id, 'refresh_new_box_host_key')
+    forget_ssh_known_host(ip)
+
+
+async def _deploy_new_box(operation_id, config, bound, ssh, name, ip, timing, sleeper):
+    connect_retried = False
+    while True:
+        try:
+            await _step(operation_id, 'install_new_box', action_state='APPLYING', apply_state='RUNNING')
+            await _deploy(operation_id, ip, replace(config, current_ip=ip))
+            return True
+        except SshHostKeyMismatch as exc:
+            await _refresh_new_box_host_key(operation_id, config, bound, ssh, name, ip, exc, timing)
+        except SshAuthenticationError as exc:
+            if exc.host != ip or exc.port != 22:
+                raise
+            update_operation(operation_id, status='DONE', action_state='SSH_UNREACHABLE',
+                             apply_state='NOT_STARTED', current_step='ssh_decision',
+                             error_message='Новый сервер ещё не принял SSH-ключ. Можно подождать или выбрать другой сервер.')
+            return False
+        except SshConnectError as exc:
+            if exc.host != ip or exc.port != 22:
+                raise
+            if connect_retried:
+                update_operation(operation_id, status='DONE', action_state='SSH_UNREACHABLE',
+                                 apply_state='NOT_STARTED', current_step='ssh_decision',
+                                 error_message='SSH-соединение с новым сервером не установлено. Текущее подключение сохранено.')
+                return False
+            connect_retried = True
+            _check_binding(bound)
+            _ensure_bound_revision_current(config.revision)
+            await _step(operation_id, 'retry_new_box_ssh', apply_state='NOT_STARTED')
+            try:
+                await _wait_for_ssh(ip, replace(timing, ssh_timeout=min(timing.ssh_timeout, 45)), sleeper)
+            except IpChangeError:
+                update_operation(operation_id, status='DONE', action_state='SSH_UNREACHABLE',
+                                 current_step='ssh_decision', error_message='')
+                return False
 
 
 async def run_sprintbox_rotation(operation_id: int, *, timing: IpRotationTiming | None = None,
@@ -235,7 +308,8 @@ async def _provision_box(operation_id: int, config: CapturedVpnConfig, bound: di
         update_operation(operation_id, server_reachable_at=now_iso())
         await _step(operation_id, "install_new_box", action_state="APPLYING", apply_state="RUNNING")
         new_config = replace(config, current_ip=ip)
-        await _deploy(operation_id, ip, new_config)
+        if not await _deploy_new_box(operation_id, config, bound, ssh, name, ip, timing, sleeper):
+            return
         update_operation(operation_id, apply_state="APPLIED", apply_completed_at=now_iso())
         _check_binding(bound)
         _ensure_bound_revision_current(config.revision)

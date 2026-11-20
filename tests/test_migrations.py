@@ -471,3 +471,33 @@ def test_memory_database_does_not_attempt_chmod(monkeypatch: pytest.MonkeyPatch)
             )
     finally:
         object.__setattr__(settings, "database_path", original)
+
+
+def test_database_permissions_tolerate_sqlite_sidecar_disappearing(tmp_path, monkeypatch):
+    import os
+    from app.db import _secure_database_files
+    database = tmp_path / 'database.sqlite3'
+    sidecar = tmp_path / 'database.sqlite3-shm'
+    database.write_text('')
+    sidecar.write_text('')
+    original = os.chmod
+    def disappearing(path, mode):
+        if str(path).endswith('-shm') and sidecar.exists():
+            sidecar.unlink()
+        original(path, mode)
+    monkeypatch.setattr(os, 'chmod', disappearing)
+    _secure_database_files(str(database))
+    assert database.stat().st_mode & 0o777 == 0o600
+    assert not sidecar.exists()
+
+
+def test_database_permission_errors_are_not_silenced(tmp_path, monkeypatch):
+    import os
+    from app.db import _secure_database_files
+    database = tmp_path / 'database.sqlite3'
+    database.write_text('')
+    def denied(path, mode):
+        raise PermissionError('permission denied')
+    monkeypatch.setattr(os, 'chmod', denied)
+    with pytest.raises(PermissionError):
+        _secure_database_files(str(database))

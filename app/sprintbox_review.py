@@ -204,12 +204,20 @@ def pending_host_key_retry() -> dict | None:
     return None
 
 
-def prepare_host_key_retry(operation_id: int) -> None:
+def prepare_host_key_retry(operation_id: int, *, user_client_id: int | None = None) -> None:
     from app.eu_install import forget_ssh_known_host
     from app.ssh_credentials import SshCredentials, use_ssh_credentials
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         row = validate_ssh_decision(db, operation_id, host_key=True)
+        ctx = context(db, operation_id)
+        if user_client_id is not None:
+            from app.scheduled_cleanup import require_owner
+            require_owner(db, operation_id, user_client_id)
+            if ctx.get('host_key_reset_attempted'):
+                raise ValueError('Ключ сервера снова изменился. Нужна проверка администратора')
+        if row['new_ip'] == row['old_ip'] or db.execute('SELECT 1 FROM vpn_anchors WHERE ip=?', (row['new_ip'],)).fetchone():
+            raise ValueError('Нельзя автоматически менять SSH-ключ основного или якорного сервера')
         latest = db.execute("SELECT id FROM ip_change_operations ORDER BY id DESC LIMIT 1").fetchone()
         if latest["id"] != operation_id:
             raise ValueError("A newer IP change operation exists")
@@ -218,6 +226,9 @@ def prepare_host_key_retry(operation_id: int) -> None:
         # Keep strict verification: the next connection pins the replacement key.
         with use_ssh_credentials(SshCredentials("root", 22, "")):
             forget_ssh_known_host(row["new_ip"])
+        ctx['host_key_reset_attempted'] = True
+        ctx['host_key_reset_at'] = now_iso()
+        db.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(ctx), f'ip_change.{operation_id}.sprintbox'))
         db.execute("UPDATE ip_change_operations SET status = 'PENDING', action_state = 'SSH_WAIT_QUEUED', "
                    "apply_state = 'NOT_STARTED', current_step = 'wait_ssh', error_message = '', updated_at = ? "
                    "WHERE id = ?", (now_iso(), operation_id))

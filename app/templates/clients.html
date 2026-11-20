@@ -27,13 +27,14 @@
 
 <section class="client-list">
   {% for client in clients %}
-    <details class="panel client-details">
+    <details class="panel client-details" id="client-{{ client.id }}">
       <summary>
         <strong>{{ client.name }}</strong>
         {% if client.router is not none %}
           <span class="badge">Роутер{% if client.router.label %}: {{ client.router.label }}{% else %}: {{ client.router.router_id }}{% endif %}</span>
         {% endif %}
         <span class="muted">{{ "активен" if client.enabled else "заблокирован" }}</span>
+        {% if client.credential_state and client.credential_state.status != "DONE" %}<span class="warning">Отзыв ключей не завершён</span>{% elif not client.access_token %}<span class="muted">Подписка отозвана</span>{% endif %}
         <span class="muted">
           VLESS: ↓ {{ format_bytes(client.vless_downlink) }} · ↑ {{ format_bytes(client.vless_uplink) }}
         </span>
@@ -61,7 +62,7 @@
         </div>
         <div>
           <div class="label">Подписка</div>
-          <code>{{ base_url }}/sub/{{ client.token }}</code>
+          {% if client.access_token %}<code>{{ base_url }}/sub/{{ client.access_token }}</code>{% else %}<span class="muted">Выдача отозвана</span>{% endif %}
         </div>
         <div>
           <div class="label">VLESS UUID</div>
@@ -95,6 +96,13 @@
         </div>
       </div>
 
+      <details><summary>Отозвать или перевыпустить доступ</summary>
+        {% set credential_action = '/admin/clients/' ~ client.id ~ '/credentials' %}
+        {% set credential_retry = credential_action ~ '/retry' %}
+        {% set credential_state = client.credential_state %}
+        {% set credential_admin = true %}
+        {% include 'credential_controls.html' %}
+      </details>
       <div class="actions">
         {% if client.enabled %}
           <form class="inline" method="post" action="/admin/clients/{{ client.id }}/block" data-confirm-message="Заблокировать пользователя {{ client.name }}? Кабинет закроется, данные и ключи сохранятся. Для отключения уже импортированных конфигов синхронизируйте VPN.">

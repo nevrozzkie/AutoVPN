@@ -38,6 +38,11 @@
         {% for anchor in user_anchors %}<a class="button secondary" href="/anchor/{{ anchor.anchor_id }}/client/{{ client.token }}">Якорный VPN · {{ anchor.ip }}</a>{% endfor %}
       </div></section>
       {% endif %}
+      <section><details><summary>Подписка и безопасность</summary>
+        {% set credential_action = '/client/' ~ client.token ~ '/credentials' %}
+        {% set credential_retry = credential_action ~ '/retry' %}
+        {% include 'credential_controls.html' %}
+      </details></section>
       <section id="vpn-status">
         <div class="section-title">
           <h2>Статус VPN</h2>
@@ -46,6 +51,7 @@
           </form>
         </div>
         <ul class="protocol-list">
+          {% include "server_access_status.html" %}
           {% for protocol in protocols %}
           <li>
             <strong>{{ 'Amnezia' if protocol.key == 'amnezia' else protocol.name }}</strong>
@@ -57,6 +63,7 @@
           {% endfor %}
         </ul>
         <div class="vpn-meta muted">
+          <p>Доступ к серверу: TCP-проверка порта {{ server_access.port }} с сервера панели. Проверено: {{ server_access.checked_at|recent_msk if server_access.checked_at else "ещё не выполнялась" }}.</p>
           <p>IP: <code>{{ current_ip }}</code></p>
           <p>Конфиг обновлён: {{ config_updated_at|recent_msk if config_updated_at else 'нет данных' }}</p>
           <p>Если конфиг новее, чем настройки в вашем VPN-клиенте, обновите подписку или ключ.</p>
@@ -89,7 +96,7 @@
             <button type="button" class="secondary" data-toggle-qr="subscription-qr" data-qr-closed="QR-код" aria-expanded="false">QR-код</button>
           </div>
           <div id="subscription-manual" class="credential-panel" hidden><textarea readonly aria-label="Ссылка подписки">{{ subscription_url }}</textarea></div>
-          <div id="subscription-qr" class="qr"><img src="/client/{{ client.token }}/subscription.qr" alt="QR подписки"></div>
+          <div id="subscription-qr" class="qr"><img src="/client/{{ access_token }}/subscription.qr" alt="QR подписки"></div>
           <details class="technical-details">
             <summary>Clash / Mihomo</summary>
             <div class="downloads">
@@ -500,7 +507,7 @@
           <li>Может помочь, если проблема в текущем IP.</li>
           <li>Создаёт <strong>новый платный сервер</strong> и меняет IP для всех пользователей.</li>
           <li>После смены обновите подписку или ключ и проверьте подключение.</li>
-          <li>После подтверждения старые серверы удаляются в ближайшее окно: 23:30, 23:55, 04:00 или 07:00 МСК (в это время соединение через старое подключение может прерваться).</li>
+          <li>После подтверждения старые серверы удаляются в ближайшее окно: 23:30, 23:55, 04:00, 07:00 или 13:50 МСК (в это время соединение через старое подключение может прерваться).</li>
         </ul>
         {% set operation = ip_change.operation %}
         {% if ip_change.busy %}
@@ -513,8 +520,11 @@
           <form method="post" data-confirm-ip-change action="/client/{{ client.token }}/ip-change/{{ operation.id }}/retry">
             <button type="submit">Нет, сменить IP ещё раз</button>
           </form>
+        {% elif operation and ip_change.can_retry_host_key %}
+          <p>У нового сервера изменился SSH-ключ. Можно продолжить настройку этого же сервера без повторной покупки. Перед подключением панель повторно проверит бокс у провайдера.</p>
+          <form method="post" action="/client/{{ client.token }}/ip-change/{{ operation.id }}/host-key"><button type="submit">Продолжить настройку сервера</button></form>
         {% elif operation and operation.action_state == 'SSH_UNREACHABLE' %}
-          <p>Новый сервер пока не отвечает. Текущее подключение сохранено.</p>
+          <p>{{ operation.error_message or "Новый сервер пока не отвечает. Текущее подключение сохранено." }}</p>
           {% for decision, label in [('ssh-wait', 'Подождать ещё'), ('ssh-retry', 'Создать другой сервер'), ('ssh-cancel', 'Отмена')] %}
           <form method="post" {% if decision == 'ssh-retry' %}data-confirm-ip-change{% endif %} action="/client/{{ client.token }}/ip-change/{{ operation.id }}/{{ decision }}"><button type="submit">{{ label }}</button></form>
           {% endfor %}
@@ -522,11 +532,15 @@
           {% if operation and operation.action_state == 'CLEANUP_SCHEDULED' %}
             <p>Подтверждение принято. Удаление старых серверов назначено на {{ ip_change.cleanup_at|msk }}. Обновите подключения на всех устройствах до этого времени.</p>
           {% elif operation and operation.status in ['FAILED', 'AMBIGUOUS', 'TIMED_OUT'] %}
-            <p>Не удалось завершить смену IP. Если повторная попытка недоступна, обратитесь к администратору.</p>
+            {% if operation.status == 'FAILED' and operation.purchase_state in ['NOT_STARTED', 'REJECTED'] %}
+            <p>Смена IP не началась. Текущее подключение сохранено. Можно повторить попытку; если провайдер отклонил оплату, потребуется пополнить баланс.</p>
+            {% else %}
+            <p>Не удалось подтвердить результат настройки сервера. Текущее подключение сохранено. Чтобы не создать лишний платный сервер и не потерять рабочий VPN, нужна проверка администратора.</p>
+            {% endif %}
           {% endif %}
           {% if ip_change.pending_review %}
             <p>Ожидаем, пока другой пользователь проверит новое подключение.</p>
-          {% elif ip_change.enabled %}
+          {% elif ip_change.enabled and not (operation and operation.status in ['AMBIGUOUS','TIMED_OUT']) %}
             <form method="post" data-confirm-ip-change action="/client/{{ client.token }}/ip-change"><button type="submit">Сменить IP</button></form>
           {% endif %}
         {% endif %}

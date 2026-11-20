@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from app.db import get_setting, now_iso, set_setting
 from app.deep_protocol_checks import DeepCheckResult, run_deep_protocol_checks
 from app.health import ProbeResult, tcp_probe, udp_probe
 from app.runtime_config import (
     amnezia_port,
+    eu_ssh_port,
     hysteria_port,
     server_command_timeout_seconds,
     server_ssh_probe_timeout_seconds,
@@ -60,6 +62,21 @@ PROTOCOLS = [
         "kind": "generic",
     },
 ]
+
+
+def get_server_access(host: str, port: int = 22) -> dict:
+    value = get_setting(f'server_access.{host}.{port}')
+    result = json.loads(value) if value else {'status': 'UNKNOWN', 'checked_at': None}
+    return {**result, 'port': port}
+
+
+async def refresh_server_access(host: str, port: int = 22, *, timeout: float = 3) -> dict:
+    """TCP reachability from the panel, stored separately for each server and port."""
+    result = await tcp_probe(host, port, timeout=timeout)
+    access = {'status': 'UP' if result.ok else 'DOWN', 'checked_at': now_iso(),
+              'ping_ms': result.latency_ms if result.ok else None}
+    set_setting(f'server_access.{host}.{port}', json.dumps(access))
+    return {**access, 'port': port}
 
 
 def _status_dict(protocol: dict, port: int, status: str) -> dict[str, str | int | bool | None]:
@@ -147,6 +164,8 @@ async def refresh_protocol_statuses(
     *,
     command_timeout: float | None = None,
 ) -> list[dict[str, str | int | bool | None]]:
+    if current_ip:
+        await refresh_server_access(current_ip, eu_ssh_port())
     checked_at = now_iso()
     effective_command_timeout = (
         float(command_timeout)
@@ -237,6 +256,8 @@ async def refresh_transport_protocol_statuses(
         if probe_timeout is not None
         else float(server_ssh_probe_timeout_seconds())
     )
+    if current_ip:
+        await refresh_server_access(current_ip, eu_ssh_port(), timeout=min(3, timeout))
     scheduled: list[tuple[dict, int, asyncio.Task[ProbeResult]]] = []
     for protocol in PROTOCOLS:
         port = protocol["port"]()

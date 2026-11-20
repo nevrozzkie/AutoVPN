@@ -1,0 +1,7 @@
+<li class="server-access-row">
+  <strong>Доступ к серверу</strong><span aria-hidden="true"> — </span>
+  {% if server_access.status == 'UP' %}<span class="ok">Доступен</span>
+  {% elif server_access.status == 'DOWN' %}<span class="bad">Недоступен</span>
+  {% else %}<span class="muted">Нет данных</span>{% endif %}
+  <span class="muted access-port">SSH, порт {{ server_access.port }}</span>
+</li>

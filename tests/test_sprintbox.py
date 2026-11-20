@@ -1067,3 +1067,93 @@ def test_host_key_retry_rejects_stale_or_unrelated_failure(scenario, monkeypatch
     with pytest.raises((ValueError, main.OperationBusyError)):
         prepare_host_key_retry(operation)
     assert forgotten == []
+
+
+def test_new_box_host_key_is_refreshed_once_after_provider_verification(scenario, monkeypatch):
+    from app.eu_install import SshHostKeyMismatch
+    from app import eu_install
+    original = rotation._deploy
+    attempts = []
+    forgotten = []
+    async def mismatch_once(operation, host, config):
+        attempts.append(host)
+        if len(attempts) == 1:
+            raise SshHostKeyMismatch(host, 22, 'stale pin on recycled address')
+        await original(operation, host, config)
+    monkeypatch.setattr(rotation, '_deploy', mismatch_once)
+    monkeypatch.setattr(eu_install, 'forget_ssh_known_host', forgotten.append)
+    operation = create_operation()
+    run(operation)
+    assert get_operation(operation)['action_state'] == 'AWAITING_USER_REVIEW'
+    assert forgotten == [NEW] and attempts == [NEW, NEW]
+    assert scenario.events.count('create') == 1 and 'delete' not in scenario.events
+    assert get_setting('current_ip') == NEW
+    with rotation.get_db() as db:
+        assert rotation.context(db, operation)['host_key_reset_attempted']
+
+
+@pytest.mark.parametrize('failure', ['repeated', 'marker', 'ip', 'endpoint', 'revision', 'account', 'anchor'])
+def test_automatic_host_key_reset_refuses_unverified_or_repeated_changes(scenario, monkeypatch, failure):
+    from app.eu_install import SshHostKeyMismatch
+    from app import eu_install
+    attempts = []
+    forgotten = []
+    async def mismatch(operation, host, config):
+        attempts.append(host)
+        if failure == 'marker':
+            scenario.boxes['box-new']['description'] = 'unrelated box'
+        elif failure == 'ip':
+            scenario.boxes['box-new']['ipv4'] = ['203.0.113.99']
+        elif failure == 'revision':
+            create_client('Concurrent change')
+        elif failure == 'account':
+            set_setting('config.sprintbox_login', 'different account')
+        elif failure == 'anchor':
+            from app.anchors import save_anchor
+            with rotation.get_db() as db:
+                save_anchor(db, 'other-account', 'protected-anchor', NEW, None)
+        raise SshHostKeyMismatch('203.0.113.99' if failure == 'endpoint' else host, 22, 'mismatch')
+    monkeypatch.setattr(rotation, '_deploy', mismatch)
+    monkeypatch.setattr(eu_install, 'forget_ssh_known_host', forgotten.append)
+    operation = create_operation()
+    run(operation)
+    assert forgotten == ([NEW] if failure == 'repeated' else [])
+    assert len(attempts) == (2 if failure == 'repeated' else 1)
+    assert get_operation(operation)['status'] == 'AMBIGUOUS'
+    assert get_setting('current_ip') == OLD
+    assert scenario.events.count('create') == 1 and 'delete' not in scenario.events
+    assert 'health' not in scenario.events
+    run(operation)
+    assert len(attempts) == (2 if failure == 'repeated' else 1)
+
+
+@pytest.mark.parametrize('failure', ['transient', 'persistent', 'auth', 'command_started'])
+def test_new_box_retries_only_known_precommand_connection_failures(scenario, monkeypatch, failure):
+    from app.eu_install import SshConnectError, SshAuthenticationError
+    original = rotation._deploy
+    attempts = []
+    async def deploy(operation, host, config):
+        attempts.append(host)
+        if failure == 'transient' and len(attempts) > 1:
+            return await original(operation, host, config)
+        if failure == 'command_started':
+            raise TimeoutError('response lost after command submission')
+        error = SshAuthenticationError if failure == 'auth' else SshConnectError
+        raise error(host, 22, 'connect failed before command submission')
+    monkeypatch.setattr(rotation, '_deploy', deploy)
+    operation = create_operation()
+    run(operation)
+    result = get_operation(operation)
+    assert len(attempts) == (2 if failure in {'transient', 'persistent'} else 1)
+    assert scenario.events.count('create') == 1 and 'delete' not in scenario.events
+    if failure == 'transient':
+        assert result['action_state'] == 'AWAITING_USER_REVIEW'
+        assert get_setting('current_ip') == NEW
+    elif failure == 'command_started':
+        assert result['status'] == 'AMBIGUOUS'
+        assert get_setting('current_ip') == OLD
+    else:
+        assert result['action_state'] == 'SSH_UNREACHABLE'
+        assert result['apply_state'] == 'NOT_STARTED'
+        assert get_setting('current_ip') == OLD
+        assert pending_ssh_decision()['id'] == operation

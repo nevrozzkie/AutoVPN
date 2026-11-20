@@ -256,3 +256,65 @@ def test_deploy_script_forwards_explicit_timeout_to_ssh_helper(
         "stdin_data": "deploy-script",
         "command_timeout": 123.0,
     }
+
+
+@pytest.mark.parametrize('phase', ['connect', 'command'])
+def test_ssh_transport_error_is_retryable_only_before_remote_command(monkeypatch, phase):
+    import paramiko
+    init_db()
+    attempts = []
+    class Ssh:
+        def connect(self, **kwargs):
+            attempts.append('connect')
+            if phase == 'connect':
+                raise ConnectionResetError('connection reset')
+        def exec_command(self, *args, **kwargs):
+            attempts.append('command')
+            raise paramiko.SSHException('No existing session')
+        def close(self): pass
+    monkeypatch.setattr(eu_install, '_build_verified_ssh_client', lambda _: Ssh())
+    monkeypatch.setattr(eu_install, 'eu_ssh_password', lambda: '')
+    monkeypatch.setattr(eu_install, 'eu_ssh_key_path', lambda: '/test/key')
+    monkeypatch.setattr(eu_install, '_format_ssh_error', lambda host, exc: str(exc))
+    with pytest.raises(eu_install.EuInstallError) as caught:
+        eu_install._ssh_exec('203.0.113.20', 'bash -s', 'test')
+    assert isinstance(caught.value, eu_install.SshConnectError) == (phase == 'connect')
+    assert attempts == (['connect'] if phase == 'connect' else ['connect', 'command'])
+
+
+def test_paramiko_host_key_mismatch_has_structured_endpoint_before_command(monkeypatch):
+    import paramiko
+    init_db()
+    class Key:
+        def get_base64(self): return 'test-key'
+    class Ssh:
+        def connect(self, **kwargs):
+            raise paramiko.BadHostKeyException(kwargs['hostname'], Key(), Key())
+        def exec_command(self, *args, **kwargs): raise AssertionError('command must not run')
+        def close(self): pass
+    monkeypatch.setattr(eu_install, '_build_verified_ssh_client', lambda _: Ssh())
+    monkeypatch.setattr(eu_install, 'eu_ssh_password', lambda: '')
+    monkeypatch.setattr(eu_install, 'eu_ssh_key_path', lambda: '/test/key')
+    monkeypatch.setattr(eu_install, 'eu_ssh_port', lambda: 22)
+    with pytest.raises(eu_install.SshHostKeyMismatch) as caught:
+        eu_install._ssh_exec('203.0.113.20', 'bash -s', 'test')
+    assert caught.value.host == '203.0.113.20' and caught.value.port == 22
+    assert 'the server presented a different SSH host key' in str(caught.value)
+
+
+@pytest.mark.parametrize('failure', ['missing_key', 'invalid_key'])
+def test_local_ssh_key_errors_are_not_treated_as_transient_network_failures(monkeypatch, failure):
+    import paramiko
+    init_db()
+    class Ssh:
+        def connect(self, **kwargs):
+            if failure == 'missing_key':
+                raise FileNotFoundError(2, 'No such key file')
+            raise paramiko.SSHException('not a valid private key file')
+        def close(self): pass
+    monkeypatch.setattr(eu_install, '_build_verified_ssh_client', lambda _: Ssh())
+    monkeypatch.setattr(eu_install, 'eu_ssh_password', lambda: '')
+    monkeypatch.setattr(eu_install, 'eu_ssh_key_path', lambda: '/test/key')
+    with pytest.raises(eu_install.EuInstallError) as caught:
+        eu_install._ssh_exec('203.0.113.20', 'bash -s', 'test')
+    assert not isinstance(caught.value, eu_install.SshConnectError)

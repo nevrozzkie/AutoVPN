@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import pytest
 from app import main
+from app.db import init_db
+
+
+@pytest.fixture(autouse=True)
+def client_list_database():
+    init_db()
 
 
 class _Request:
     base_url = "https://example.test/"
+    query_params = {}
 
 
 def test_client_list_hides_router_client(monkeypatch) -> None:

@@ -11,15 +11,22 @@
 {% set edit = anchor_edit_states.get(anchor.anchor_id) %}
 <section class="panel">
   <h2>{{ anchor.box_name }} · {{ anchor.ip }}</h2>
+  <p class="{{ 'muted' if anchor.ssh_reachable else 'warning' }}"><strong>SSH · порт 22:</strong> {{ 'TCP-подключение доступно' if anchor.ssh_reachable else 'недоступен — проверьте блокировку IP, firewall и службу SSH' }}. Проверено {{ anchor.ssh_checked_at|msk }}.</p>
+  <p class="muted">Проверка порта выполняется с сервера панели при открытии страницы. Авторизация по ключу и доступность VPN из сети пользователя проверяются отдельно.</p>
   <p>Аккаунт: {{ anchor.account_label or anchor.account_login }}.</p>
   <p class="muted">Сохранён {{ anchor.created_at|msk }}. Защищён от автоматической очистки.</p>
   {% if edit and edit.status in ['PENDING','RUNNING'] %}
   <p class="muted">Применяем изменения якоря… Страница обновится автоматически.</p>
   <script>setTimeout(()=>location.reload(),3000)</script>
   {% elif edit %}
-  <p class="warning">Изменение якоря не подтверждено. Проверьте сервер перед повторным применением.</p>
+  <p class="warning">{{ edit.error_message or "Изменение якоря не подтверждено. Проверьте сервер перед повторным применением." }}</p>
+  {% if edit.credential_client_id %}
+  <p><a href="/admin/clients#client-{{ edit.credential_client_id }}">Отзыв доступа пользователя →</a></p>
+  <form method="post" action="/admin/clients/{{ edit.credential_client_id }}/credentials/retry"><button {% if busy %}disabled{% endif %}>Повторить применение отзыва</button></form>
+  {% else %}
   <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/retry-edit"><button {% if busy %}disabled{% endif %}>Повторить применение</button></form>
   <form method="post" action="/admin/anchors/{{ anchor.anchor_id }}/restore-edit"><p class="muted">Чтобы отменить изменение, заново примените последний подтверждённый конфиг. Это может кратко переподключить клиентов якоря.</p><button {% if busy %}disabled{% endif %}>Восстановить подтверждённый конфиг</button></form>
+  {% endif %}
   {% elif anchor.maintenance_operation_id %}
   <p class="warning">Якорь перенастраивается или предыдущая попытка не завершилась. Выдача прежних профилей приостановлена. Проверьте журнал перед повторной попыткой.</p>
   {% elif not anchor.ready %}
@@ -35,7 +42,7 @@
     <p class="muted">Снятие отметки закрывает страницу и загрузку конфигов. Уже импортированный ключ продолжит работать на сервере.</p>
   </form>
   {% endif %}
-  {% if anchor.ready %}
+  {% if anchor.ready and not anchor.maintenance_operation_id %}
   {% set installed_ids = anchor.clients|map(attribute='id')|list %}
   {% set available = all_clients|rejectattr('id','in',installed_ids)|list %}
   <details style="margin:20px 0"><summary>Добавить пользователей на сервер</summary>

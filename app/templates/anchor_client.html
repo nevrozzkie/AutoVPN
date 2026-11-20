@@ -15,6 +15,26 @@
     <p>IP: <code>{{ anchor.ip }}</code></p>
     <p class="muted">Смена IP и настроек основного VPN не меняет это подключение. Доступность проверьте в своём VPN-клиенте.</p>
   </section>
+  <section id="vpn-status">
+    <div class="section-title"><h2>Статус VPN</h2>
+      <form method="post" action="{{ prefix }}/protocols/{{ client.token }}/refresh"><button type="submit" class="status-refresh" aria-label="Обновить статус VPN" title="Обновить статус VPN">↻</button></form>
+    </div>
+    <ul class="protocol-list">{% include "server_access_status.html" %}</ul>
+    <p class="muted">TCP-проверка с сервера панели. Проверено: {{ server_access.checked_at|recent_msk if server_access.checked_at else 'ещё не выполнялась' }}. Авторизация по ключу и VPN-подключение проверяются отдельно.</p>
+  </section>
+  {% if edit_state %}
+  <section>
+    {% if pending_device_name %}<p>Устройство «{{ pending_device_name }}» ещё не готово. Ниже показаны сохранённые профили.</p>{% endif %}
+    {% if edit_state.status in ['PENDING','RUNNING'] %}
+    <h2>Применяем изменение устройства…</h2><p>Сохранённые профили доступны. Новое устройство появится после ответа сервера.</p>
+    <script>setTimeout(()=>location.reload(),3000)</script>
+    {% else %}
+    <h2>Не удалось применить изменение устройства</h2><p>{{ edit_state.error_message or 'Ответ сервера не получен. Повторите попытку, когда сервер станет доступен.' }}</p>
+    <p class="muted">Сохранённые профили доступны. Новое устройство пока не готово; удаляемый ключ мог быть уже отозван.</p>
+    {% if can_retry_device %}<form method="post" action="{{ prefix }}/devices/{{ client.token }}/retry"><button>Повторить изменение устройства</button></form>{% else %}<p class="muted">Повторить изменение может его владелец или администратор.</p>{% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
   {% if subscription_enabled %}
   <section data-connection-tabs><h2>{% if vless_enabled %}VLESS{% endif %}{% if vless_enabled and hysteria_enabled %} + {% endif %}{% if hysteria_enabled %}Hysteria{% endif %}</h2>
     {% include "connection_tabs.html" %}
@@ -23,10 +43,10 @@
     <a class="button connection-primary" href="{{ import_url }}" rel="noreferrer">Открыть в клиенте ↗</a>
     <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Добавьте подписку вручную.</p>
     <div class="credential-toolbar"><span class="credential-label">Подписка</span><button class="secondary" data-copy="subscription">Копировать</button><button class="secondary" data-toggle="subscription-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="subscription-qr" aria-expanded="false">QR-код</button></div>
-    <div id="subscription-panel" class="credential-panel" hidden><textarea id="subscription" aria-label="Подписка" readonly>{{ prefix }}/sub/{{ client.token }}</textarea></div>
-    <div id="subscription-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/subscription.qr/{{ client.token }}" alt="QR подписки"></div>
-    <details class="technical-details"><summary>Clash / Mihomo</summary><p><a class="button secondary" href="{{ prefix }}/clash/{{ client.token }}">Скачать .yaml</a></p></details>
-    <details class="technical-details"><summary>sing-box · не тестировалось</summary><p><a class="button secondary" href="{{ prefix }}/sing-box/{{ client.token }}">Скачать JSON</a></p></details>
+    <div id="subscription-panel" class="credential-panel" hidden><textarea id="subscription" aria-label="Подписка" readonly>{{ prefix }}/sub/{{ access_token }}</textarea></div>
+    <div id="subscription-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/subscription.qr/{{ access_token }}" alt="QR подписки"></div>
+    <details class="technical-details"><summary>Clash / Mihomo</summary><p><a class="button secondary" href="{{ prefix }}/clash/{{ access_token }}">Скачать .yaml</a></p></details>
+    <details class="technical-details"><summary>sing-box · не тестировалось</summary><p><a class="button secondary" href="{{ prefix }}/sing-box/{{ access_token }}">Скачать JSON</a></p></details>
     </div>
     {% include "connection_keys.html" %}
   </section>
@@ -42,8 +62,8 @@
     <p class="muted device-hint" style="margin:0 0 14px">Не открылось? Импортируйте ключ вручную.</p>
     <div class="credential-toolbar"><span class="credential-label">Ключ AmneziaVPN</span><button class="secondary" data-copy="amnezia-key">Копировать</button><button class="secondary" data-toggle="amnezia-panel" aria-expanded="false">Показать</button><button class="secondary" data-toggle="amnezia-qr" aria-expanded="false">QR-код</button></div>
     <div id="amnezia-panel" class="credential-panel" hidden><textarea id="amnezia-key" aria-label="Ключ AmneziaVPN" readonly>{{ amnezia_key }}</textarea></div>
-    <div id="amnezia-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/amnezia.qr/{{ client.token }}{{ device_suffix }}" alt="QR AmneziaVPN"></div>
-    <div class="downloads"><a class="button secondary" href="{{ prefix }}/amnezia/{{ client.token }}{{ device_suffix }}">Скачать .conf</a>{% if selected_device %}<button class="danger" type="button" {% if not device_management_available %}disabled{% endif %} onclick="document.getElementById('delete-device').showModal()">Удалить устройство</button>{% endif %}</div>
+    <div id="amnezia-qr" class="credential-panel" hidden><img style="max-width:100%;width:220px" src="{{ prefix }}/amnezia.qr/{{ access_token }}{{ device_suffix }}" alt="QR AmneziaVPN"></div>
+    <div class="downloads"><a class="button secondary" href="{{ prefix }}/amnezia/{{ access_token }}{{ device_suffix }}">Скачать .conf</a>{% if selected_device %}<button class="danger" type="button" {% if not device_management_available %}disabled{% endif %} onclick="document.getElementById('delete-device').showModal()">Удалить устройство</button>{% endif %}</div>
     <p class="muted device-hint">Для одного пользователя: отдельный профиль на устройство, обновление вручную.</p>
   </section>
   {% endif %}

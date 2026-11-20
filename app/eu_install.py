@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import re
@@ -46,6 +47,22 @@ from app.vpn_state import (
 
 
 class EuInstallError(RuntimeError):
+    pass
+
+
+class SshConnectError(EuInstallError):
+    """Connection failed before any remote command was submitted."""
+    def __init__(self, host: str, port: int, message: str):
+        super().__init__(message)
+        self.host = host
+        self.port = port
+
+
+class SshHostKeyMismatch(SshConnectError):
+    pass
+
+
+class SshAuthenticationError(SshConnectError):
     pass
 
 
@@ -634,8 +651,10 @@ def _ssh_exec(
     last_exc: Exception | None = None
     for attempt in range(1, 4):
         ssh = _build_verified_ssh_client(paramiko)
+        connected = False
         try:
             ssh.connect(**connect_kwargs)
+            connected = True
             stdin, stdout, stderr = ssh.exec_command(
                 command, get_pty=not bool(stdin_data), timeout=command_timeout
             )
@@ -652,17 +671,20 @@ def _ssh_exec(
             exit_code = stdout.channel.recv_exit_status()
             return exit_code, output + error_output
         except paramiko.BadHostKeyException as exc:
-            raise EuInstallError(
+            error_type = EuInstallError if connected else SshHostKeyMismatch
+            message = (
                 f"Host key verification failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: "
                 f"the server presented a different SSH host key than the one previously pinned "
                 f"({exc}). This may be a server reinstall/replacement — or a man-in-the-middle. "
                 "If you are sure the VPS was rebuilt, use 'forget SSH host key' and retry."
-            ) from exc
+            )
+            raise (error_type(message) if connected else error_type(host, eu_ssh_port(), message)) from exc
         except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as exc:
-            raise EuInstallError(
+            message = (
                 f"SSH authentication failed for {eu_ssh_user()}@{host}:{eu_ssh_port()}: {exc}. "
                 "Check SSH username and password/key in /setup."
-            ) from exc
+            )
+            raise (EuInstallError(message) if connected else SshAuthenticationError(host, eu_ssh_port(), message)) from exc
         except (paramiko.SSHException, socket.error, TimeoutError, EOFError) as exc:
             last_exc = exc
             message = str(exc)
@@ -670,10 +692,21 @@ def _ssh_exec(
                 "Error reading SSH protocol banner" in message
                 or "No existing session" in message
             )
-            if transient_banner_error and attempt < 3:
+            if not connected and transient_banner_error and attempt < 3:
                 time.sleep(1.5 * attempt)
                 continue
-            raise EuInstallError(_format_ssh_error(host, exc)) from exc
+            network_failure = (
+                isinstance(exc, (ConnectionError, TimeoutError, EOFError, paramiko.ssh_exception.NoValidConnectionsError))
+                or (isinstance(exc, OSError) and exc.errno in {
+                    errno.ECONNREFUSED, errno.ECONNRESET, errno.ETIMEDOUT,
+                    errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPIPE,
+                })
+                or transient_banner_error
+            )
+            message = _format_ssh_error(host, exc)
+            if not connected and network_failure:
+                raise SshConnectError(host, eu_ssh_port(), message) from exc
+            raise EuInstallError(message) from exc
         finally:
             ssh.close()
 

@@ -67,6 +67,8 @@ from app.protocol_status import (
     get_client_protocol_statuses,
     get_protocol_statuses,
     refresh_transport_protocol_statuses,
+    get_server_access,
+    refresh_server_access,
 )
 from app.readiness import database_is_ready
 from app.vps_provider import (
@@ -85,8 +87,8 @@ from app.sprintbox_accounts import (
 )
 from app.sprintbox import SprintboxClient
 
-from app.anchors import list_anchors, anchor_client, has_anchor_access, set_anchor_access
-from app import anchor_updates, web_push
+from app.anchors import list_anchors, anchor_client, has_anchor_access, set_anchor_access, device_edit_plan
+from app import anchor_updates, web_push, client_credentials
 from app.sprintbox_controls import (anchor_target, prepare_deletion, confirm_deletion, deletion, run_deletion, recheck_deletion)
 from app.tuning import PROTOCOLS, FINGERPRINTS, profile_values, update_tuning
 from app.runtime_config import (
@@ -123,7 +125,7 @@ from app.subscriptions import (
     render_subscription,
     render_connection_keys,
 )
-from app.vpn_config import capture_vpn_config
+from app.vpn_config import capture_vpn_config, captured_vpn_config_from_json
 from app.vpn_state import IpChangeSafetyHoldError, prepare_install_operation
 from app.security import (
     SECURITY_HEADERS,
@@ -299,6 +301,8 @@ STEP_LABELS = {
     "update_current_ip": "обновление текущего IP",
     "sync_vpn_after_ip_change": "синхронизация VPN после смены IP",
     "refresh_protocol_statuses": "обновление статусов протоколов",
+    "refresh_new_box_host_key": "обновление сохранённого SSH-ключа нового сервера",
+    "retry_new_box_ssh": "повтор SSH-соединения с новым сервером",
     "delete_old_ipv4": "удаление старого IPv4",
     "ssh_connect": "подключение по SSH",
     "remote_install_running": "удалённая установка выполняется",
@@ -920,11 +924,21 @@ def admin_select_sprintbox_account(request: Request, account_id: int, _: str = D
 
 
 @app.get("/admin/anchors", response_class=HTMLResponse)
-def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+async def admin_anchors(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    anchors = list_anchors()
+    semaphore = asyncio.Semaphore(8)
+
+    async def check(anchor):
+        async with semaphore:
+            access = await refresh_server_access(anchor['ip'])
+            anchor['ssh_reachable'] = access['status'] == 'UP'
+            anchor['ssh_checked_at'] = access['checked_at']
+
+    await asyncio.gather(*(check(anchor) for anchor in anchors))
     return templates.TemplateResponse(request, "anchors.html", {
-        "anchors": list_anchors(), "busy":get_active_vps_operation() is not None,
+        "anchors": anchors, "busy":get_active_vps_operation() is not None,
         "all_clients": [client for client in list_clients() if client['enabled']],
-        "anchor_edit_states": {anchor['anchor_id']: anchor_updates.edit_state(anchor['anchor_id']) for anchor in list_anchors()},
+        "anchor_edit_states": {anchor['anchor_id']: anchor_updates.edit_state(anchor['anchor_id']) for anchor in anchors},
     }, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
 
@@ -1317,6 +1331,8 @@ def admin_clients(request: Request, _: str = Depends(require_admin)) -> HTMLResp
     clients = [client for client in list_clients_with_stats() if int(client["id"]) not in routers_by_client_id]
     for client in clients:
         client["router"] = routers_by_client_id.get(int(client["id"]))
+        client["access_token"] = client_credentials.access_token(client["id"])
+        client["credential_state"] = client_credentials.state(client["id"])
     return templates.TemplateResponse(
         request,
         "clients.html",
@@ -1340,6 +1356,30 @@ def admin_create_client(
 ) -> RedirectResponse:
     create_client(name.strip())
     return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post('/admin/clients/{client_id}/credentials')
+def admin_rotate_client_credentials(client_id: int, background_tasks: BackgroundTasks,
+                                    action: str = Form('reissue'), rotate_page: bool = Form(False),
+                                    confirm: bool = Form(False), _: str = Depends(require_admin)):
+    if not confirm or action not in {'reissue', 'revoke'}:
+        raise HTTPException(status_code=400, detail='Подтвердите отзыв старых ссылок и конфигов')
+    try:
+        operation, _ = client_credentials.prepare(client_id, rotate_page=rotate_page, revoke=action == 'revoke')
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(client_credentials.run, operation)
+    return RedirectResponse('/admin/clients', status_code=303)
+
+
+@app.post('/admin/clients/{client_id}/credentials/retry')
+def admin_retry_client_credentials(client_id: int, background_tasks: BackgroundTasks, _: str = Depends(require_admin)):
+    try:
+        operation = client_credentials.retry(client_id)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(client_credentials.run, operation)
+    return RedirectResponse('/admin/clients', status_code=303)
 
 
 @app.post("/admin/clients/{client_id}/rename")
@@ -1372,7 +1412,10 @@ def admin_disable_client(client_id: int, _: str = Depends(require_admin)) -> Red
 
 @app.post("/admin/clients/{client_id}/delete")
 def admin_delete_client(client_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
-    delete_client(client_id)
+    try:
+        delete_client(client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return RedirectResponse("/admin/clients", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1840,6 +1883,8 @@ async def _refresh_stats_background() -> None:
 def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
     try:
         reset_server_and_aeza_state()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except OperationBusyError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1851,7 +1896,7 @@ def admin_reset_server(_: str = Depends(require_admin)) -> RedirectResponse:
 @app.get("/sub/{token}", response_class=PlainTextResponse)
 def subscription(token: str) -> PlainTextResponse:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if not config.current_ip:
@@ -1862,7 +1907,7 @@ def subscription(token: str) -> PlainTextResponse:
 @app.get("/sing-box/{token}", response_class=JSONResponse)
 def sing_box_subscription(token: str) -> JSONResponse:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if not config.current_ip:
@@ -1883,7 +1928,13 @@ def user_ip_change_state(client_id: int) -> dict:
         if row:
             from app.sprintbox_review import context
             due = context(db, row['id']).get('cleanup_at')
+    host_key_retry = pending_host_key_retry() if row and row['status'] == 'AMBIGUOUS' else None
+    can_retry_host_key = bool(host_key_retry and host_key_retry['id'] == row['id'])
+    if can_retry_host_key:
+        with get_db() as db:
+            can_retry_host_key = not context(db, row['id']).get('host_key_reset_attempted')
     return {'enabled': enabled, 'operation': row, 'cleanup_at': due,
+            'can_retry_host_key': can_retry_host_key,
             'busy': get_active_vps_operation() is not None, 'pending_review': bool(pending)}
 
 
@@ -2028,11 +2079,14 @@ def decide_user_ip_change(token: str, operation_id: int, decision: str,
             require_owner(db, operation_id, client['id'])
         if decision == 'accept':
             schedule_cleanup(operation_id, client_id=client['id'])
-        elif decision in {'retry', 'ssh-retry', 'ssh-wait', 'ssh-cancel'}:
+        elif decision in {'retry', 'ssh-retry', 'ssh-wait', 'ssh-cancel', 'host-key'}:
             if decision != 'ssh-cancel' and not user_ip_change_state(client['id'])['enabled']:
                 raise ValueError('Смена IP сейчас недоступна')
             if decision == 'ssh-cancel':
                 cancel_ssh_wait(operation_id)
+            elif decision == 'host-key':
+                prepare_host_key_retry(operation_id, user_client_id=client['id'])
+                background_tasks.add_task(_run_operation_background, operation_id)
             elif decision == 'ssh-wait':
                 prepare_ssh_wait(operation_id)
                 background_tasks.add_task(_run_operation_background, operation_id)
@@ -2072,7 +2126,7 @@ def client_protocol_overview() -> tuple[list[dict], str | None]:
 @app.get('/clash-provider/{token}')
 def client_clash_config(request: Request, token: str):
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=404)
     if not config.current_ip:
@@ -2111,6 +2165,31 @@ def delete_user_amnezia_device(token: str, device_id: int, background_tasks: Bac
     return RedirectResponse(f'/client/{token}#amnezia-section',status_code=303)
 
 
+@app.post('/client/{token}/credentials')
+def user_rotate_credentials(token: str, background_tasks: BackgroundTasks, action: str = Form('reissue'),
+                            confirm: bool = Form(False), rotate_page: bool = Form(False)):
+    client = require_vpn_user(token)
+    if rotate_page or not confirm or action not in {'reissue', 'revoke'}:
+        raise HTTPException(status_code=400, detail='Подтвердите отзыв. Адрес кабинета может менять только администратор')
+    try:
+        operation, _ = client_credentials.prepare(client['id'], revoke=action == 'revoke')
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(client_credentials.run, operation)
+    return RedirectResponse(f'/client/{token}', status_code=303)
+
+
+@app.post('/client/{token}/credentials/retry')
+def user_retry_credentials(token: str, background_tasks: BackgroundTasks):
+    client = require_vpn_user(token)
+    try:
+        operation = client_credentials.retry(client['id'])
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(client_credentials.run, operation)
+    return RedirectResponse(f'/client/{token}', status_code=303)
+
+
 @app.get("/client/{token}", response_class=HTMLResponse)
 async def client_page(request: Request, token: str) -> HTMLResponse:
     config = capture_vpn_config()
@@ -2120,6 +2199,14 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
     if not config.current_ip:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     client = captured_client.as_dict()
+    credential_state = client_credentials.state(client['id'])
+    if not client_credentials.exports_available(client['id']) or not client_credentials.access_token(client['id']):
+        return templates.TemplateResponse(request, 'credential_pending.html', {
+            'client': client, 'credential_state': credential_state,
+            'credential_action': f"/client/{token}/credentials",
+            'credential_retry': f"/client/{token}/credentials/retry",
+        })
+    access_token = client_credentials.access_token(client['id'])
     base_url = str(request.base_url).rstrip("/")
     protocols, protocols_checked_at = client_protocol_overview()
     devices = device_list(client['id'])
@@ -2142,6 +2229,8 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
         "client_page.html",
         {
             "client": client,
+            "access_token": access_token,
+            "credential_state": credential_state,
             "amnezia_devices": devices, "selected_device": selected_device,
             "user_anchors": list_anchors(token),
             "amnezia_device_pending": any(item.get("pending_deletion") or (not item["legacy"] and not item["ready"] and not item["failed"]) for item in devices),
@@ -2150,32 +2239,34 @@ async def client_page(request: Request, token: str) -> HTMLResponse:
             "config_updated_at": get_setting("vpn.public_updated_at", config.config_updated_at),
             "protocols": protocols,
             "protocols_checked_at": protocols_checked_at,
+            "server_access": get_server_access(config.current_ip, eu_ssh_port()),
             "base_url": base_url,
             "vpn_revision": public_vpn_version(),
-            "clash_url": f"{base_url}/clash/{client['token']}",
-            "subscription_url": f"{base_url}/sub/{client['token']}",
+            "clash_url": f"{base_url}/clash/{access_token}",
+            "subscription_url": f"{base_url}/sub/{access_token}",
             "neko_import_url": "sn://subscription?" + urlencode({
-                "url": f"{base_url}/sub/{client['token']}",
+                "url": f"{base_url}/sub/{access_token}",
                 "name": f"AutoVPN · {client['name']}",
             }),
             "connection_keys": render_connection_keys(config, captured_client.as_dict()),
-            "sing_box_subscription_url": f"{base_url}/sing-box/{client['token']}",
+            "sing_box_subscription_url": f"{base_url}/sing-box/{access_token}",
             "vless_enabled": config.vless.protocol.enabled,
             "hysteria_enabled": config.hysteria.protocol.enabled,
             "sing_box_enabled": config.vless.protocol.enabled or config.hysteria.protocol.enabled,
             "amnezia_enabled": config.amnezia.protocol.enabled,
-            "amnezia_url": f"{base_url}/amnezia/{client['token']}{suffix}",
+            "amnezia_url": f"{base_url}/amnezia/{access_token}{suffix}",
             "amnezia_vpn_key": render_amnezia_vpn_key(device_config, device_client)
             if config.amnezia.protocol.enabled and selected_device["ready"]
             else "",
-            "amnezia_qr_url": f"{base_url}/client/{client['token']}/amnezia.qr{suffix}",
+            "amnezia_qr_url": f"{base_url}/client/{access_token}/amnezia.qr{suffix}",
             "ip_change": user_ip_change_state(client["id"]),
         },
     )
 
 
 def authorize_anchor(request: Request, anchor_id: str, token: str, credentials: HTTPBasicCredentials | None = Depends(setup_security)):
-    if has_anchor_access(anchor_id, token):
+    page_token = token if request.path_params.get("kind") in (None, "client") else client_credentials.page_token_for_access(token)
+    if page_token and has_anchor_access(anchor_id, page_token):
         return False
     if credentials is None:
         raise HTTPException(status_code=401, headers={'WWW-Authenticate': 'Basic'})
@@ -2204,24 +2295,61 @@ def delete_anchor_device(anchor_id: str, token: str, device_id: int, background_
     return RedirectResponse(f'/anchor/{anchor_id}/client/{token}#amnezia-section', status_code=303)
 
 
+@app.post('/anchor/{anchor_id}/devices/{token}/retry')
+def retry_anchor_device(anchor_id: str, token: str, background_tasks: BackgroundTasks, admin: bool = Depends(authorize_anchor)):
+    try:
+        operation = anchor_updates.retry_edit(anchor_id, token=token, admin=admin)
+    except (ValueError, OperationBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(anchor_updates.run_edit, operation)
+    return RedirectResponse(f'/anchor/{anchor_id}/client/{token}#amnezia-section', status_code=303)
+
+
+@app.post('/anchor/{anchor_id}/protocols/{token}/refresh')
+async def refresh_anchor_server_access(anchor_id: str, token: str, admin: bool = Depends(authorize_anchor)):
+    bound = anchor_client(anchor_id, token, allow_maintenance=True)
+    if bound is None:
+        raise HTTPException(status_code=404)
+    await refresh_server_access(bound[0]['ip'])
+    return RedirectResponse(f'/anchor/{anchor_id}/client/{token}#vpn-status', status_code=303)
+
+
 @app.get("/anchor/{anchor_id}/{kind}/{token}")
 def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, device: int | None = None, admin: bool = Depends(authorize_anchor)):
     if kind not in {"client", "sub", "sing-box", "clash", "clash-provider", "amnezia", "amnezia-key", "subscription.qr", "amnezia.qr"}:
         raise HTTPException(status_code=404)
-    bound = anchor_client(anchor_id, token, allow_maintenance=True)
+    page_token = token if kind == 'client' else client_credentials.page_token_for_access(token)
+    bound = anchor_client(anchor_id, page_token or '', allow_maintenance=True)
     if bound is None:
         raise HTTPException(status_code=404)
     anchor, config, client = bound
-    if anchor['maintenance_operation_id']:
+    if kind != 'client' and (not client_credentials.exports_available(client.id) or not client_credentials.access_token(client.id)):
+        raise HTTPException(status_code=409, detail='Отзыв доступа ещё не завершён')
+    access_token = client_credentials.access_token(client.id)
+    if kind == 'client' and (not client_credentials.exports_available(client.id) or not access_token):
+        return templates.TemplateResponse(request, 'credential_pending.html', {
+            'client': client.as_dict(), 'credential_state': client_credentials.state(client.id),
+            'credential_action': f'/client/{client.token}/credentials',
+            'credential_retry': f'/client/{client.token}/credentials/retry',
+        })
+    state = anchor_updates.edit_state(anchor_id)
+    with get_db() as db:
+        peer_edit = device_edit_plan(db, anchor)
+    if anchor['maintenance_operation_id'] and not peer_edit:
         if kind != 'client':
             raise HTTPException(status_code=409, detail='Якорь обновляется; конфиг временно недоступен')
-        state = anchor_updates.edit_state(anchor_id)
         return templates.TemplateResponse(request, 'anchor_pending.html', {'state': state, 'token': token, 'anchor_id': anchor_id})
     keys_client = replace(client, name=f"{client.name} · Якорь {anchor['ip']}")
     own_devices = [item for item in config.amnezia_devices if item.client_id == client.id]
     selected = next((item for item in own_devices if item.id == device), None) if device is not None else None
+    pending_device = None
     if device is not None and selected is None:
-        raise HTTPException(status_code=404)
+        pending_config = captured_vpn_config_from_json(peer_edit['payload']) if peer_edit else None
+        pending_device = next((d for d in pending_config.amnezia_devices if d.id == device and d.client_id == client.id), None) if pending_config else None
+        if pending_device is None:
+            raise HTTPException(status_code=404)
+        if kind != 'client':
+            raise HTTPException(status_code=409, detail='Устройство ещё не применено на сервере')
     if selected is not None and kind in {'client', 'amnezia', 'amnezia-key', 'amnezia.qr'}:
         client = replace(client, name=f'{client.name} {selected.name}', amnezia_private_key=selected.private_key,
                          amnezia_public_key=selected.public_key, amnezia_preshared_key=selected.preshared_key, amnezia_ipv4=selected.ipv4)
@@ -2234,22 +2362,26 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, dev
     prefix = f"{str(request.base_url).rstrip('/')}/anchor/{anchor_id}"
     if kind == "client":
         return templates.TemplateResponse(request, "anchor_client.html", {
-            "anchor": anchor, "client": client, "amnezia_enabled": config.amnezia.protocol.enabled,
+            "anchor": anchor, "client": client, "access_token": access_token, "amnezia_enabled": config.amnezia.protocol.enabled,
             "prefix": prefix, "subscription_enabled": subscription_enabled,
             "connection_keys": render_connection_keys(config, keys_client.as_dict()),
             "anchor_keys": True,
             "devices": own_devices, "selected_device": selected,
+            "pending_device_name": pending_device.name if pending_device else None,
+            "server_access": get_server_access(anchor['ip']),
             "device_suffix": '' if selected is None else f'?device={selected.id}',
-            "device_management_available": get_active_vps_operation() is None,
+            "device_management_available": not anchor['maintenance_operation_id'] and get_active_vps_operation() is None,
+            "edit_state": state,
+            "can_retry_device": bool(peer_edit) and anchor_updates.can_retry_device(anchor_id, token, admin=admin),
             "vless_enabled": config.vless.protocol.enabled, "hysteria_enabled": config.hysteria.protocol.enabled,
-            "import_url": 'sn://subscription?' + urlencode({'url': f'{prefix}/sub/{token}', 'name': client.name}),
+            "import_url": 'sn://subscription?' + urlencode({'url': f'{prefix}/sub/{access_token}', 'name': client.name}),
             "amnezia_key": render_amnezia_vpn_key(config, client) if config.amnezia.protocol.enabled else "",
         })
     if kind in {'clash', 'clash-provider'}:
         value = clash_provider(config, client.as_dict()) if kind == 'clash-provider' else clash_profile(config, client.as_dict(), str(request.base_url).rstrip('/'))
         if kind == 'clash':
             for provider in value['proxy-providers'].values():
-                provider['url'] = f'{prefix}/clash-provider/{token}'
+                provider['url'] = f'{prefix}/clash-provider/{access_token}'
         return Response(dump_yaml(value), media_type='application/yaml', headers={'Content-Disposition': f'attachment; filename="{config_filename("anchor-clash", client.as_dict(), config.revision, "yaml")}"'})
     if kind == "sub":
         return PlainTextResponse(render_subscription(config, client.as_dict()))
@@ -2262,7 +2394,7 @@ def anchor_resource(request: Request, anchor_id: str, kind: str, token: str, dev
     if kind == "amnezia-key":
         return PlainTextResponse(render_amnezia_vpn_key(config, client) + "\n")
     import qrcode
-    payload = f"{prefix}/sub/{token}" if kind == "subscription.qr" else render_amnezia_vpn_key(config, client)
+    payload = f"{prefix}/sub/{access_token}" if kind == "subscription.qr" else render_amnezia_vpn_key(config, client)
     buffer = BytesIO()
     qrcode.make(payload).save(buffer, format="PNG")
     return Response(buffer.getvalue(), media_type="image/png")
@@ -2282,7 +2414,7 @@ async def client_refresh_protocols(token: str) -> RedirectResponse:
 @app.get("/client/{token}/subscription.qr")
 def client_subscription_qr(request: Request, token: str) -> Response:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     import qrcode
@@ -2297,7 +2429,7 @@ def client_subscription_qr(request: Request, token: str) -> Response:
 @app.get("/client/{token}/amnezia.qr")
 def client_amnezia_qr(token: str, device: int | None = None) -> Response:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:
@@ -2319,7 +2451,7 @@ def client_amnezia_qr(token: str, device: int | None = None) -> Response:
 @app.get("/ip/{token}", response_class=PlainTextResponse)
 def current_eu_ip(token: str) -> PlainTextResponse:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if not config.current_ip:
@@ -2330,7 +2462,7 @@ def current_eu_ip(token: str) -> PlainTextResponse:
 @app.get("/amnezia/{token}", response_class=PlainTextResponse)
 def amnezia_config(token: str, device: int | None = None) -> PlainTextResponse:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:
@@ -2352,7 +2484,7 @@ def amnezia_config(token: str, device: int | None = None) -> PlainTextResponse:
 @app.get("/amnezia-key/{token}", response_class=PlainTextResponse)
 def amnezia_vpn_key(token: str, device: int | None = None) -> PlainTextResponse:
     config = capture_vpn_config()
-    client = config.client_by_token(token)
+    client = client_credentials.export_client(config, token)
     if not client or not client.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:

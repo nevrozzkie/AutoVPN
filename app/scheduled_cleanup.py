@@ -12,7 +12,7 @@ from app.operation_coordinator import OperationBusyError, acquire_vps_lease
 from app.sprintbox_review import context, validate_review
 
 MSK = ZoneInfo('Europe/Moscow')
-CLEANUP_WINDOWS = ((4, 0), (7, 0), (23, 30), (23, 55))
+CLEANUP_WINDOWS = ((4, 0), (7, 0), (13, 50), (23, 30), (23, 55))
 logger = logging.getLogger(__name__)
 
 

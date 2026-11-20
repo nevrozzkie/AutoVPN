@@ -54,8 +54,12 @@ def _is_memory_database(database_path: str) -> bool:
 def _secure_database_files(database_path: str) -> None:
     for suffix in ("", "-wal", "-shm"):
         path = Path(f"{database_path}{suffix}")
-        if path.exists():
+        try:
             os.chmod(path, 0o600)
+        except FileNotFoundError:
+            # SQLite removes WAL/SHM sidecars when the last connection closes.
+            # Their disappearance is normal even between exists() and chmod().
+            continue
 
 
 @contextmanager
@@ -576,9 +580,20 @@ def update_client_name(client_id: int, name: str) -> None:
         _mark_vpn_config_updated(db)
 
 
+def pending_credential_rotation(db, client_id=None):
+    query = "SELECT o.id FROM settings s JOIN vpn_install_operations o ON CAST(o.id AS TEXT)=s.value WHERE s.key LIKE 'client.%.credential_rotation' AND o.status != 'DONE'"
+    params = ()
+    if client_id is not None:
+        query += ' AND s.key=?'
+        params = (f'client.{client_id}.credential_rotation',)
+    return db.execute(query + ' LIMIT 1', params).fetchone()
+
+
 def delete_client(client_id: int) -> None:
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        if pending_credential_rotation(db, client_id):
+            raise ValueError("Сначала завершите отзыв ключей пользователя")
         exists = db.execute(
             "SELECT 1 FROM clients WHERE id = ? AND deleted_at IS NULL", (client_id,)
         ).fetchone()
@@ -911,4 +926,6 @@ def reset_server_and_aeza_state() -> None:
         owner = _active_operation_owner(db)
         if owner is not None:
             raise OperationBusyError(owner)
+        if pending_credential_rotation(db):
+            raise ValueError("Сначала завершите отзыв ключей пользователей")
         _clear_server_and_aeza_state(db)

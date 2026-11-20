@@ -72,7 +72,7 @@ def test_user_pipeline_owner_retry_accept_and_source(user_flow):
         assert f'{user.token}' not in page.text
 
 
-def test_scheduled_cleanup_survives_restart_and_runs_only_at_night(user_flow):
+def test_scheduled_cleanup_survives_restart_and_runs_only_at_windows(user_flow):
     boxes, user = user_flow
     op = prepare_ip_change_operation(user_client_id=user.id).operation_id
     run(op)
@@ -160,14 +160,16 @@ def test_busy_cleanup_waits_for_next_window(user_flow):
 @pytest.mark.parametrize('current,expected', [
     ('2026-11-15T20:55:00+00:00', '2026-11-16T01:00:00+00:00'),
     ('2026-11-16T01:00:00+00:00', '2026-11-16T04:00:00+00:00'),
-    ('2026-11-16T04:00:00+00:00', '2026-11-16T20:30:00+00:00'),
+    ('2026-11-16T04:00:00+00:00', '2026-11-16T10:50:00+00:00'),
+    ('2026-11-16T10:49:59+00:00', '2026-11-16T10:50:00+00:00'),
+    ('2026-11-16T10:50:00+00:00', '2026-11-16T20:30:00+00:00'),
     ('2026-11-16T00:59:59+00:00', '2026-11-16T01:00:00+00:00'),
 ])
 def test_cleanup_window_boundaries(current, expected):
     assert next_cleanup(datetime.fromisoformat(current)) == expected
 
 
-@pytest.mark.parametrize('hour,minute', [(20, 30), (20, 55), (1, 0), (4, 0)])
+@pytest.mark.parametrize('hour,minute', [(20, 30), (20, 55), (1, 0), (4, 0), (10, 50)])
 def test_each_moscow_cleanup_window_dispatches(user_flow, hour, minute):
     boxes, user = user_flow
     op = prepare_ip_change_operation(user_client_id=user.id).operation_id
@@ -403,3 +405,48 @@ def test_keep_queued_box_rejects_busy_or_already_claimed_cleanup(user_flow):
     queue_cleanup_now(op)
     with pytest.raises(ValueError):retain_queued_box(op, 'box-old')
     assert list_anchors() == []
+
+
+def test_owner_can_resume_legacy_host_key_failure_without_admin(user_flow, monkeypatch):
+    from app import eu_install
+    boxes, user = user_flow
+    other = create_client('Other person')
+    original = rotation._deploy
+    async def legacy_mismatch(operation, host, config):
+        raise RuntimeError(f'Host key verification failed for root@{host}:22: '
+                           'the server presented a different SSH host key than the one previously pinned')
+    monkeypatch.setattr(rotation, '_deploy', legacy_mismatch)
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    forgotten = []
+    monkeypatch.setattr(eu_install, 'forget_ssh_known_host', forgotten.append)
+    http = TestClient(main.app, base_url='http://panel.local')
+    base = f'/client/{user.token}'
+    page = http.get(base).text
+    assert 'Продолжить настройку сервера' in page
+    assert 'нужна проверка администратора' not in page
+    assert http.post(f"/client/{other['token']}/ip-change/{op}/host-key").status_code == 409
+    url = f'{base}/ip-change/{op}/host-key'
+    assert http.post(url, headers={'Origin':'https://evil.example'}).status_code == 403
+    assert not forgotten
+    monkeypatch.setattr(rotation, '_deploy', original)
+    assert http.post(url, follow_redirects=False).status_code == 303
+    assert forgotten == [NEW]
+    assert get_operation(op)['action_state'] == 'AWAITING_USER_REVIEW'
+    assert boxes.events.count('create') == 1
+    assert http.post(url).status_code == 409
+
+
+def test_1350_cleanup_is_not_dispatched_before_its_window(user_flow):
+    boxes, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    run(op)
+    before = datetime(2026, 11, 16, 10, 49, 59, tzinfo=UTC)
+    schedule_cleanup(op, now=before)
+    assert cleanup_queue()[0]['cleanup_at'] == '2026-11-16T10:50:00+00:00'
+    asyncio.run(dispatch_cleanups(before))
+    assert not boxes.deleted_names
+    due = datetime(2026, 11, 16, 10, 50, tzinfo=UTC)
+    asyncio.run(dispatch_cleanups(due))
+    asyncio.run(dispatch_cleanups(due))
+    assert boxes.deleted_names == ['box-old']

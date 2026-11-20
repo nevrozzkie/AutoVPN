@@ -41,6 +41,15 @@ def save_anchor(db, login: str, name: str, ip: str, revision: int | None, accoun
                       (login, name, ip)).fetchone()["anchor_id"]
 
 
+def device_edit_plan(db, row):
+    """Peer edits leave the confirmed profiles usable; full applies stay quarantined."""
+    operation_id = row.get('maintenance_operation_id')
+    binding = db.execute('SELECT value FROM settings WHERE key=?',
+                         (f'install.{operation_id}.anchor_edit',)).fetchone() if operation_id else None
+    plan = json.loads(binding['value']) if binding else None
+    return plan if plan and plan['anchor_id'] == row['anchor_id'] and plan.get('peer') else None
+
+
 def list_anchors(token: str | None = None) -> list[dict]:
     with get_db() as db:
         rows = db.execute("SELECT a.*, accounts.label AS account_label FROM vpn_anchors a "
@@ -55,7 +64,7 @@ def list_anchors(token: str | None = None) -> list[dict]:
             config = captured_vpn_config_from_json(payload) if payload else None
             row["has_config"] = config is not None
             row["can_promote"] = config is not None and bool(row.get("account_id"))
-            row["ready"] = config is not None and not row.get("maintenance_operation_id")
+            row["ready"] = config is not None and (not row.get("maintenance_operation_id") or device_edit_plan(db, row) is not None)
             clients = [client for client in config.enabled_clients
                        if live_clients.get(client.token) == client.id and (token is None or token == client.token)] if config and (token is None or row["ready"]) else []
             if token is not None and not clients:
@@ -75,7 +84,8 @@ def anchor_client(anchor_id: str, token: str, *, allow_maintenance: bool = False
         live = db.execute("SELECT id FROM clients WHERE token=? AND enabled=1 AND deleted_at IS NULL",
                           (token,)).fetchone()
         row = db.execute("SELECT * FROM vpn_anchors WHERE anchor_id=?", (anchor_id,)).fetchone()
-    if not live or not row or not row["payload_json"] or (row.get("maintenance_operation_id") and not allow_maintenance):
+        peer_edit = device_edit_plan(db, row) if row else None
+    if not live or not row or not row["payload_json"] or (row.get("maintenance_operation_id") and not allow_maintenance and not peer_edit):
         return None
     config = captured_vpn_config_from_json(row.pop("payload_json"))
     client = config.client_by_token(token)

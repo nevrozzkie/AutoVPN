@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass, replace
 from typing import Any
 
-from app.db import get_db, now_iso, purge_applied_deleted_clients, _bump_public_vpn_version
+from app.db import get_db, now_iso, purge_applied_deleted_clients, _bump_public_vpn_version, pending_credential_rotation
 from app.operation_coordinator import acquire_vps_lease, release_vps_lease
 from app.vpn_config import (
     CapturedVpnConfig,
@@ -120,6 +120,9 @@ def prepare_ip_change_operation(*, review_operation_id: int | None = None,
     timestamp = now_iso()
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        pending_rotation = pending_credential_rotation(db)
+        if pending_rotation:
+            raise IpChangeSafetyHoldError('Сначала завершите отзыв ключей пользователей; смена IP пока недоступна')
         if user_client_id is not None:
             enabled = db.execute('SELECT enabled,name FROM clients WHERE id=?', (user_client_id,)).fetchone()
             if not enabled or not enabled['enabled']:

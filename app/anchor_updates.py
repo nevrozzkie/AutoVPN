@@ -9,7 +9,7 @@ import unicodedata
 from dataclasses import replace
 
 from app.db import get_db, now_iso
-from app.anchors import _grants
+from app.anchors import _grants, device_edit_plan
 from app.amnezia import generate_private_key, generate_public_key, generate_preshared_key
 from app.amnezia_devices import peer_script
 from app.operation_coordinator import acquire_vps_lease, release_vps_lease
@@ -67,10 +67,16 @@ def edit_state(anchor_id):
         if not row or not row['maintenance_operation_id']:
             return None
         plan = _binding(db, row['maintenance_operation_id'])
-        if not plan or plan['anchor_id'] != anchor_id:
+        credential_client_id = None
+        if not plan:
+            rotation = db.execute('SELECT value FROM settings WHERE key=?', (f"install.{row['maintenance_operation_id']}.credential_rotation",)).fetchone()
+            rotation = json.loads(rotation['value']) if rotation else None
+            if rotation and any(a['anchor_id'] == anchor_id for a in rotation['anchors']):
+                credential_client_id = rotation['client_id']
+        if (not plan or plan['anchor_id'] != anchor_id) and credential_client_id is None:
             return None
-        operation = db.execute('SELECT id,status FROM vpn_install_operations WHERE id=?', (row['maintenance_operation_id'],)).fetchone()
-        return dict(operation) if operation else None
+        operation = db.execute('SELECT id,status,error_message,updated_at FROM vpn_install_operations WHERE id=?', (row['maintenance_operation_id'],)).fetchone()
+        return {**operation, "credential_client_id": credential_client_id} if operation else None
 
 
 def _queue(db, row, owner, planned, *, grant_ids=(), peer=None, delete=False):
@@ -154,14 +160,43 @@ def prepare_anchor_device(anchor_id, token, *, name=None, delete_id=None, admin=
         return device.id, _queue(db, row, owner, planned, peer=peer, delete=delete_id is not None)
 
 
-def retry_edit(anchor_id):
+def _authorize_device_retry(db, row, config, plan, token, admin):
+    if token is None:
+        return
+    live = db.execute('SELECT id FROM clients WHERE token=? AND enabled=1 AND deleted_at IS NULL', (token,)).fetchone()
+    person = config.client_by_token(token)
+    if not live or not person or not person.enabled or live['id'] != person.id or (not admin and person.id not in _grants(db, row['anchor_id'])):
+        raise ValueError('Нет доступа к этому якорю')
+    if not device_edit_plan(db, row) or plan.get('grant_ids'):
+        raise ValueError('Это изменение может повторить только администратор')
+    planned = captured_vpn_config_from_json(plan['payload'])
+    devices = config.amnezia_devices + planned.amnezia_devices
+    if not any(d.client_id == person.id and d.public_key == plan['peer']['public_key'] for d in devices):
+        raise ValueError('Это изменение принадлежит другому пользователю')
+
+
+def can_retry_device(anchor_id, token, *, admin=False):
+    try:
+        with get_db() as db:
+            row, config, _ = _target(db, anchor_id)
+            plan = device_edit_plan(db, row)
+            if not plan:
+                return False
+            _authorize_device_retry(db, row, config, plan, token, admin)
+            return True
+    except ValueError:
+        return False
+
+
+def retry_edit(anchor_id, *, token=None, admin=False):
     with get_db() as db:
         db.execute('BEGIN IMMEDIATE')
-        row, _, owner = _target(db, anchor_id)
+        row, config, owner = _target(db, anchor_id)
         plan = _binding(db, row['maintenance_operation_id']) if row['maintenance_operation_id'] else None
         old = db.execute('SELECT status FROM vpn_install_operations WHERE id=?', (row['maintenance_operation_id'],)).fetchone()
         if not plan or plan['anchor_id'] != anchor_id or not old or old['status'] not in {'FAILED', 'AMBIGUOUS', 'TIMED_OUT'}:
             raise ValueError('Нет изменения якоря для повторения')
+        _authorize_device_retry(db, row, config, plan, token, admin)
         _validate(db, row['maintenance_operation_id'], plan, allow_rotated_key=True)
         return _queue(db, row, owner, captured_vpn_config_from_json(plan['payload']), grant_ids=plan['grant_ids'], peer=plan['peer'], delete=plan['delete'])
 
@@ -199,14 +234,17 @@ async def run_edit(operation_id):
     with get_db() as db:
         if not db.execute("UPDATE vpn_install_operations SET status='RUNNING',updated_at=? WHERE id=? AND status='PENDING'", (now_iso(), operation_id)).rowcount:
             return
+    failure = 'Не удалось проверить сервер якоря у провайдера.'
     try:
         with get_db() as db:
             plan = _binding(db, operation_id)
             owner = _validate(db, operation_id, plan)
         box = await SprintboxClient(owner['login'], owner['key']).get_box(plan['box'])
+        failure = 'IP якоря у провайдера изменился. Нужна проверка администратора.'
         if box_ipv4(box) != [plan['ip']]:
             raise ValueError('IP якоря у провайдера изменился')
         key = managed_key_path()
+        failure = 'Нет исходного SSH-ключа SprintBOX. Нужна помощь администратора.'
         if not key.is_file():
             raise ValueError('Нет исходного SSH-ключа SprintBOX')
         config = captured_vpn_config_from_json(plan['payload'])
@@ -214,10 +252,12 @@ async def run_edit(operation_id):
         script = 'set -euo pipefail\nexec 8>/run/autovpn-anchor-edit.lock\nflock -x -w 20 8\n' + script
         with get_db() as db:
             _validate(db, operation_id, plan)
+        failure = 'Не удалось применить изменение по SSH (порт 22): сервер недоступен, доступ отклонён или выполнение не подтверждено. Проверьте SSH-доступ и повторите попытку.'
         with use_ssh_credentials(SshCredentials('root', 22, str(key))):
             code, _ = await _run_deploy_with_heartbeat(operation_id, plan['ip'], script, timeout=45 if plan['peer'] else 300, heartbeat_interval=15)
         if code:
             raise RuntimeError('Anchor apply failed')
+        failure = 'Сервер ответил, но сохранение изменения не подтверждено. Повторите применение.'
         with get_db() as db:
             db.execute('BEGIN IMMEDIATE')
             _validate(db, operation_id, plan)
@@ -228,5 +268,5 @@ async def run_edit(operation_id):
             release_vps_lease(db, 'INSTALL', operation_id)
     except Exception:
         with get_db() as db:
-            db.execute("UPDATE vpn_install_operations SET status='AMBIGUOUS',current_step='anchor_edit_failed',updated_at=?,error_message=? WHERE id=?", (now_iso(), 'Изменение якоря не подтверждено. Проверьте сервер и повторите операцию в разделе якорных VPN.', operation_id))
+            db.execute("UPDATE vpn_install_operations SET status='AMBIGUOUS',current_step='anchor_edit_failed',updated_at=?,error_message=? WHERE id=?", (now_iso(), failure, operation_id))
             release_vps_lease(db, 'INSTALL', operation_id)

@@ -9,6 +9,7 @@ from app.deep_protocol_checks import DeepCheckResult
 from app.health import ProbeResult
 from app.protocol_status import (
     get_client_protocol_statuses,
+    get_server_access,
     refresh_protocol_statuses,
     refresh_transport_protocol_statuses,
 )
@@ -17,7 +18,7 @@ from app.protocol_status import (
 def test_refresh_protocol_statuses_checks_udp_protocol_pings(monkeypatch) -> None:
     init_db()
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
         return ProbeResult(port == 443, 12 if port == 443 else None)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
@@ -29,6 +30,7 @@ def test_refresh_protocol_statuses_checks_udp_protocol_pings(monkeypatch) -> Non
     statuses = asyncio.run(refresh_protocol_statuses("203.0.113.10"))
     by_key = {status["key"]: status for status in statuses}
 
+    assert get_server_access("203.0.113.10")["status"] == "DOWN"
     assert by_key["vless"]["status"] == "TCP_REACHABLE"
     assert by_key["vless"]["ping_ms"] == 12
     assert "hysteria" not in by_key
@@ -39,7 +41,7 @@ def test_refresh_protocol_statuses_checks_udp_protocol_pings(monkeypatch) -> Non
 def test_refresh_protocol_statuses_marks_failed_udp_ping(monkeypatch) -> None:
     init_db()
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
         return ProbeResult(True, 12)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
@@ -59,7 +61,7 @@ def test_refresh_protocol_statuses_marks_failed_udp_ping(monkeypatch) -> None:
 def test_refresh_protocol_statuses_prefers_deep_check_result(monkeypatch) -> None:
     init_db()
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
         return ProbeResult(True, 12)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
@@ -89,8 +91,9 @@ def test_refresh_protocol_statuses_marks_disabled_protocol_hidden(monkeypatch) -
     init_db()
     set_setting("config.vless_enabled", "0")
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
-        raise AssertionError("VLESS probe should not run when the port is empty")
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
+        assert port == 22, "VLESS probe should not run when the port is empty"
+        return ProbeResult(True, 10)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
         return ProbeResult(True, 34)
@@ -111,7 +114,7 @@ def test_refresh_protocol_statuses_splits_hysteria_into_two_rows(monkeypatch) ->
     init_db()
     set_setting("config.hysteria_enabled", "1")
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
         return ProbeResult(True, 12)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
@@ -145,7 +148,7 @@ def test_refresh_protocol_statuses_isolates_salamander_failure(monkeypatch) -> N
     init_db()
     set_setting("config.hysteria_enabled", "1")
 
-    async def fake_tcp_probe(host: str, port: int) -> ProbeResult:
+    async def fake_tcp_probe(host: str, port: int, **kwargs) -> ProbeResult:
         return ProbeResult(True, 12)
 
     async def fake_udp_probe(host: str, port: int) -> ProbeResult:
@@ -285,6 +288,8 @@ def test_public_client_refresh_preserves_deep_results_and_shows_compact_status(
     assert get_setting("protocol.vless.transport_status") == "TCP_REACHABLE"
     assert page.status_code == 200
     assert "Последняя проверка:" in page.text
+    assert "Доступ к серверу" in page.text and "SSH, порт 22" in page.text
+    assert get_server_access("203.0.113.10")["status"] == "UP"
     assert "Транспорт:" not in page.text
     assert "handshake" not in page.text
 
