@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .rule-group {
+      margin-bottom: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .group-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .group-name { flex: 1 1 130px; min-width: 0; font-weight: 650; }
+    .group-toggle, .port-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .group-remove { color: var(--muted); }
+    .group-remove:hover { color: var(--danger); border-color: var(--danger); }
+    .port-head, .port-row {
+      display: grid;
+      grid-template-columns: 44px minmax(106px, 1fr) 1fr 1fr minmax(136px, 1.6fr) 38px;
+      gap: 10px;
+      align-items: center;
+    }
+    .port-head { font-size: 13px; color: var(--muted); padding: 0 0 6px; }
+    .port-row { margin-bottom: 8px; }
+    .port-field { min-width: 0; }
+    .port-page :is(button, input, select) { font: inherit; }
+    .port-page :is(button, input[type=number], input[type=text], select) {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      background: var(--input-bg);
+      min-height: 38px;
+      padding: 6px 10px;
+    }
+    .port-page .port-field :is(input, select), .target { width: 100%; min-width: 0; }
+    .port-page .group-name { min-width: 0; }
+    input[type=number] { font-variant-numeric: tabular-nums; }
+    .port-page button:hover { border-color: var(--accent); }
+    .port-page :is(button, input, select):focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .assignment { position: relative; min-width: 0; }
+    .target {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      text-align: left;
+    }
+    .target[aria-expanded=true] { border-color: #28877e; color: var(--accent); }
+    .target::after { content: '⌄'; color: var(--muted); }
+    .device-picker {
+      position: absolute;
+      z-index: 1;
+      top: calc(100% + 6px);
+      right: 0;
+      width: max(100%, 280px);
+      padding: 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px #0008;
+    }
+    .port-feedback { grid-column: 2 / -1; margin: 0; color: var(--muted); font-size: 13px; }
+    .port-feedback[data-tone=error] { color: var(--danger); }
+    .port-page .settings-status p { margin: 0; }
+    .port-page :disabled { cursor: wait; }
+    .picker-label { padding: 2px 2px 4px; font-size: 13px; }
+    .remove { font-size: 20px; padding: 0; }
+    .remove:hover { color: var(--danger); border-color: var(--danger); }
+    .add { margin-top: 4px; color: var(--accent); }
+    .group-off .port-field, .port-row.is-off .port-field { opacity: .65; }
+    .settings {
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+    }
+    .settings-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px 16px;
+    }
+    .master, .device {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .master { width: fit-content; font-size: 17px; font-weight: 650; }
+    .port-page :is(input[type=checkbox], input[type=radio]) {
+      margin: 0;
+      width: 17px;
+      height: 17px;
+      accent-color: #14b8a6;
+      flex: none;
+    }
+    .user {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+    .expand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      padding: 9px 12px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      font-weight: 600;
+    }
+    .expand:hover { background: var(--input-bg); }
+    .expand:focus-visible { outline-offset: -2px; }
+    .expand .chevron {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: translateX(-2px) rotate(-45deg);
+    }
+    .expand[aria-expanded=true] .chevron { transform: translateY(-2px) rotate(45deg); }
+    .devices { padding: 0 12px 5px 38px; border-top: 1px solid var(--border); }
+    .device { min-height: 39px; padding-left: 10px; border-left: 1px solid var(--border); }
+    .device .muted { margin-left: auto; font-size: 13px; }
+    .clear-device { margin-top: 8px; color: var(--muted); }
+    .settings-status { margin-top: 8px; font-size: 13px; }
+    #status { font-weight: 600; }
+    #status[data-tone=success] { color: var(--accent); }
+    #status[data-tone=error] { color: var(--danger); }
+    .port-page .save { background: #0f766e; color: white; border-color: #0f766e; font-weight: 650; }
+    .port-page .save:hover { background: #115e59; }
+    .mobile-label { display: none; }
+    @media (max-width: 720px) {
+      .port-page .panel { padding: 12px; }
+      .port-head { display: none; }
+      .port-row {
+        grid-template-columns: minmax(100px, 1.2fr) repeat(2, minmax(0, 1fr));
+        padding: 10px;
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .mobile-label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+      .port-toggle { grid-row: 1; grid-column: 1 / 3; }
+      .port-feedback { grid-column: 1 / -1; }
+      .assignment { grid-row: 3; grid-column: 1 / -1; }
+      .device-picker { width: 100%; }
+      .remove { grid-row: 1; grid-column: 3; justify-self: end; min-width: 34px; }
+      .devices { padding-left: 24px; }
+    }
+</style>
+<section class="port-page">
+<h1>Проброс портов</h1>
+    <form class="panel" id="settings" novalidate>
+      <fieldset id="forwarding-fields" style="border:0;margin:0;padding:0;min-width:0">
+      <div class="settings">
+        <div class="settings-actions">
+          <label class="master">
+            <input type="checkbox" id="enabled">
+            Включить проброс портов
+          </label>
+          <button class="save" type="submit">Сохранить и применить</button>
+        </div>
+        <div class="settings-status">
+          <p id="status" role="status"></p>
+          <p class="muted">Прохождение пакетов извне не проверено.</p>
+        </div>
+      </div>
+      <div id="groups"></div>
+      <button class="add" id="add-group" type="button">+ Добавить группу</button>
+      <button class="add" id="add-farcry" type="button">+ FarCry4</button>
+      </fieldset>
+    </form>
+</section>
+
+  <template id="group-template">
+    <section class="rule-group">
+      <div class="group-actions">
+        <input class="group-name" type="text" aria-label="Название группы" placeholder="Название группы" maxlength="60">
+        <label class="group-toggle">
+          <input class="group-enabled" type="checkbox">
+          Включить группу
+        </label>
+        <button class="group-remove" type="button">Удалить группу</button>
+      </div>
+      <div class="port-head" aria-hidden="true">
+        <span>Вкл.</span><span>Протокол</span><span>Внешний порт</span><span>Внутренний порт</span><span>Назначение</span>
+      </div>
+      <div class="port-list"></div>
+      <button class="add add-port" type="button">+ Добавить порт</button>
+    </section>
+  </template>
+
+  <template id="port-template">
+    <div class="port-row">
+      <label class="port-toggle">
+        <input class="port-enabled" type="checkbox" aria-label="Включить порт">
+        <span class="mobile-label" aria-hidden="true">Включить порт</span>
+      </label>
+      <label class="port-field">
+        <span class="mobile-label" aria-hidden="true">Протокол</span>
+        <select aria-label="Протокол">
+          <option>UDP</option>
+          <option>TCP</option>
+          <option>UDP + TCP</option>
+        </select>
+      </label>
+      <label class="port-field">
+        <span class="mobile-label" aria-hidden="true">Внешний порт</span>
+        <input class="external" aria-label="Внешний порт" type="number" min="1" max="65535" required>
+      </label>
+      <label class="port-field">
+        <span class="mobile-label" aria-hidden="true">Внутренний порт</span>
+        <input class="internal" aria-label="Внутренний порт" type="number" min="1" max="65535" required>
+      </label>
+      <div class="assignment">
+        <button class="target" type="button" aria-expanded="false"></button>
+      </div>
+      <button class="remove" type="button" aria-label="Удалить порт" title="Удалить порт">×</button>
+      <p class="port-feedback" hidden></p>
+    </div>
+  </template>
+
+  <template id="user-template">
+    <div class="user">
+      <button class="expand" type="button">
+        <span class="user-name"></span><span class="chevron" aria-hidden="true"></span>
+      </button>
+      <div class="devices"></div>
+    </div>
+  </template>
+
+  <template id="device-template">
+    <label class="device">
+      <input type="radio" name="port-device"><span></span><span class="muted"></span>
+    </label>
+  </template>
+
+<script id="port-forwarding-data" type="application/json">{{ forwarding | tojson }}</script>
+<script src="/static/port_forwarding.js" defer></script>
+{% endblock %}

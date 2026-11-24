@@ -823,6 +823,8 @@ async def run_eu_install(operation_id: int) -> None:
             raise EuInstallError(
                 f"SSH install failed with exit code {exit_code}\n{output_tail}"
             )
+        from app.port_forwarding import reconcile, record_current_result
+        record_current_result(await reconcile(host, config))
         await refresh_protocol_statuses(host)
         complete_install_operation(operation_id, output_tail)
     except EuInstallStateUncertainError as exc:

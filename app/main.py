@@ -63,6 +63,7 @@ from app.eu_install import (
 )
 from app.ip_change import run_ip_change
 from app.operation_coordinator import OperationBusyError
+from app import port_forwarding
 from app.protocol_status import (
     get_client_protocol_statuses,
     get_protocol_statuses,
@@ -317,6 +318,7 @@ STEP_LABELS = {
     "verify_ambiguous_reboot": "безопасная проверка результата",
     "service_health": "проверка сервисов",
     "protocol_health": "проверка протоколов",
+    "port_forwarding": "проверка проброса портов",
     "wait_provider": "ожидание статуса Aeza",
     "wait_ssh": "ожидание SSH",
     "timed_out": "истёк таймаут",
@@ -1071,6 +1073,25 @@ async def recheck_box_deletion(operation_id: int, _: str = Depends(require_admin
 @app.get("/admin/tuning", response_class=HTMLResponse)
 def admin_tuning(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
     return _tuning_page(request)
+
+
+@app.get("/admin/port-forwarding", response_class=HTMLResponse)
+def admin_port_forwarding(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "port_forwarding.html", {"forwarding": port_forwarding.view()},
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/admin/port-forwarding")
+async def admin_save_port_forwarding(edit: port_forwarding.ForwardingEdit, _: str = Depends(require_admin)):
+    try:
+        result = await port_forwarding.save_and_apply(edit)
+    except OperationBusyError as exc:
+        raise HTTPException(409, "VPN-бокс занят другой операцией. Повторите позже.") from exc
+    except port_forwarding.PortForwardingError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 def _tuning_page(request: Request, *, error: str = "", submitted_protocol: str = "",

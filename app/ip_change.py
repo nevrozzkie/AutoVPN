@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, TypeVar
 
 from app.aeza import AezaClient
@@ -534,11 +534,16 @@ async def run_ip_change(
         healthcheck_result = await _verify_protocol_health(
             new_ip_address, config, timing
         )
+        from app.port_forwarding import reconcile as reconcile_port_forwarding
+        await _step(operation_id, "port_forwarding")
+        forwarding = await reconcile_port_forwarding(
+            new_ip_address, replace(config, current_ip=new_ip_address), strict=True,
+        )
 
         _ensure_bound_revision_current(config.revision)
         await _step(operation_id, "update_current_ip")
         published_revision = publish_ip_change(
-            operation_id, new_ip_address, healthcheck_result
+            operation_id, new_ip_address, healthcheck_result, port_forwarding_result=forwarding
         )
 
         cleanup_warning = ""

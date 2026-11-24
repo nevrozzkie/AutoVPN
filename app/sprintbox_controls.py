@@ -86,6 +86,7 @@ async def run_anchor_promotion(operation_id: int, *, timing: IpRotationTiming | 
     from app.vps_provider import bound_provider
     from app.vpn_state import load_ip_change_snapshot, publish_ip_change
     from app.sprintbox_rotation import _deploy
+    from app.port_forwarding import reconcile as reconcile_port_forwarding
     bound = bound_provider(operation_id)
     with get_db() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -120,10 +121,12 @@ async def run_anchor_promotion(operation_id: int, *, timing: IpRotationTiming | 
             await _deploy(operation_id, bound['target_ip'], new_config)
             await _step(operation_id, 'protocol_health', apply_state='APPLIED')
             health = await _verify_protocol_health(bound['target_ip'], new_config, timing)
+            await _step(operation_id, 'port_forwarding')
+            forwarding = await reconcile_port_forwarding(bound['target_ip'], new_config, strict=True)
         with get_db() as db:
             _validate_promotion(db, bound)
         publish_ip_change(operation_id, bound['target_ip'], health, sprintbox_box_name=bound['target_box'],
-                          sprintbox_ssh_key_path=ssh.credentials.key_path)
+                          sprintbox_ssh_key_path=ssh.credentials.key_path, port_forwarding_result=forwarding)
         update_operation(operation_id, status='DONE', action_state='DONE', current_step='done', error_message='')
     except Exception as exc:
         message = sanitize_error(exc, *(cfg[k] for k in ('login', 'key')) if cfg else ())

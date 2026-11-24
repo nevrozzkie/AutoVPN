@@ -160,6 +160,9 @@ async def run_device_sync(operation_id):
         code,_=await run_remote_command(operation['target_host'],'bash -s',stdin_data=peer_script(device,binding['delete'],config.amnezia.server_public_key),timeout=45)
         if code:
             raise RuntimeError('peer sync failed')
+        if binding['delete']:
+            from app.port_forwarding import reconcile, record_current_result
+            record_current_result(await reconcile(operation['target_host'], config))
         complete_install_operation(operation_id,'Amnezia device peer synchronized without restarting VPN services')
     except Exception:
         # Do not retry an SSH mutation automatically after a missing acknowledgement.

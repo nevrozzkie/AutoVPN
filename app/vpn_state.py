@@ -282,6 +282,7 @@ def publish_ip_change(
     *,
     sprintbox_box_name: str | None = None,
     sprintbox_ssh_key_path: str | None = None,
+    port_forwarding_result: dict | None = None,
 ) -> int:
     timestamp = now_iso()
     with get_db() as db:
@@ -307,6 +308,9 @@ def publish_ip_change(
             raise RuntimeError(
                 "VPN configuration changed during IP rotation; refusing to publish"
             )
+        if port_forwarding_result is not None:
+            from app.port_forwarding import write_result
+            write_result(db, port_forwarding_result)
 
         published_revision = bound_revision + 1
         bound_config = captured_vpn_config_from_json(row["payload_json"])

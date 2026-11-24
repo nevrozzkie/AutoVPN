@@ -26,6 +26,7 @@ from app.sprintbox import SprintboxApiError, SprintboxClient, SprintboxTaskIdMis
 from app.vps_provider import bound_provider, provider_name, sprintbox_config
 from app.vpn_state import load_ip_change_snapshot, publish_ip_change
 from app.operation_coordinator import TERMINAL_STATUSES, release_vps_lease
+from app.port_forwarding import reconcile as reconcile_port_forwarding
 from app.vpn_config import CapturedVpnConfig
 from app.sprintbox_review import context, retained_boxes, validate_target, validate_ssh_decision
 from app.sprintbox_ssh import SprintboxSsh, prepare_sprintbox_ssh
@@ -315,9 +316,12 @@ async def _provision_box(operation_id: int, config: CapturedVpnConfig, bound: di
         _ensure_bound_revision_current(config.revision)
         await _step(operation_id, "protocol_health")
         health = await _verify_protocol_health(ip, new_config, timing)
+        await _step(operation_id, "port_forwarding")
+        forwarding = await reconcile_port_forwarding(ip, new_config, strict=True, new_box=True)
     _check_binding(bound)
     revision = publish_ip_change(operation_id, ip, health, sprintbox_box_name=name,
-                                 sprintbox_ssh_key_path=ssh.credentials.key_path)
+                                 sprintbox_ssh_key_path=ssh.credentials.key_path,
+                                 port_forwarding_result=forwarding)
     update_operation(operation_id, status="DONE", current_step="awaiting_user_review",
                      action_state="AWAITING_USER_REVIEW", published_revision=revision, error_message="")
 
