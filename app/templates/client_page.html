@@ -510,6 +510,7 @@
           <li>После подтверждения старые серверы удаляются в ближайшее окно: 23:30, 23:55, 04:00, 07:00 или 13:50 МСК (в это время соединение через старое подключение может прерваться).</li>
         </ul>
         {% set operation = ip_change.operation %}
+        {% set reconciled = operation and operation.action_state == 'RECONCILED' %}
         {% if ip_change.busy %}
           <p>Идёт настройка VPN. Пожалуйста, подождите — страница обновится автоматически.</p>
         {% elif operation and operation.action_state == 'AWAITING_USER_REVIEW' %}
@@ -531,6 +532,8 @@
         {% else %}
           {% if operation and operation.action_state == 'CLEANUP_SCHEDULED' %}
             <p>Подтверждение принято. Удаление старых серверов назначено на {{ ip_change.cleanup_at|msk }}. Обновите подключения на всех устройствах до этого времени.</p>
+          {% elif reconciled %}
+            <p>Администратор проверил последнюю попытку смены IP.</p>
           {% elif operation and operation.status in ['FAILED', 'AMBIGUOUS', 'TIMED_OUT'] %}
             {% if operation.status == 'FAILED' and operation.purchase_state in ['NOT_STARTED', 'REJECTED'] %}
             <p>Смена IP не началась. Текущее подключение сохранено. Можно повторить попытку; если провайдер отклонил оплату, потребуется пополнить баланс.</p>
@@ -540,7 +543,7 @@
           {% endif %}
           {% if ip_change.pending_review %}
             <p>Ожидаем, пока другой пользователь проверит новое подключение.</p>
-          {% elif ip_change.enabled and not (operation and operation.status in ['AMBIGUOUS','TIMED_OUT']) %}
+          {% elif ip_change.enabled and (reconciled or not (operation and operation.status in ['AMBIGUOUS','TIMED_OUT'])) %}
             <form method="post" data-confirm-ip-change action="/client/{{ client.token }}/ip-change"><button type="submit">Сменить IP</button></form>
           {% endif %}
         {% endif %}

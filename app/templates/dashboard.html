@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Админка</h1>
+{% set latest_ip_reconciled = latest_operation and latest_operation.action_state == 'RECONCILED' %}
 
 <section class="panel">
   <h2>Очередь удаления</h2>
@@ -39,12 +40,17 @@
     <div class="label">Последняя смена IP</div>
     {% if latest_operation %}
       <div class="muted">Источник: {{ ip_change_source(latest_operation.id) }}</div>
-      <div class="value">{{ (latest_operation.action_state if latest_operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED'] else latest_operation.status)|status_label }}</div>
-      <div class="muted">{{ latest_operation.current_step|step_label }} · {{ latest_operation.updated_at|msk }}</div>
-      {% if latest_operation.server_reachable_at %}
-        <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at|msk }}</div>
-      {% elif latest_operation.current_step == "wait_vps_health" %}
-        <div class="muted">Ждём, когда сервер поднимется после перезагрузки.</div>
+      <div class="value">{{ (latest_operation.action_state if latest_operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED', 'RECONCILED'] else latest_operation.status)|status_label }}</div>
+      {% if latest_ip_reconciled %}
+        <div class="muted">{{ latest_operation.reconciled_at|msk }}</div>
+        {% if latest_operation.reconciliation_note %}<div>{{ latest_operation.reconciliation_note }}</div>{% endif %}
+      {% else %}
+        <div class="muted">{{ latest_operation.current_step|step_label }} · {{ latest_operation.updated_at|msk }}</div>
+        {% if latest_operation.server_reachable_at %}
+          <div class="ok">Сервер поднялся: {{ latest_operation.server_reachable_at|msk }}</div>
+        {% elif latest_operation.current_step == "wait_vps_health" %}
+          <div class="muted">Ждём, когда сервер поднимется после перезагрузки.</div>
+        {% endif %}
       {% endif %}
     {% else %}
       <div class="value">нет операций</div>
@@ -240,7 +246,7 @@
   {% endif %}
 </p>
 
-{% if latest_operation and latest_operation.error_message %}
+{% if latest_operation and latest_operation.error_message and not latest_ip_reconciled %}
   {% if latest_operation.status == "DONE" %}
     <h2>Предупреждение смены IP</h2>
     <section class="panel warning">{{ latest_operation.error_message }}</section>

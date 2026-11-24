@@ -555,6 +555,7 @@ def test_terminal_safety_hold_requires_csrf_and_explicit_reconciliation(
         current_step="manual_verification_required",
         action_state="AMBIGUOUS",
         purchase_state="AMBIGUOUS",
+        error_message="SprintBOX VPN installation failed (exit 100)",
     )
     monkeypatch.setattr(
         main,
@@ -573,6 +574,9 @@ def test_terminal_safety_hold_requires_csrf_and_explicit_reconciliation(
     confirm_page = client.get(confirm_path, auth=("admin", "secret"))
     assert confirm_page.status_code == 200
     assert "RECONCILE" in confirm_page.text
+    before = client.get("/admin", auth=("admin", "secret"))
+    assert "Последняя ошибка смены IP" in before.text
+    assert "SprintBOX VPN installation failed (exit 100)" in before.text
 
     cross_origin = client.post(
         post_path,
@@ -603,6 +607,13 @@ def test_terminal_safety_hold_requires_csrf_and_explicit_reconciliation(
     assert operation["action_state"] == "RECONCILED"
     assert operation["reconciled_at"]
     assert operation["reconciliation_note"] == "old IP verified in Aeza"
+    dashboard = client.get("/admin", auth=("admin", "secret"))
+    assert "Проверено вручную" in dashboard.text
+    assert "old IP verified in Aeza" in dashboard.text
+    assert "Последняя ошибка смены IP" not in dashboard.text
+    assert "SprintBOX VPN installation failed (exit 100)" not in dashboard.text
+    history = client.get("/admin/operations", auth=("admin", "secret"))
+    assert 'class="muted">SprintBOX VPN installation failed (exit 100)' in history.text
     assert create_operation() > operation_id
 
 

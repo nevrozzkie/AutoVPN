@@ -8,7 +8,10 @@ from fastapi.testclient import TestClient
 
 from test_sprintbox import scenario, run, OLD, NEW, TIMING
 from app import main, sprintbox_rotation as rotation
-from app.db import create_client, get_db, get_operation, get_setting, init_db, set_setting, set_client_enabled
+from app.db import (
+    create_client, get_db, get_operation, get_setting, init_db, reconcile_ip_operation,
+    set_client_enabled, set_setting, update_operation,
+)
 from app.scheduled_cleanup import (dispatch_cleanups, next_cleanup, schedule_cleanup,
                                    source_label, cleanup_queue)
 from app.vpn_config import capture_vpn_config
@@ -87,6 +90,24 @@ def test_scheduled_cleanup_survives_restart_and_runs_only_at_windows(user_flow):
     assert get_setting('current_ip') == NEW
     asyncio.run(dispatch_cleanups(DUE))
     assert boxes.deleted_names == ['box-old']
+
+
+def test_user_page_shows_completed_reconciliation(user_flow):
+    _, user = user_flow
+    op = prepare_ip_change_operation(user_client_id=user.id).operation_id
+    update_operation(op, status="AMBIGUOUS", action_state="AMBIGUOUS")
+    base = f"/client/{user.token}"
+    with TestClient(main.app, base_url="http://panel.local") as client:
+        before = client.get(base).text
+        assert "нужна проверка администратора" in before
+        assert f'action="{base}/ip-change"' not in before
+
+        reconcile_ip_operation(op, "internal reconciliation note")
+        after = client.get(base).text
+        assert "Администратор проверил последнюю попытку смены IP" in after
+        assert "нужна проверка администратора" not in after
+        assert "internal reconciliation note" not in after
+        assert f'action="{base}/ip-change"' in after
 
 
 def test_cleanup_now_admin_only_csrf_and_single_use(user_flow):

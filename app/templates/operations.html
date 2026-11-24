@@ -21,10 +21,11 @@
   </thead>
   <tbody>
     {% for operation in operations %}
+      {% set reconciled = operation.action_state == 'RECONCILED' %}
       <tr>
         <td>{{ operation.id }}<br>{{ ip_change_source(operation.id) }}</td>
-        <td>{{ (operation.action_state if operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED'] else operation.status)|status_label }}</td>
-        <td>{{ operation.current_step|step_label }}</td>
+        <td>{{ (operation.action_state if operation.action_state in ['SSH_UNREACHABLE', 'CANCELLED', 'RECONCILED'] else operation.status)|status_label }}</td>
+        <td>{{ "Сверка завершена" if reconciled else operation.current_step|step_label }}</td>
         <td>{{ operation.old_ip or "" }}<br><span class="muted">{{ operation.old_ip_id or "" }}</span></td>
         <td>{{ operation.new_ip or "" }}<br><span class="muted">{{ operation.new_ip_id or "" }}</span></td>
         <td>{{ operation.revision if operation.revision is not none else "" }}{% if operation.published_revision is not none %} → {{ operation.published_revision }}{% endif %}</td>
@@ -45,7 +46,7 @@
             <br><span class="muted">{{ operation.healthcheck_result }}</span>
           {% endif %}
         </td>
-        <td class="{% if operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
+        <td class="{% if reconciled %}muted{% elif operation.error_message %}danger{% endif %}">{{ operation.error_message or "" }}</td>
         <td>{{ operation.created_at|msk }}</td>
         <td>{{ operation.updated_at|msk }}</td>
       </tr>
