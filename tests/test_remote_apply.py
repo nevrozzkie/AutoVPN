@@ -16,6 +16,7 @@ from app.eu_install import build_eu_deploy_script, run_eu_install
 from app.remote_apply import (
     _xray_config,
     _hysteria_validation_probe,
+    render_bootstrap_script,
     render_config_apply_script,
     render_transactional_install_script,
 )
@@ -467,6 +468,83 @@ def test_transactional_full_install_bootstraps_then_reuses_same_apply() -> None:
     assert "apt-get install" in full_script
     assert apply_script.split("\n", 3)[-1] in full_script
     subprocess.run(["bash", "-n"], input=full_script, text=True, check=True)
+
+
+@pytest.mark.parametrize("mode,attempts,exit_code", [
+    ("lock-once", ["update", "update", "install"], 0),
+    ("install-lock", ["update", "install", "install"], 0),
+    ("bad-signature", ["update"], 100),
+    ("lock-always", ["update", "update", "update"], 100),
+])
+def test_bootstrap_retries_only_temporary_apt_errors(tmp_path, mode, attempts, exit_code):
+    config = _vless_only(_captured_config())
+    config = replace(config, vless=replace(config.vless, protocol=replace(config.vless.protocol, enabled=False)))
+    root = tmp_path / "root"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "apt.log"
+    for tool in ("find", "sleep"):
+        _write_executable(fake_bin / tool, "#!/bin/sh\nexit 0\n")
+    _write_executable(fake_bin / "apt-get", """#!/bin/sh
+set -eu
+test "$1 $2 $3 $4" = "-o DPkg::Lock::Timeout=90 -o Acquire::Retries=2"
+shift 4
+printf '%s\\n' "$1" >> "$APT_TEST_LOG"
+case "$APT_TEST_MODE" in
+lock-once)
+  if [ "$(wc -l <"$APT_TEST_LOG")" -eq 1 ]; then
+    echo 'E: Could not get lock /var/lib/apt/lists/lock' >&2
+    exit 100
+  fi
+  ;;
+install-lock)
+  if [ "$1" = install ] && [ "$(wc -l <"$APT_TEST_LOG")" -eq 2 ]; then
+    echo 'E: Unable to acquire the dpkg frontend lock' >&2
+    exit 100
+  fi
+  ;;
+lock-always)
+  echo 'E: Could not get lock /var/lib/apt/lists/lock' >&2
+  exit 100
+  ;;
+bad-signature)
+  echo 'E: The repository is not signed.' >&2
+  exit 100
+  ;;
+esac
+""")
+    # Fake scripts run against a temporary root, including the bootstrap marker.
+    env = {**os.environ, "AUTOVPN_ROOT": str(root), "PATH": f"{fake_bin}:/usr/bin:/bin",
+           "APT_TEST_LOG": str(log), "APT_TEST_MODE": mode}
+    result = _run_script(render_bootstrap_script(config), env)
+    assert result.returncode == exit_code, result.stderr
+    assert log.read_text().splitlines() == attempts
+    assert (root / "var/lib/autovpn/bootstrap-v1").exists() == (exit_code == 0)
+    if exit_code:
+        assert "[autovpn] bootstrap APT failure: apt-get update: E:" in result.stderr
+
+
+def test_sprintbox_install_keeps_apt_error_without_exposing_raw_output(monkeypatch):
+    import asyncio
+    from app import sprintbox_rotation
+
+    async def deploy(*args, **kwargs):
+        return 100, (
+            "unrelated private installer output\n"
+            "[autovpn] bootstrap APT failure: apt-get update: E: Could not connect to "
+            "https://repo-user:repo-password@mirror.example/ubuntu\n"
+        )
+
+    async def step(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(sprintbox_rotation, "run_remote_command", deploy)
+    monkeypatch.setattr(sprintbox_rotation, "_step", step)
+    with pytest.raises(sprintbox_rotation.IpChangeError) as raised:
+        asyncio.run(sprintbox_rotation._deploy(1, "203.0.113.10", _captured_config()))
+    message = str(raised.value)
+    assert "apt-get update" in message and "mirror.example" in message
+    assert "repo-password" not in message and "private installer output" not in message
 
 
 def test_transactional_deploy_is_default_off_compatibility_fallback(

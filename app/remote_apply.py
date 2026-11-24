@@ -577,6 +577,26 @@ def _bootstrap_body(config: CapturedVpnConfig) -> str:
 BOOTSTRAP_MARKER="$ROOT/var/lib/autovpn/bootstrap-v1"
 if {condition}; then
   export DEBIAN_FRONTEND=noninteractive
+  bootstrap_apt() {{
+    local attempt code output detail
+    for attempt in 1 2 3; do
+      if output="$(LC_ALL=C apt-get -o DPkg::Lock::Timeout=90 -o Acquire::Retries=2 "$@" 2>&1)"; then
+        printf '%s\\n' "$output"
+        return 0
+      else
+        code=$?
+      fi
+      printf '%s\\n' "$output" >&2
+      if [ "$attempt" = 3 ] || ! grep -Eqi 'could not get lock|unable to (acquire|lock)|temporary failure resolving|connection (timed out|failed|reset)|could not connect|unable to connect|hash sum mismatch|file has unexpected size' <<<"$output"; then
+        break
+      fi
+      printf '[autovpn] Retrying APT %s after a temporary error (attempt %s of 3)\\n' "$1" "$attempt" >&2
+      sleep "$((attempt * 5))"
+    done
+    detail="$(awk '/^E:/{{print; exit}}' <<<"$output")"
+    printf '[autovpn] bootstrap APT failure: apt-get %s: %s\\n' "$1" "${{detail:-exit $code}}" >&2
+    return "$code"
+  }}
   remove_amnezia_apt_sources() {{
     find /etc/apt/sources.list.d -maxdepth 1 -type f \\( -iname '*amnezia*' -o -iname '*ppa_amnezia_ppa*' \\) -delete 2>/dev/null || true
   }}
@@ -591,8 +611,8 @@ if {condition}; then
     remove_amnezia_apt_sources
   }}
   remove_amnezia_apt_sources
-  apt-get update
-  apt-get install -y ca-certificates coreutils curl gnupg iptables openssl software-properties-common unzip util-linux
+  bootstrap_apt update
+  bootstrap_apt install -y ca-certificates coreutils curl gnupg iptables openssl software-properties-common unzip util-linux
   {xray}
   {hysteria}
   {awg}

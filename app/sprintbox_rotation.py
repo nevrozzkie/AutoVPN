@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import secrets
 import uuid
 from dataclasses import replace
@@ -86,9 +87,14 @@ async def _deploy(operation_id: int, host: str, config: CapturedVpnConfig) -> No
                 done, _ = await asyncio.wait({task}, timeout=10)
                 await _step(operation_id, "install_new_box", apply_state="RUNNING")
                 if done:
-                    code, _ = task.result()
+                    code, output = task.result()
                     if code:
-                        raise IpChangeError(f"SprintBOX VPN installation failed (exit {code}); old box preserved")
+                        prefix = "[autovpn] bootstrap APT failure: "
+                        reason = next((line.removeprefix(prefix) for line in reversed(output.splitlines())
+                                       if line.startswith(prefix)), "")
+                        reason = re.sub(r"(https?://)[^\s/@]+@", r"\1[redacted]@", reason)
+                        detail = f": {sanitize_error(reason, limit=800)}" if reason else ""
+                        raise IpChangeError(f"SprintBOX VPN installation failed (exit {code}){detail}; old box preserved")
                     return
     finally:
         if not task.done():
